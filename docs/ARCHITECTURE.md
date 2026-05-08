@@ -26,6 +26,13 @@ It is responsible for:
 
 It should **not** become the home of core parsing, game logic, or reusable data models.
 
+The current CLI registers these command groups:
+
+- `wad`, for WAD compression, decompression, archive inspection, and TOC unpacking
+- `pif`, for PIF texture conversion to PNG
+- `hw3d`, for HW3D/HBN structure inspection and preliminary SVG visualization
+- `hello`, currently a small game-selection/module-resolution smoke command
+
 #### Recommended internal CLI organization
 
 Within the CLI project itself:
@@ -54,6 +61,18 @@ Anything placed here should be usable by:
 - another .NET application
 - a future WASM host
 
+`RatchetPs2.Core` currently multi-targets `net9.0` and `net9.0-browser`, so browser compatibility is already part of the build contract rather than only a future aspiration.
+
+Current major areas in `Core` are:
+
+- `Games/`: shared game identifiers and the `IGameModule` contract
+- `IO/`: byte-order, sector, magic, and stream helpers used by binary parsers
+- `Wad/`: WAD compression, decompression, archive readers, TOC readers, and WAD model types
+- `Textures/`: texture models, conversion options, PIF readers/exporters, and PNG encoding helpers
+- `Hud/Hw3d/`: HW3D/HBN archive parsing, structural reporting, and early visualization helpers
+
+The texture pipeline intentionally exposes byte/stream-oriented entry points. This is important because the same PIF conversion path is used by both the CLI and the browser-facing WASM host.
+
 ### `RatchetPs2.Games.RC1`, `GC`, `UYA`, `DL`
 
 These projects isolate game-specific behavior.
@@ -66,6 +85,44 @@ They should contain:
 - implementations of shared contracts from `RatchetPs2.Core`
 
 If a type or behavior is truly shared, it should be moved to `RatchetPs2.Core`.
+
+At the moment these modules are lightweight. They implement `IGameModule` with a `GameId` and display name, and provide the extension point where future per-game services and quirks should live.
+
+### `RatchetPs2.Wasm`
+
+This project is the browser-facing host for selected `RatchetPs2.Core` capabilities.
+
+It is responsible for:
+
+- exposing JS-invokable entry points through `Exports.cs`
+- packaging the Blazor WebAssembly runtime assets
+- shipping generated JavaScript and TypeScript wrapper files for consuming web apps
+- keeping browser host concerns out of `RatchetPs2.Core`
+
+The current exported surface focuses on PIF-to-PNG conversion:
+
+- `getApiVersion`
+- single-image PIF conversion
+- batch PIF conversion
+- packed batch conversion to reduce JS/WASM transfer overhead
+
+`RatchetPs2.Wasm` should continue to depend on `RatchetPs2.Core`, not on the CLI or per-game projects unless a browser use case clearly requires game-specific behavior.
+
+### `RatchetPs2.Wasm.Generator`
+
+This small tool generates the browser wrapper contract for `RatchetPs2.Wasm`.
+
+It reads:
+
+- `src/RatchetPs2.Wasm/wasm-exports.json`
+- JavaScript and TypeScript templates under `src/RatchetPs2.Wasm.Generator/Templates/`
+
+It writes:
+
+- `src/RatchetPs2.Wasm/ratchetps2-wasm.js`
+- `src/RatchetPs2.Wasm/ratchetps2-wasm.d.ts`
+
+The WASM project runs this generator before build. When changing the JS-facing WASM API, update the manifest and generated wrappers together with the C# export implementation.
 
 ## Contract for SDK-friendly code
 
@@ -136,6 +193,8 @@ Dependencies should generally point inward like this:
 RatchetPs2.Cli -> RatchetPs2.Core
 RatchetPs2.Cli -> RatchetPs2.Games.*
 RatchetPs2.Games.* -> RatchetPs2.Core
+RatchetPs2.Wasm -> RatchetPs2.Core
+RatchetPs2.Wasm -> RatchetPs2.Wasm.Generator (build-time only)
 ```
 
 Avoid reverse dependencies such as:
@@ -143,6 +202,15 @@ Avoid reverse dependencies such as:
 - `Core -> Cli`
 - `Games.* -> Cli`
 - one game project depending on another game project unless there is a very strong reason
+- `Core -> Wasm`
+- `Wasm -> Cli`
+
+The current solution has two host-style projects:
+
+- `RatchetPs2.Cli`, which owns console UX and file-oriented command orchestration
+- `RatchetPs2.Wasm`, which owns browser/WASM interop and packaging
+
+Both should call reusable library APIs rather than duplicating parsing or conversion logic.
 
 ## Shared vs game-specific placement rule
 
@@ -165,3 +233,11 @@ Example direction:
 - game modules that expose capabilities through shared interfaces
 
 The CLI should stay as thin orchestration over those reusable APIs.
+
+## Current implementation notes
+
+- `System.CommandLine` is a CLI-only dependency.
+- PNG encoding is implemented inside `RatchetPs2.Core.Textures` rather than through a host-specific image library.
+- Current WAD and PIF APIs generally expose stream or byte-array entry points; preserve that pattern for SDK and WASM reuse.
+- Some HW3D/HBN functionality is still exploratory and includes reverse-engineering notes/report generation. Keep this in the reusable layer only while it remains byte-oriented and host-neutral; move presentation-heavy output choices to host projects as they grow.
+- The game-module abstraction is intentionally small today. Add capability interfaces in `Core` when multiple hosts or games need the same behavior, then implement them in the appropriate game projects.

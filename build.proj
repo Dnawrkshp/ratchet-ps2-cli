@@ -1,0 +1,43 @@
+<Project>
+  <PropertyGroup>
+    <Configuration Condition="'$(Configuration)' == ''">Release</Configuration>
+    <ArtifactsDirectory>$(MSBuildThisFileDirectory)artifacts/</ArtifactsDirectory>
+    <PublishDirectory>$(ArtifactsDirectory)publish/</PublishDirectory>
+    <CliProject>$(MSBuildThisFileDirectory)src/RatchetPs2.Cli/RatchetPs2.Cli.csproj</CliProject>
+    <PublishSelfContained Condition="'$(PublishSelfContained)' == ''">false</PublishSelfContained>
+    <PublishSingleFile Condition="'$(PublishSingleFile)' == ''">false</PublishSingleFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <CliRuntime Include="linux-x64" />
+    <CliRuntime Include="win-x64" />
+  </ItemGroup>
+
+  <Target Name="Restore">
+    <MSBuild
+      Projects="$(CliProject)"
+      Targets="Restore"
+      BuildInParallel="false"
+      Properties="Configuration=$(Configuration);BuildInParallel=false" />
+  </Target>
+
+  <Target Name="Build" DependsOnTargets="Restore">
+    <MSBuild
+      Projects="$(CliProject)"
+      Targets="Build"
+      BuildInParallel="false"
+      Properties="Configuration=$(Configuration);NoRestore=true;BuildInParallel=false" />
+  </Target>
+
+  <Target Name="PublishCliPlatforms" DependsOnTargets="Restore">
+    <MSBuild
+      Projects="$(CliProject)"
+      Targets="Publish"
+      BuildInParallel="false"
+      Properties="Configuration=$(Configuration);NoRestore=true;BuildInParallel=false;RuntimeIdentifier=%(CliRuntime.Identity);SelfContained=$(PublishSelfContained);PublishSingleFile=$(PublishSingleFile);PublishDir=$(PublishDirectory)ratchet-ps2-%(CliRuntime.Identity)/" />
+  </Target>
+
+  <Target Name="CleanArtifacts">
+    <RemoveDir Directories="$(ArtifactsDirectory)" />
+  </Target>
+</Project>
