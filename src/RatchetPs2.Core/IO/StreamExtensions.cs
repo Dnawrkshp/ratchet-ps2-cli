@@ -4,6 +4,15 @@ namespace RatchetPs2.Core.IO;
 
 public static class StreamExtensions
 {
+    public static uint ReadUInt32LittleEndian(this Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        Span<byte> buffer = stackalloc byte[sizeof(uint)];
+        ReadExactly(stream, buffer);
+        return BinaryPrimitives.ReadUInt32LittleEndian(buffer);
+    }
+
     public static int ReadInt32LittleEndian(this Stream stream)
     {
         ArgumentNullException.ThrowIfNull(stream);

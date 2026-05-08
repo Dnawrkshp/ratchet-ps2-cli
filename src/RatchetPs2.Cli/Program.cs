@@ -1,4 +1,5 @@
 using RatchetPs2.Cli.Commands;
+using RatchetPs2.Cli.Commands.Hw3d;
 using RatchetPs2.Cli.Commands.Pif;
 using RatchetPs2.Cli.Commands.Wad;
 using RatchetPs2.Cli.GameSelection;
@@ -22,6 +23,7 @@ var gameModules = new IGameModule[]
 var gameModuleResolver = new GameModuleResolver(gameModules);
 
 rootCommand.Subcommands.Add(HelloCommand.Build(gameModuleResolver));
+rootCommand.Subcommands.Add(Hw3dCommand.Build());
 rootCommand.Subcommands.Add(PifCommand.Build());
 rootCommand.Subcommands.Add(WadCommand.Build());
 
