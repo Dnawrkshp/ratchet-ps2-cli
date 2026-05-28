@@ -1,27 +1,30 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public static class UyaMobyLooseModelReader
+public static class MobyLooseModelReader
 {
-    private static readonly IReadOnlyList<(UyaMobyMeshType Type, string Folder)> MeshFolders =
+    private static readonly IReadOnlyList<(MobyMeshType Type, string Folder)> MeshFolders =
     [
-        (UyaMobyMeshType.HighLod, "lod_high"),
-        (UyaMobyMeshType.LowLod, "lod_low"),
-        (UyaMobyMeshType.MeshType2, "mesh_type_2"),
-        (UyaMobyMeshType.Bangle, "bangle"),
-        (UyaMobyMeshType.Metal, "metal")
+        (MobyMeshType.HighLod, "lod_high"),
+        (MobyMeshType.LowLod, "lod_low"),
+        (MobyMeshType.MeshType2, "mesh_type_2"),
+        (MobyMeshType.Bangle, "bangle"),
+        (MobyMeshType.Metal, "metal")
     ];
 
-    public static UyaMobyModel Read(IMobyModelInput input)
+    public static MobyModel Read(IMobyModelInput input, MobyLooseModelReadOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(input);
+        options ??= new MobyLooseModelReadOptions();
 
         var model = ReadHeader(input);
-        model.BoundingSphere = ReadWithBinaryReader(input.ReadBytes("bsphere.def"), UyaBoundingSphere.Read);
+        model.AnimationFormat = options.AnimationFormat;
+        model.SkeletonFormat = options.AnimationFormat;
+        model.BoundingSphere = ReadWithBinaryReader(input.ReadBytes("bsphere.def"), MobyBoundingSphere.Read);
 
         ReadBangles(input, model);
         ReadCornCob(input, model);
         ReadCollision(input, model);
-        ReadAnimations(input, model);
+        ReadAnimations(input, model, options.AnimationFormat);
         ReadShadow(input, model);
         ReadSkeleton(input, model);
         model.CommonTransforms = input.ReadBytes("common_trans.def");
@@ -34,12 +37,12 @@ public static class UyaMobyLooseModelReader
         return model;
     }
 
-    private static UyaMobyModel ReadHeader(IMobyModelInput input)
+    private static MobyModel ReadHeader(IMobyModelInput input)
     {
-        return ReadWithBinaryReader(input.ReadBytes("header.def"), UyaMobyModelReader.ReadHeader);
+        return ReadWithBinaryReader(input.ReadBytes("header.def"), MobyModelReader.ReadHeader);
     }
 
-    private static void ReadBangles(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadBangles(IMobyModelInput input, MobyModel model)
     {
         if (!input.FileExists("bangles.def"))
         {
@@ -49,7 +52,7 @@ public static class UyaMobyLooseModelReader
 
         model.BangleTable = ReadWithBinaryReader(input.ReadBytes("bangles.def"), reader =>
         {
-            var table = new UyaMobyBangleTable
+            var table = new MobyBangleTable
             {
                 Unknown00 = reader.ReadByte(),
                 BangleCount = reader.ReadByte(),
@@ -59,7 +62,7 @@ public static class UyaMobyLooseModelReader
 
             for (var i = 0; i < 15; i++)
             {
-                table.OffsetList.Add(new UyaMobyBangleListEntry
+                table.OffsetList.Add(new MobyBangleListEntry
                 {
                     MeshTableIndex = reader.ReadInt16(),
                     Unknown02 = reader.ReadInt16()
@@ -73,7 +76,7 @@ public static class UyaMobyLooseModelReader
                     continue;
                 }
 
-                table.DataList.Add(new UyaMobyBangleData
+                table.DataList.Add(new MobyBangleData
                 {
                     Unknown00 = reader.ReadInt32(),
                     Unknown04 = reader.ReadInt32(),
@@ -86,7 +89,7 @@ public static class UyaMobyLooseModelReader
         });
     }
 
-    private static void ReadCornCob(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadCornCob(IMobyModelInput input, MobyModel model)
     {
         if (!input.DirectoryExists("corncob"))
         {
@@ -94,7 +97,7 @@ public static class UyaMobyLooseModelReader
             return;
         }
 
-        var cornCob = new UyaMobyCornCob
+        var cornCob = new MobyCornCob
         {
             KernelOffsets = Enumerable.Repeat((byte)0xFF, 0x10).ToArray()
         };
@@ -131,11 +134,11 @@ public static class UyaMobyLooseModelReader
         model.CornCob = cornCob;
     }
 
-    private static UyaMobyCornKernel ReadCornKernel(byte[] bytes)
+    private static MobyCornKernel ReadCornKernel(byte[] bytes)
     {
         return ReadWithBinaryReader(bytes, reader =>
         {
-            var kernel = new UyaMobyCornKernel
+            var kernel = new MobyCornKernel
             {
                 Vector = new System.Numerics.Vector4(
                     reader.ReadSingle(),
@@ -155,9 +158,9 @@ public static class UyaMobyLooseModelReader
         });
     }
 
-    private static UyaMobyKernelVertex ReadKernelVertex(BinaryReader reader)
+    private static MobyKernelVertex ReadKernelVertex(BinaryReader reader)
     {
-        return new UyaMobyKernelVertex
+        return new MobyKernelVertex
         {
             Unknown00 = reader.ReadInt32(),
             Unknown04 = reader.ReadInt16(),
@@ -165,7 +168,7 @@ public static class UyaMobyLooseModelReader
         };
     }
 
-    private static void ReadCollision(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadCollision(IMobyModelInput input, MobyModel model)
     {
         if (!input.FileExists("collision.bin"))
         {
@@ -175,7 +178,7 @@ public static class UyaMobyLooseModelReader
 
         model.Collision = ReadWithBinaryReader(input.ReadBytes("collision.bin"), reader =>
         {
-            var collision = new UyaMobyCollision
+            var collision = new MobyCollision
             {
                 Unknown00 = reader.ReadInt32(),
                 Size1 = reader.ReadInt32(),
@@ -200,7 +203,7 @@ public static class UyaMobyLooseModelReader
         });
     }
 
-    private static void ReadAnimations(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadAnimations(IMobyModelInput input, MobyModel model, MobyAnimationFormat animationFormat)
     {
         model.Sequences.Clear();
         if (!input.DirectoryExists("animations"))
@@ -211,19 +214,35 @@ public static class UyaMobyLooseModelReader
 
         foreach (var directory in input.EnumerateDirectories("animations"))
         {
-            model.Sequences.Add(ReadSequence(input, Path.Combine("animations", directory)));
+            model.Sequences.Add(ReadSequence(input, Path.Combine("animations", directory), animationFormat));
         }
 
         model.AnimationCount = checked((byte)model.Sequences.Count);
     }
 
-    private static UyaMobySequence ReadSequence(IMobyModelInput input, string relativeDirectory)
+    private static MobySequence ReadSequence(IMobyModelInput input, string relativeDirectory, MobyAnimationFormat animationFormat)
     {
+        var rawSequencePath = Path.Combine(relativeDirectory, "sequence.bin");
+        if (input.FileExists(rawSequencePath))
+        {
+            return new MobySequence
+            {
+                Format = animationFormat,
+                RawData = input.ReadBytes(rawSequencePath)
+            };
+        }
+        if (animationFormat == MobyAnimationFormat.Compact)
+        {
+            throw new InvalidDataException(
+                $"Compact moby loose animation '{relativeDirectory}' requires sequence.bin.");
+        }
+
         var sequence = ReadWithBinaryReader(input.ReadBytes(Path.Combine(relativeDirectory, "seq.def")), reader =>
         {
-            return new UyaMobySequence
+            return new MobySequence
             {
-                BoundingSphere = UyaBoundingSphere.Read(reader),
+                Format = animationFormat,
+                BoundingSphere = MobyBoundingSphere.Read(reader),
                 FrameCount = reader.ReadByte(),
                 Sound = reader.ReadByte(),
                 TriggerCount = reader.ReadByte(),
@@ -237,7 +256,7 @@ public static class UyaMobyLooseModelReader
         {
             var frame = ReadWithBinaryReader(input.ReadBytes(Path.Combine(relativeDirectory, frameFile)), reader =>
             {
-                return new UyaMobyAnimationFrame
+                return new MobyAnimationFrame
                 {
                     Unknown00 = reader.ReadByte(),
                     Unknown01 = reader.ReadByte(),
@@ -264,7 +283,7 @@ public static class UyaMobyLooseModelReader
         {
             sequence.Triggers.Add(ReadWithBinaryReader(input.ReadBytes(Path.Combine(relativeDirectory, triggerFile)), reader =>
             {
-                return new UyaMobyAnimationTrigger
+                return new MobyAnimationTrigger
                 {
                     Unknown00 = reader.ReadInt16(),
                     Unknown02 = reader.ReadInt16()
@@ -276,7 +295,7 @@ public static class UyaMobyLooseModelReader
         return sequence;
     }
 
-    private static void ReadShadow(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadShadow(IMobyModelInput input, MobyModel model)
     {
         model.ShadowPrefixData = input.FileExists("shadow_prefix.bin")
             ? input.ReadBytes("shadow_prefix.bin")
@@ -293,7 +312,7 @@ public static class UyaMobyLooseModelReader
         model.Shadow = checked((byte)(model.ShadowData.Length / 0x10));
     }
 
-    private static void ReadSkeleton(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadSkeleton(IMobyModelInput input, MobyModel model)
     {
         if (!input.DirectoryExists("skeleton"))
         {
@@ -302,17 +321,17 @@ public static class UyaMobyLooseModelReader
             return;
         }
 
-        var skeleton = new UyaMobySkeleton();
+        var skeleton = new MobySkeleton();
         foreach (var file in input.EnumerateFiles("skeleton", "bone_*.def"))
         {
-            skeleton.Bones.Add(ReadWithBinaryReader(input.ReadBytes(Path.Combine("skeleton", file)), UyaMatrix4.Read));
+            skeleton.Bones.Add(ReadWithBinaryReader(input.ReadBytes(Path.Combine("skeleton", file)), MobyMatrix4.Read));
         }
 
         model.Skeleton = skeleton;
         model.JointCount = checked((byte)skeleton.Bones.Count);
     }
 
-    private static void ReadSounds(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadSounds(IMobyModelInput input, MobyModel model)
     {
         if (!input.DirectoryExists("sound_defs"))
         {
@@ -326,7 +345,7 @@ public static class UyaMobyLooseModelReader
         {
             model.Sounds.Add(ReadWithBinaryReader(input.ReadBytes(Path.Combine("sound_defs", file)), reader =>
             {
-                return new UyaMobySound
+                return new MobySound
                 {
                     MinRange = reader.ReadSingle(),
                     MaxRange = reader.ReadSingle(),
@@ -345,7 +364,7 @@ public static class UyaMobyLooseModelReader
         model.SoundCount = checked((byte)model.Sounds.Count);
     }
 
-    private static void ReadAnimationJoints(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadAnimationJoints(IMobyModelInput input, MobyModel model)
     {
         if (!input.DirectoryExists("anim_joints"))
         {
@@ -358,7 +377,7 @@ public static class UyaMobyLooseModelReader
         {
             model.AnimationJoints.Add(ReadWithBinaryReader(input.ReadBytes(Path.Combine("anim_joints", file)), reader =>
             {
-                var joint = new UyaMobyAnimationJoint
+                var joint = new MobyAnimationJoint
                 {
                     SubSkeletonTokenOffset = reader.ReadInt16(),
                     AnimationJointFlagsOrAuxIndex = reader.ReadInt16()
@@ -370,7 +389,7 @@ public static class UyaMobyLooseModelReader
         }
     }
 
-    private static void ReadTeamPalettes(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadTeamPalettes(IMobyModelInput input, MobyModel model)
     {
         model.TeamPaletteData.Clear();
         model.TeamPalettes = 0;
@@ -396,9 +415,9 @@ public static class UyaMobyLooseModelReader
         model.TeamPalettes = checked((byte)((model.TeamPaletteData.Count << 4) | (palettesPerTexture & 0x0F)));
     }
 
-    private static void ReadMeshes(IMobyModelInput input, UyaMobyModel model)
+    private static void ReadMeshes(IMobyModelInput input, MobyModel model)
     {
-        var table = new UyaMobyMeshTable();
+        var table = new MobyMeshTable();
         foreach (var (type, folder) in MeshFolders)
         {
             var relativeFolder = Path.Combine("mesh", folder);
@@ -416,11 +435,11 @@ public static class UyaMobyLooseModelReader
         model.MeshTable = table;
     }
 
-    private static UyaMobyMeshTableEntry ReadMesh(IMobyModelInput input, string relativeDirectory, UyaMobyMeshType type)
+    private static MobyMeshTableEntry ReadMesh(IMobyModelInput input, string relativeDirectory, MobyMeshType type)
     {
         var entry = ReadWithBinaryReader(input.ReadBytes(Path.Combine(relativeDirectory, "entry.def")), reader =>
         {
-            return new UyaMobyMeshTableEntry
+            return new MobyMeshTableEntry
             {
                 VifListOffset = reader.ReadInt32(),
                 VifListSize = reader.ReadInt16(),
@@ -456,7 +475,7 @@ public static class UyaMobyLooseModelReader
         {
             entry.GifTag = ReadWithBinaryReader(input.ReadBytes(Path.Combine(relativeDirectory, "gif_tag.def")), reader =>
             {
-                return new UyaMobyGifTag
+                return new MobyGifTag
                 {
                     TextureIds = reader.ReadBytes(0x0C),
                     GifDataOffset = reader.ReadUInt32()
@@ -467,14 +486,14 @@ public static class UyaMobyLooseModelReader
         return entry;
     }
 
-    private static void ApplyDerivedHeaderFields(UyaMobyModel model)
+    private static void ApplyDerivedHeaderFields(MobyModel model)
     {
         var entries = model.MeshTable?.Entries ?? [];
-        model.HighLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == UyaMobyMeshType.HighLod));
-        model.LowLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == UyaMobyMeshType.LowLod));
-        model.MeshCountType2 = checked((byte)entries.Count(entry => entry.MeshType == UyaMobyMeshType.MeshType2));
+        model.HighLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.HighLod));
+        model.LowLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.LowLod));
+        model.MeshCountType2 = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.MeshType2));
         model.MetalOffsets = checked((byte)(model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2));
-        model.MetalCount = checked((byte)entries.Count(entry => entry.MeshType == UyaMobyMeshType.Metal));
+        model.MetalCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.Metal));
     }
 
     private static T ReadWithBinaryReader<T>(byte[] bytes, Func<BinaryReader, T> read)
@@ -483,4 +502,9 @@ public static class UyaMobyLooseModelReader
         using var reader = new BinaryReader(stream);
         return read(reader);
     }
+}
+
+public sealed class MobyLooseModelReadOptions
+{
+    public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
 }

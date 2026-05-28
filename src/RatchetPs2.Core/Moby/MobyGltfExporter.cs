@@ -1,27 +1,74 @@
 using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using RatchetPs2.Core.Geometry;
 
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public sealed record UyaMobyGltfExport(byte[] GltfBytes, byte[] BinBytes, byte[] DiagnosticsBytes);
+public sealed record MobyGltfExport(byte[] GltfBytes, byte[] BinBytes, byte[] DiagnosticsBytes);
 
-public static class UyaMobyGltfExporter
+public sealed class MobyGltfExportOptions
 {
-    public static UyaMobyGltfExport Export(Stream input, string gltfFileName = "moby.gltf")
+    public bool IncludeDebugUvColors { get; init; }
+    public bool SkipAnimationSequences { get; init; }
+    public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
+    public MobyGltfSkeletonParentMode SkeletonParentMode { get; init; } = MobyGltfSkeletonParentMode.Auto;
+    public IReadOnlyDictionary<int, string>? ExternalTextureUris { get; init; }
+    public MobyGltfLowLodTextureMode LowLodTextureMode { get; init; } = MobyGltfLowLodTextureMode.Rolling;
+    public IReadOnlyDictionary<int, int>? MeshTextureOverrides { get; init; }
+    public bool InferTextureIdsFromUvTiles { get; init; } = true;
+    public string? BufferFileName { get; init; }
+}
+
+public enum MobyGltfLowLodTextureMode
+{
+    Rolling,
+    ExplicitOnly,
+    HighLodOverlap,
+    HighLodNearestCenter,
+    HighLodNearestTriangle
+}
+
+public enum MobyGltfSkeletonParentMode
+{
+    Auto,
+    SixBitShifted,
+    SevenBitLow
+}
+
+public static class MobyGltfExporter
+{
+    public static MobyGltfExport Export(Stream input, string gltfFileName = "moby.gltf", MobyGltfExportOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(input);
-        return Export(UyaMobyModelReader.Read(input), gltfFileName);
+        options ??= new MobyGltfExportOptions();
+        return Export(
+            MobyModelReader.Read(
+                input,
+                new MobyModelReadOptions
+                {
+                    SkipAnimationSequences = options.SkipAnimationSequences,
+                    AnimationFormat = options.AnimationFormat
+                }),
+            gltfFileName,
+            options);
     }
 
-    public static UyaMobyGltfExport Export(UyaMobyModel model, string gltfFileName = "moby.gltf")
+    public static MobyGltfExport Export(MobyModel model, string gltfFileName = "moby.gltf", MobyGltfExportOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(model);
+        options ??= new MobyGltfExportOptions();
 
-        var binFileName = Path.ChangeExtension(Path.GetFileName(gltfFileName), ".bin") ?? "moby.bin";
+        var binFileName = string.IsNullOrWhiteSpace(options.BufferFileName)
+            ? $"{Path.GetFileNameWithoutExtension(gltfFileName)}.buffer.bin"
+            : Path.GetFileName(options.BufferFileName);
         var bufferViews = new List<object>();
         var accessors = new List<object>();
         var meshes = new List<object>();
+        var materials = new List<object>();
+        var images = new List<object>();
+        var textures = new List<object>();
+        var materialIndexByTextureId = new Dictionary<int, int>();
         var nodes = new List<object>();
         var sceneNodes = new List<int>();
         var hierarchy = new GltfNodeHierarchy(nodes, sceneNodes);
@@ -32,16 +79,32 @@ public static class UyaMobyGltfExporter
         var rollingJointCache = new ushort[512][];
         var rollingWeightCache = new float[512][];
         var rollingBlendCache = new SkinBlend?[64];
+        var highLodTextureBounds = new List<TextureBounds>();
+        var highLodTextureTriangles = new List<TextureTriangle>();
 
         using var binStream = new MemoryStream();
         using var writer = new BinaryWriter(binStream);
         var skins = new List<object>();
-        var skinContext = TryBuildSkinContext(model, scale, nodes, hierarchy, skins);
+        var skinContext = TryBuildSkinContext(model, scale, nodes, hierarchy, skins, options);
         var skinAccumulator = skinContext is null ? null : new SkinInfluenceAccumulator(skinContext.JointPaletteIndexByJoint.Length);
+        var debugUvMaterialIndex = options.IncludeDebugUvColors
+            ? AddDebugUvMaterial(materials)
+            : (int?)null;
+        var inferTextureIdsFromUvTiles = options.InferTextureIdsFromUvTiles
+            && options.ExternalTextureUris is not null
+            && options.ExternalTextureUris.ContainsKey(0)
+            && options.ExternalTextureUris.ContainsKey(1);
+        var activeTextureIdByMeshType = new Dictionary<MobyMeshType, int?>();
 
         for (var meshIndex = 0; meshIndex < (model.MeshTable?.Entries.Count ?? 0); meshIndex++)
         {
             var entry = model.MeshTable!.Entries[meshIndex];
+            var explicitTextureId = TryGetPrimaryTextureId(entry, out var primaryTextureId)
+                ? primaryTextureId
+                : (int?)null;
+            var effectiveTextureId = activeTextureIdByMeshType.TryGetValue(entry.MeshType, out var activeTextureId)
+                ? activeTextureId
+                : 0;
             if (!TryExtractMesh(
                     entry,
                     scale,
@@ -49,11 +112,14 @@ public static class UyaMobyGltfExporter
                     rollingJointCache,
                     rollingWeightCache,
                     rollingBlendCache,
+                    effectiveTextureId,
                     out var positions,
                     out var validMask,
                     out var joints,
                     out var weights,
                     out var indices,
+                    out var topologyTextureGroups,
+                    out var finalTextureId,
                     out var meshDiagnostic))
             {
                 diagnostics.Add(new
@@ -67,8 +133,9 @@ public static class UyaMobyGltfExporter
                 });
                 continue;
             }
+            activeTextureIdByMeshType[entry.MeshType] = finalTextureId;
 
-            if (skinAccumulator is not null && entry.MeshType != UyaMobyMeshType.LowLod)
+            if (skinAccumulator is not null && entry.MeshType != MobyMeshType.LowLod)
             {
                 AccumulateJointInfluences(skinAccumulator, positions, validMask, joints, weights, indices);
             }
@@ -84,6 +151,28 @@ public static class UyaMobyGltfExporter
                 writer.Write(position.Z);
                 min = Vector3.Min(min, position);
                 max = Vector3.Max(max, position);
+            }
+
+            var positionBounds = new Bounds3(min, max);
+            var materialTextureId = effectiveTextureId;
+            if (entry.MeshType == MobyMeshType.LowLod)
+            {
+                materialTextureId = ResolveLowLodTextureId(
+                    positionBounds,
+                    explicitTextureId,
+                    effectiveTextureId,
+                    highLodTextureBounds,
+                    options.LowLodTextureMode);
+            }
+
+            if (options.MeshTextureOverrides is not null
+                && options.MeshTextureOverrides.TryGetValue(meshIndex, out var overrideTextureId))
+            {
+                materialTextureId = overrideTextureId;
+            }
+            else if (entry.MeshType == MobyMeshType.HighLod && effectiveTextureId.HasValue)
+            {
+                highLodTextureBounds.Add(new TextureBounds(positionBounds, effectiveTextureId.Value));
             }
 
             var positionBufferView = bufferViews.Count;
@@ -109,6 +198,72 @@ public static class UyaMobyGltfExporter
 
             int? jointsAccessor = null;
             int? weightsAccessor = null;
+            int? texCoordAccessor = null;
+            int? debugColorAccessor = null;
+            List<Vector2>? texCoordsForMaterialMapping = null;
+            if (TryExtractTexCoords(entry, positions.Count, out var texCoords))
+            {
+                texCoordsForMaterialMapping = texCoords;
+                Align(writer, 4);
+                var texCoordByteOffset = checked((int)writer.BaseStream.Position);
+                foreach (var texCoord in texCoords)
+                {
+                    writer.Write(texCoord.X);
+                    writer.Write(texCoord.Y);
+                }
+
+                var texCoordBufferView = bufferViews.Count;
+                bufferViews.Add(new
+                {
+                    buffer = 0,
+                    byteOffset = texCoordByteOffset,
+                    byteLength = texCoords.Count * 2 * sizeof(float),
+                    target = 34962
+                });
+
+                texCoordAccessor = accessors.Count;
+                accessors.Add(new
+                {
+                    bufferView = texCoordBufferView,
+                    byteOffset = 0,
+                    componentType = 5126,
+                    count = texCoords.Count,
+                    type = "VEC2"
+                });
+
+                if (debugUvMaterialIndex.HasValue)
+                {
+                    Align(writer, 4);
+                    var colorByteOffset = checked((int)writer.BaseStream.Position);
+                    foreach (var color in BuildDebugUvColors(texCoords))
+                    {
+                        writer.Write(color.X);
+                        writer.Write(color.Y);
+                        writer.Write(color.Z);
+                        writer.Write(color.W);
+                    }
+
+                    var colorBufferView = bufferViews.Count;
+                    bufferViews.Add(new
+                    {
+                        buffer = 0,
+                        byteOffset = colorByteOffset,
+                        byteLength = texCoords.Count * 4 * sizeof(float),
+                        target = 34962
+                    });
+
+                    debugColorAccessor = accessors.Count;
+                    accessors.Add(new
+                    {
+                        bufferView = colorBufferView,
+                        byteOffset = 0,
+                        componentType = 5126,
+                        count = texCoords.Count,
+                        type = "VEC4"
+                    });
+                }
+            }
+
             if (skinContext is not null && joints.Count == positions.Count && weights.Count == positions.Count)
             {
                 NormalizeSkinRows(joints, weights, entry.CommonTransformJointIndex, skinContext);
@@ -172,61 +327,96 @@ public static class UyaMobyGltfExporter
                 });
             }
 
-            Align(writer, 4);
-            var indexByteOffset = checked((int)writer.BaseStream.Position);
-            foreach (var index in indices)
-            {
-                writer.Write(index);
-            }
-
-            var indexBufferView = bufferViews.Count;
-            bufferViews.Add(new
-            {
-                buffer = 0,
-                byteOffset = indexByteOffset,
-                byteLength = indices.Count * sizeof(uint),
-                target = 34963
-            });
-
-            var indexAccessor = accessors.Count;
-            accessors.Add(new
-            {
-                bufferView = indexBufferView,
-                byteOffset = 0,
-                componentType = 5125,
-                count = indices.Count,
-                type = "SCALAR",
-                min = new[] { indices.Count == 0 ? 0L : indices.Min(i => (long)i) },
-                max = new[] { indices.Count == 0 ? 0L : indices.Max(i => (long)i) }
-            });
-
             var gltfMeshIndex = meshes.Count;
             var attributes = new Dictionary<string, int> { ["POSITION"] = positionAccessor };
+            if (texCoordAccessor.HasValue)
+            {
+                attributes["TEXCOORD_0"] = texCoordAccessor.Value;
+            }
+
+            if (debugColorAccessor.HasValue)
+            {
+                attributes["COLOR_0"] = debugColorAccessor.Value;
+            }
+
             if (jointsAccessor.HasValue && weightsAccessor.HasValue)
             {
                 attributes["JOINTS_0"] = jointsAccessor.Value;
                 attributes["WEIGHTS_0"] = weightsAccessor.Value;
             }
 
-            meshes.Add(new
+            var inferTextureIdsFromUvTilesForMesh = inferTextureIdsFromUvTiles && explicitTextureId.HasValue;
+            var primitiveIndexGroups = BuildPrimitiveIndexGroups(
+                entry.MeshType,
+                options.LowLodTextureMode,
+                positions,
+                texCoordsForMaterialMapping,
+                indices,
+                topologyTextureGroups,
+                materialTextureId,
+                highLodTextureTriangles,
+                inferTextureIdsFromUvTilesForMesh);
+            if (entry.MeshType == MobyMeshType.HighLod)
             {
-                name = $"mesh_{meshIndex:0000}_{entry.MeshType}",
-                primitives = new[]
+                foreach (var group in primitiveIndexGroups)
                 {
-                    new
+                    if (!group.TextureId.HasValue)
                     {
-                        attributes,
-                        indices = indexAccessor,
-                        mode = 4
+                        continue;
                     }
+
+                    AddTextureTriangleSamples(
+                        highLodTextureTriangles,
+                        positions,
+                        texCoordsForMaterialMapping,
+                        group.Indices,
+                        group.TextureId.Value,
+                        inferTextureIdsFromUvTilesForMesh);
                 }
+            }
+
+            var primitives = new List<Dictionary<string, object>>();
+            foreach (var group in primitiveIndexGroups)
+            {
+                var indexAccessor = WriteIndexAccessor(writer, bufferViews, accessors, group.Indices);
+                var primitive = new Dictionary<string, object>
+                {
+                    ["attributes"] = attributes,
+                    ["indices"] = indexAccessor,
+                    ["mode"] = 4
+                };
+                if (debugUvMaterialIndex.HasValue && debugColorAccessor.HasValue)
+                {
+                    primitive["material"] = debugUvMaterialIndex.Value;
+                }
+                else if (TryGetExternalTextureMaterialIndex(
+                             group.TextureId,
+                             options.ExternalTextureUris,
+                             images,
+                             textures,
+                             materials,
+                             materialIndexByTextureId,
+                             out var textureMaterialIndex))
+                {
+                    primitive["material"] = textureMaterialIndex;
+                }
+
+                primitives.Add(primitive);
+            }
+
+            meshes.Add(new Dictionary<string, object?>
+            {
+                ["name"] = $"mesh_{meshIndex:0000}_{entry.MeshType}",
+                ["primitives"] = primitives,
+                ["extras"] = BuildMobyMeshExtras(model, entry, meshIndex, scale, explicitTextureId, effectiveTextureId, materialTextureId)
             });
 
             var nodeIndex = nodes.Count;
             var node = new Dictionary<string, object>
             {
                 ["name"] = $"node_{meshIndex:0000}_{entry.MeshType}",
-                ["mesh"] = gltfMeshIndex
+                ["mesh"] = gltfMeshIndex,
+                ["extras"] = BuildMobyNodeExtras(entry, meshIndex)
             };
             if (skinContext is not null && jointsAccessor.HasValue && weightsAccessor.HasValue)
             {
@@ -262,7 +452,7 @@ public static class UyaMobyGltfExporter
         var binBytes = binStream.ToArray();
         var gltf = new Dictionary<string, object>
         {
-            ["asset"] = new { version = "2.0", generator = "RatchetPs2 UYA moby glTF exporter" },
+            ["asset"] = new { version = "2.0", generator = "RatchetPs2 moby glTF exporter" },
             ["scene"] = 0,
             ["scenes"] = new[] { new { nodes = sceneNodes.ToArray() } },
             ["nodes"] = nodes,
@@ -276,17 +466,32 @@ public static class UyaMobyGltfExporter
             gltf["skins"] = skins;
         }
 
+        if (materials.Count > 0)
+        {
+            gltf["materials"] = materials;
+        }
+
+        if (images.Count > 0)
+        {
+            gltf["images"] = images;
+        }
+
+        if (textures.Count > 0)
+        {
+            gltf["textures"] = textures;
+        }
+
         var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
         jsonOptions.Converters.Add(new JsonStringEnumConverter());
         var gltfBytes = JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions);
         var diagnosticsBytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
-            ExportType = "UYA moby geometry",
+            ExportType = "moby geometry",
             Note = "Geometry is reconstructed from moby vertex tables and VIF UNPACK_V4_8 topology. Static skeleton skinning is exported when skeleton data is present; animation channels are intentionally omitted. Degenerate strip-control triangles are skipped; true duplicate faces are reported separately as a topology warning.",
             Meshes = diagnostics
         }, jsonOptions);
 
-        return new UyaMobyGltfExport(gltfBytes, binBytes, diagnosticsBytes);
+        return new MobyGltfExport(gltfBytes, binBytes, diagnosticsBytes);
     }
 
     private sealed class GltfSkinContext
@@ -336,12 +541,18 @@ public static class UyaMobyGltfExporter
         public byte Weight2 { get; }
     }
 
+    private readonly record struct TextureBounds(Bounds3 Bounds, int TextureId);
+    private readonly record struct TextureTriangle(Vector3 Centroid, Vector2? UvCentroid, int TextureId);
+    private readonly record struct PrimitiveIndexGroup(int? TextureId, List<uint> Indices);
+    private readonly record struct VifTextureIndexGroup(int? TextureId, List<uint> Indices);
+
     private static GltfSkinContext? TryBuildSkinContext(
-        UyaMobyModel model,
+        MobyModel model,
         float scale,
         List<object> nodes,
         GltfNodeHierarchy hierarchy,
-        List<object> skins)
+        List<object> skins,
+        MobyGltfExportOptions options)
     {
         var bones = model.Skeleton?.Bones;
         var jointCount = Math.Min(model.JointCount, bones?.Count ?? 0);
@@ -350,7 +561,9 @@ public static class UyaMobyGltfExporter
             return null;
         }
 
-        var parentByJoint = ReadCommonTransformParents(model.CommonTransforms, jointCount);
+        var parentMode = ResolveSkeletonParentMode(model.CommonTransforms, jointCount, options.SkeletonParentMode);
+        var parentByJoint = ReadCommonTransformParents(model.CommonTransforms, jointCount, parentMode);
+        var ignoresParentRotation = ReadCommonTransformParentRotationFlags(model.CommonTransforms, jointCount, parentMode);
         var commonLocalPositions = ReadCommonTransformLocalPositions(model.CommonTransforms, jointCount, scale);
         var worldPositions = new Vector3[jointCount];
         var worldRotations = new Quaternion[jointCount];
@@ -389,8 +602,19 @@ public static class UyaMobyGltfExporter
 
             if (parent >= 0)
             {
-                exportedWorldRotations[i] = Quaternion.Normalize(exportedWorldRotations[parent] * localRotation);
-                exportedWorldPositions[i] = exportedWorldPositions[parent] + Vector3.Transform(localPosition, exportedWorldRotations[parent]);
+                if (ignoresParentRotation[i])
+                {
+                    var inverseParentRotation = Quaternion.Inverse(exportedWorldRotations[parent]);
+                    exportedWorldRotations[i] = localRotation;
+                    exportedWorldPositions[i] = exportedWorldPositions[parent] + localPosition;
+                    localPosition = Vector3.Transform(localPosition, inverseParentRotation);
+                    localRotation = Quaternion.Normalize(inverseParentRotation * localRotation);
+                }
+                else
+                {
+                    exportedWorldRotations[i] = Quaternion.Normalize(exportedWorldRotations[parent] * localRotation);
+                    exportedWorldPositions[i] = exportedWorldPositions[parent] + Vector3.Transform(localPosition, exportedWorldRotations[parent]);
+                }
             }
             else
             {
@@ -418,6 +642,7 @@ public static class UyaMobyGltfExporter
             }
         }
 
+        var skeletonRootNodeIndex = hierarchy.EnsureGroup(["Armature"]);
         for (var i = 0; i < jointCount; i++)
         {
             if (parentByJoint[i] < 0)
@@ -430,6 +655,7 @@ public static class UyaMobyGltfExporter
         var skin = new Dictionary<string, object>
         {
             ["name"] = "moby_skin",
+            ["skeleton"] = skeletonRootNodeIndex,
             ["joints"] = jointNodeIndices
         };
 
@@ -585,7 +811,49 @@ public static class UyaMobyGltfExporter
         skinContext.Skin["inverseBindMatrices"] = inverseBindAccessor;
     }
 
-    private static int[] ReadCommonTransformParents(byte[]? commonTransforms, int jointCount)
+    private static MobyGltfSkeletonParentMode ResolveSkeletonParentMode(
+        byte[]? commonTransforms,
+        int jointCount,
+        MobyGltfSkeletonParentMode requestedMode)
+    {
+        if (requestedMode != MobyGltfSkeletonParentMode.Auto
+            || commonTransforms is null
+            || commonTransforms.Length < jointCount * 0x10)
+        {
+            return requestedMode == MobyGltfSkeletonParentMode.Auto
+                ? MobyGltfSkeletonParentMode.SixBitShifted
+                : requestedMode;
+        }
+
+        var sixBitScore = ScoreCommonTransformParentMode(commonTransforms, jointCount, MobyGltfSkeletonParentMode.SixBitShifted);
+        var sevenBitScore = ScoreCommonTransformParentMode(commonTransforms, jointCount, MobyGltfSkeletonParentMode.SevenBitLow);
+        return sevenBitScore > sixBitScore
+            ? MobyGltfSkeletonParentMode.SevenBitLow
+            : MobyGltfSkeletonParentMode.SixBitShifted;
+    }
+
+    private static int ScoreCommonTransformParentMode(
+        byte[] commonTransforms,
+        int jointCount,
+        MobyGltfSkeletonParentMode mode)
+    {
+        var score = 0;
+        for (var i = 1; i < jointCount; i++)
+        {
+            var parent = DecodeCommonTransformParent(commonTransforms, i, mode);
+            if (parent >= 0 && parent < i)
+            {
+                score++;
+            }
+        }
+
+        return score;
+    }
+
+    private static int[] ReadCommonTransformParents(
+        byte[]? commonTransforms,
+        int jointCount,
+        MobyGltfSkeletonParentMode mode)
     {
         var parents = Enumerable.Repeat(-1, jointCount).ToArray();
         if (commonTransforms is null || commonTransforms.Length < jointCount * 0x10)
@@ -595,11 +863,49 @@ public static class UyaMobyGltfExporter
 
         for (var i = 0; i < jointCount; i++)
         {
-            var rawParent = BitConverter.ToUInt16(commonTransforms, i * 0x10 + 0x0C) >> 6;
-            parents[i] = rawParent >= i ? -1 : rawParent;
+            var parent = DecodeCommonTransformParent(commonTransforms, i, mode);
+            parents[i] = parent >= 0 && parent < i ? parent : -1;
         }
 
         return parents;
+    }
+
+    private static bool[] ReadCommonTransformParentRotationFlags(
+        byte[]? commonTransforms,
+        int jointCount,
+        MobyGltfSkeletonParentMode mode)
+    {
+        var flags = new bool[jointCount];
+        if (mode != MobyGltfSkeletonParentMode.SevenBitLow
+            || commonTransforms is null
+            || commonTransforms.Length < jointCount * 0x10)
+        {
+            return flags;
+        }
+
+        for (var i = 0; i < jointCount; i++)
+        {
+            var rawParent = commonTransforms[i * 0x10 + 0x0C];
+            var parentIndex = rawParent & 0x7F;
+            flags[i] = parentIndex != 0x7F && (rawParent & 0x80) != 0;
+        }
+
+        return flags;
+    }
+
+    private static int DecodeCommonTransformParent(
+        byte[] commonTransforms,
+        int jointIndex,
+        MobyGltfSkeletonParentMode mode)
+    {
+        var offset = jointIndex * 0x10 + 0x0C;
+        return mode switch
+        {
+            MobyGltfSkeletonParentMode.SevenBitLow => (commonTransforms[offset] & 0x7F) == 0x7F
+                ? -1
+                : commonTransforms[offset] & 0x7F,
+            _ => BitConverter.ToUInt16(commonTransforms, offset) >> 6
+        };
     }
 
     private static Vector3?[] ReadCommonTransformLocalPositions(byte[]? commonTransforms, int jointCount, float scale)
@@ -622,7 +928,7 @@ public static class UyaMobyGltfExporter
         return positions;
     }
 
-    private static (Vector3 Position, Quaternion Rotation) DecodeBoneWorldTransform(UyaMatrix4 bone, float scale)
+    private static (Vector3 Position, Quaternion Rotation) DecodeBoneWorldTransform(MobyMatrix4 bone, float scale)
     {
         var basis = new Matrix4x4(
             1f, 0f, 0f, 0f,
@@ -677,7 +983,7 @@ public static class UyaMobyGltfExporter
             this.sceneNodes = sceneNodes;
         }
 
-        public void AddMeshNode(UyaMobyMeshType meshType, int meshNodeIndex)
+        public void AddMeshNode(MobyMeshType meshType, int meshNodeIndex)
         {
             var path = GetGroupPath(meshType);
             AddNodeToGroup(path, meshNodeIndex);
@@ -729,32 +1035,35 @@ public static class UyaMobyGltfExporter
             return parentIndex;
         }
 
-        private static string[] GetGroupPath(UyaMobyMeshType meshType)
+        private static string[] GetGroupPath(MobyMeshType meshType)
         {
             return meshType switch
             {
-                UyaMobyMeshType.HighLod => ["mesh", "high_lod"],
-                UyaMobyMeshType.LowLod => ["mesh", "low_lod"],
-                UyaMobyMeshType.MeshType2 => ["mesh", "mesh_type_2"],
-                UyaMobyMeshType.Bangle => ["bangles", "high_lod"],
-                UyaMobyMeshType.Metal => ["metals"],
+                MobyMeshType.HighLod => ["mesh", "high_lod"],
+                MobyMeshType.LowLod => ["mesh", "low_lod"],
+                MobyMeshType.MeshType2 => ["mesh", "mesh_type_2"],
+                MobyMeshType.Bangle => ["bangles", "high_lod"],
+                MobyMeshType.Metal => ["metals"],
                 _ => ["mesh", "unknown"]
             };
         }
     }
 
     private static bool TryExtractMesh(
-        UyaMobyMeshTableEntry entry,
+        MobyMeshTableEntry entry,
         float scale,
         Vector3?[] rollingVertexCache,
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         SkinBlend?[] rollingBlendCache,
+        int? initialTextureId,
         out List<Vector3> positions,
         out List<bool> validMask,
         out List<ushort[]> joints,
         out List<float[]> weights,
         out List<uint> indices,
+        out List<VifTextureIndexGroup> topologyTextureGroups,
+        out int? finalTextureId,
         out object diagnostic)
     {
         positions = [];
@@ -762,6 +1071,8 @@ public static class UyaMobyGltfExporter
         joints = [];
         weights = [];
         indices = [];
+        topologyTextureGroups = [];
+        finalTextureId = initialTextureId;
         var duplicateCacheMisses = 0;
 
         if (!TryDecodeVertexTablePositions(
@@ -781,14 +1092,14 @@ public static class UyaMobyGltfExporter
             return false;
         }
 
-        var unpacks = UyaVifPacketReader
+        var unpacks = MobyVifPacketReader
             .Read(Combine(entry.VifData, entry.VifTextureData))
             .Where(packet => packet.IsUnpack)
             .ToList();
         var indexUnpack = unpacks.FirstOrDefault(packet => packet.Kind == "UNPACK_V4_8" && packet.Payload.Length >= 8);
         var textureUnpacks = entry.VifTextureData is null
             ? []
-            : UyaVifPacketReader.Read(entry.VifTextureData).Where(packet => packet.IsUnpack).ToList();
+            : MobyVifPacketReader.Read(entry.VifTextureData).Where(packet => packet.IsUnpack).ToList();
 
         var usedVifTopology = false;
         var rawTriangleCount = 0;
@@ -805,6 +1116,9 @@ public static class UyaMobyGltfExporter
                 validMask,
                 positions,
                 indices,
+                topologyTextureGroups,
+                initialTextureId,
+                out finalTextureId,
                 out rawTriangleCount,
                 out rejectedDegenerateTriangleCount,
                 out rejectedInvalidTriangleCount,
@@ -812,6 +1126,7 @@ public static class UyaMobyGltfExporter
             if (!usedVifTopology && texturePayload is not null)
             {
                 indices.Clear();
+                topologyTextureGroups.Clear();
                 usedVifTopology = TryBuildTrianglesFromVifV48(
                     indexUnpack.Payload,
                     null,
@@ -819,6 +1134,9 @@ public static class UyaMobyGltfExporter
                     validMask,
                     positions,
                     indices,
+                    topologyTextureGroups,
+                    initialTextureId,
+                    out finalTextureId,
                     out rawTriangleCount,
                     out rejectedDegenerateTriangleCount,
                     out rejectedInvalidTriangleCount,
@@ -840,8 +1158,240 @@ public static class UyaMobyGltfExporter
         return positions.Count >= 3 && indices.Count >= 3;
     }
 
+    private static object BuildMobyNodeExtras(MobyMeshTableEntry entry, int meshIndex)
+    {
+        return new Dictionary<string, object?>
+        {
+            ["RatchetPs2"] = new Dictionary<string, object?>
+            {
+                ["moby"] = new Dictionary<string, object?>
+                {
+                    ["kind"] = "mobyMeshNode",
+                    ["version"] = 1,
+                    ["meshIndex"] = meshIndex,
+                    ["meshType"] = entry.MeshType.ToString(),
+                    ["commonTransformJointIndex"] = entry.CommonTransformJointIndex
+                }
+            }
+        };
+    }
+
+    private static object BuildMobyMeshExtras(
+        MobyModel model,
+        MobyMeshTableEntry entry,
+        int meshIndex,
+        float scale,
+        int? explicitTextureId,
+        int? effectiveTextureId,
+        int? materialTextureId)
+    {
+        var combinedVifData = Combine(entry.VifData, entry.VifTextureData);
+        var topologyPacket = MobyVifPacketReader
+            .Read(combinedVifData)
+            .FirstOrDefault(packet => packet.Kind == "UNPACK_V4_8" && packet.Payload.Length >= 4);
+
+        return new Dictionary<string, object?>
+        {
+            ["RatchetPs2"] = new Dictionary<string, object?>
+            {
+                ["moby"] = new Dictionary<string, object?>
+                {
+                    ["kind"] = "mobyMesh",
+                    ["version"] = 1,
+                    ["meshIndex"] = meshIndex,
+                    ["meshType"] = entry.MeshType.ToString(),
+                    ["modelScale"] = model.Scale,
+                    ["positionScale"] = scale,
+                    ["coordinateBasis"] = "gltf=(x,z,-y)_from_ps2",
+                    ["commonTransformJointIndex"] = entry.CommonTransformJointIndex,
+                    ["primaryTextureId"] = explicitTextureId,
+                    ["effectiveTextureId"] = effectiveTextureId,
+                    ["materialTextureId"] = materialTextureId,
+                    ["gifTextureIds"] = entry.GifTag?.TextureIds.Select(id => (int)id).ToArray(),
+                    ["meshEntry"] = new Dictionary<string, object?>
+                    {
+                        ["vertexCount"] = entry.VertexCount,
+                        ["vertexDataSizeQw"] = entry.VertexDataSize,
+                        ["vifListSizeQw"] = entry.VifListSize,
+                        ["vifListTextureSizeQwMinusOne"] = entry.VifListTextureSize,
+                        ["vifDataLength"] = entry.VifData.Length,
+                        ["vifTextureDataLength"] = entry.VifTextureData?.Length ?? 0,
+                        ["gifTagMatched"] = entry.GifTag is not null
+                    },
+                    ["vertexLayout"] = BuildMobyVertexLayoutExtras(entry),
+                    ["topologyPacket"] = topologyPacket is null ? null : BuildMobyTopologyPacketExtras(combinedVifData, topologyPacket, entry.VifData.Length)
+                }
+            }
+        };
+    }
+
+    private static object BuildMobyTopologyPacketExtras(byte[] combinedVifData, MobyVifPacket topologyPacket, int vifDataSplitOffset)
+    {
+        var payloadOffset = topologyPacket.Offset + 4;
+        var alignedPayloadSize = Math.Min(topologyPacket.AlignedPayloadSize, Math.Max(0, combinedVifData.Length - payloadOffset));
+        var suffixOffset = Math.Min(combinedVifData.Length, payloadOffset + alignedPayloadSize);
+        var payloadPaddingOffset = payloadOffset + topologyPacket.Payload.Length;
+        var payloadPaddingSize = Math.Max(0, suffixOffset - payloadPaddingOffset);
+
+        return new Dictionary<string, object?>
+        {
+            ["offset"] = topologyPacket.Offset,
+            ["immediate"] = topologyPacket.Immediate,
+            ["num"] = topologyPacket.Num,
+            ["command"] = topologyPacket.Command,
+            ["commandByte"] = topologyPacket.Command | (topologyPacket.Irq << 7),
+            ["irq"] = topologyPacket.Irq,
+            ["kind"] = topologyPacket.Kind,
+            ["rawPayloadSize"] = topologyPacket.RawPayloadSize,
+            ["alignedPayloadSize"] = topologyPacket.AlignedPayloadSize,
+            ["payloadBase64"] = Convert.ToBase64String(topologyPacket.Payload),
+            ["payloadBytes"] = topologyPacket.Payload.Select(value => (int)value).ToArray(),
+            ["payloadPrefixBytes"] = topologyPacket.Payload.Take(4).Select(value => (int)value).ToArray(),
+            ["payloadTokens"] = BuildMobyTopologyPayloadTokens(topologyPacket.Payload),
+            ["alignedPayloadBase64"] = Convert.ToBase64String(combinedVifData.AsSpan(payloadOffset, alignedPayloadSize)),
+            ["payloadPaddingBase64"] = Convert.ToBase64String(combinedVifData.AsSpan(payloadPaddingOffset, payloadPaddingSize)),
+            ["beforePacketBase64"] = Convert.ToBase64String(combinedVifData.AsSpan(0, topologyPacket.Offset)),
+            ["afterPacketBase64"] = Convert.ToBase64String(combinedVifData.AsSpan(suffixOffset)),
+            ["vifDataSplitOffset"] = vifDataSplitOffset
+        };
+    }
+
+    private static List<object> BuildMobyTopologyPayloadTokens(byte[] payload)
+    {
+        var tokens = new List<object>();
+        for (var i = 4; i < payload.Length; i++)
+        {
+            var value = payload[i];
+            var signedValue = unchecked((sbyte)value);
+            var kind = value == 0
+                ? "zero"
+                : signedValue < 0
+                    ? "negative_index"
+                    : "index";
+            tokens.Add(new Dictionary<string, object?>
+            {
+                ["kind"] = kind,
+                ["negative"] = signedValue < 0,
+                ["vertexIndex"] = value == 0 ? null : (value & 0x7F) - 1
+            });
+        }
+
+        return tokens;
+    }
+
+    private static object BuildMobyVertexLayoutExtras(MobyMeshTableEntry entry)
+    {
+        var data = entry.VertexData;
+        if (data.Length < 0x10)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["supported"] = false
+            };
+        }
+
+        var matrixTransferCount = BitConverter.ToUInt16(data, 0x00);
+        var twoWayBlendVertexCount = BitConverter.ToUInt16(data, 0x02);
+        var threeWayBlendVertexCount = BitConverter.ToUInt16(data, 0x04);
+        var mainVertexCount = BitConverter.ToUInt16(data, 0x06);
+        var duplicateVertexCount = BitConverter.ToUInt16(data, 0x08);
+        var vertexTableOffset = BitConverter.ToUInt16(data, 0x0C);
+
+        var matrixTransfers = new List<object>();
+        for (var i = 0; i < matrixTransferCount; i++)
+        {
+            var offset = 0x10 + i * 2;
+            if (offset + 2 > data.Length)
+            {
+                break;
+            }
+
+            matrixTransfers.Add(new Dictionary<string, object?>
+            {
+                ["joint"] = unchecked((sbyte)data[offset]),
+                ["vu0DestinationAddress"] = data[offset + 1]
+            });
+        }
+
+        var duplicateIndicesOffset = 0x10 + matrixTransferCount * 2;
+        if (duplicateIndicesOffset % 4 != 0)
+        {
+            duplicateIndicesOffset += 2;
+        }
+        if (duplicateIndicesOffset % 8 != 0)
+        {
+            duplicateIndicesOffset += 4;
+        }
+
+        var duplicateIndices = new List<int>();
+        for (var i = 0; i < duplicateVertexCount; i++)
+        {
+            var offset = duplicateIndicesOffset + i * 2;
+            if (offset + 2 > data.Length)
+            {
+                break;
+            }
+
+            duplicateIndices.Add((BitConverter.ToUInt16(data, offset) >> 7) & 0x01FF);
+        }
+
+        var inFileVertexCount = twoWayBlendVertexCount + threeWayBlendVertexCount + mainVertexCount;
+        var vertexDataSizeQw = data.Length / 0x10;
+        var epilogueVertexCount = vertexDataSizeQw - (vertexTableOffset / 0x10) - inFileVertexCount;
+        var low9StorageValues = new List<int>();
+        var rowPrefixBytes = new List<byte>();
+        var epilogueBytes = Array.Empty<byte>();
+        if (vertexTableOffset > 0 && vertexTableOffset % 0x10 == 0 && epilogueVertexCount >= 0)
+        {
+            var rowCount = inFileVertexCount + epilogueVertexCount;
+            var epilogueOffset = vertexTableOffset + inFileVertexCount * 0x10;
+            var epilogueLength = epilogueVertexCount * 0x10;
+            if (epilogueLength > 0 && epilogueOffset + epilogueLength <= data.Length)
+            {
+                epilogueBytes = data.AsSpan(epilogueOffset, epilogueLength).ToArray();
+            }
+
+            for (var i = 0; i < rowCount; i++)
+            {
+                var offset = vertexTableOffset + i * 0x10;
+                if (offset + 0x0A > data.Length)
+                {
+                    break;
+                }
+
+                low9StorageValues.Add(BitConverter.ToUInt16(data, offset) & 0x01FF);
+                var lowHalf = (ushort)(BitConverter.ToUInt16(data, offset) & ~0x01FF);
+                rowPrefixBytes.Add((byte)(lowHalf & 0xFF));
+                rowPrefixBytes.Add((byte)(lowHalf >> 8));
+                for (var j = 2; j < 0x0A; j++)
+                {
+                    rowPrefixBytes.Add(data[offset + j]);
+                }
+            }
+        }
+
+        return new Dictionary<string, object?>
+        {
+            ["supported"] = true,
+            ["matrixTransferCount"] = matrixTransferCount,
+            ["twoWayBlendVertexCount"] = twoWayBlendVertexCount,
+            ["threeWayBlendVertexCount"] = threeWayBlendVertexCount,
+            ["mainVertexCount"] = mainVertexCount,
+            ["duplicateVertexCount"] = duplicateVertexCount,
+            ["vertexTableOffset"] = vertexTableOffset,
+            ["duplicateIndicesOffset"] = duplicateIndicesOffset,
+            ["epilogueVertexCount"] = Math.Max(epilogueVertexCount, 0),
+            ["headerBytesBase64"] = Convert.ToBase64String(data.AsSpan(0, 0x10)),
+            ["epilogueBytesBase64"] = Convert.ToBase64String(epilogueBytes),
+            ["matrixTransfers"] = matrixTransfers,
+            ["duplicateIndices"] = duplicateIndices,
+            ["low9StorageValues"] = low9StorageValues,
+            ["rowPrefixBytesBase64"] = Convert.ToBase64String(rowPrefixBytes.ToArray())
+        };
+    }
+
     private static bool TryDecodeVertexTablePositions(
-        UyaMobyMeshTableEntry entry,
+        MobyMeshTableEntry entry,
         float scale,
         Vector3?[] rollingVertexCache,
         ushort[][] rollingJointCache,
@@ -1190,6 +1740,9 @@ public static class UyaMobyGltfExporter
         IReadOnlyList<bool> validMask,
         IReadOnlyList<Vector3> positions,
         List<uint> indices,
+        List<VifTextureIndexGroup> textureGroups,
+        int? initialTextureId,
+        out int? finalTextureId,
         out int rawTriangleCount,
         out int rejectedDegenerateTriangleCount,
         out int rejectedInvalidTriangleCount,
@@ -1199,6 +1752,7 @@ public static class UyaMobyGltfExporter
         rejectedDegenerateTriangleCount = 0;
         rejectedInvalidTriangleCount = 0;
         rejectedDuplicateTriangleCount = 0;
+        finalTextureId = initialTextureId;
         if (indexPayload.Length < 8 || positionCount < 3)
         {
             return false;
@@ -1223,8 +1777,9 @@ public static class UyaMobyGltfExporter
 
         var nextSecretIndex = 0;
         var adGifIndex = 0;
-        List<uint>? currentStrip = null;
-        var strips = new List<List<uint>>();
+        int? textureId = initialTextureId;
+        VifStrip? currentStrip = null;
+        var strips = new List<VifStrip>();
         for (var j = 4; j < indexPayload.Length; j++)
         {
             var idx = unchecked((sbyte)indexPayload[j]);
@@ -1239,14 +1794,14 @@ public static class UyaMobyGltfExporter
                 var secret = secretIndices[nextSecretIndex++];
                 if (secret == 0)
                 {
-                    if (currentStrip is null || currentStrip.Count < 3)
+                    if (currentStrip is null || currentStrip.Indices.Count < 3)
                     {
                         break;
                     }
 
-                    currentStrip.RemoveAt(currentStrip.Count - 1);
-                    currentStrip.RemoveAt(currentStrip.Count - 1);
-                    currentStrip.RemoveAt(currentStrip.Count - 1);
+                    currentStrip.Indices.RemoveAt(currentStrip.Indices.Count - 1);
+                    currentStrip.Indices.RemoveAt(currentStrip.Indices.Count - 1);
+                    currentStrip.Indices.RemoveAt(currentStrip.Indices.Count - 1);
                     break;
                 }
 
@@ -1258,6 +1813,7 @@ public static class UyaMobyGltfExporter
                         break;
                     }
 
+                    textureId = ReadTexturePrimitiveTextureId(texturePayload, adGifIndex);
                     adGifIndex++;
                 }
             }
@@ -1267,23 +1823,23 @@ public static class UyaMobyGltfExporter
                 var nextIsRestart = j + 1 < indexPayload.Length && unchecked((sbyte)indexPayload[j + 1]) <= 0;
                 if (nextIsRestart)
                 {
-                    currentStrip = [];
+                    currentStrip = new VifStrip(textureId);
                     strips.Add(currentStrip);
                 }
                 else
                 {
-                    if (currentStrip is null || currentStrip.Count < 1)
+                    if (currentStrip is null || currentStrip.Indices.Count < 1)
                     {
                         break;
                     }
 
-                    currentStrip.Add(currentStrip[^1]);
+                    currentStrip.Indices.Add(currentStrip.Indices[^1]);
                 }
             }
 
             if (currentStrip is null)
             {
-                currentStrip = [];
+                currentStrip = new VifStrip(textureId);
                 strips.Add(currentStrip);
             }
 
@@ -1293,18 +1849,18 @@ public static class UyaMobyGltfExporter
                 break;
             }
 
-            currentStrip.Add((uint)decoded);
+            currentStrip.Indices.Add((uint)decoded);
         }
 
         var seenTriangles = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var strip in strips.Where(strip => strip.Count >= 3))
+        foreach (var strip in strips.Where(strip => strip.Indices.Count >= 3))
         {
             var flip = false;
-            for (var k = 2; k < strip.Count; k++)
+            for (var k = 2; k < strip.Indices.Count; k++)
             {
-                var a = strip[k - 2];
-                var b = strip[k - 1];
-                var c = strip[k];
+                var a = strip.Indices[k - 2];
+                var b = strip.Indices[k - 1];
+                var c = strip.Indices[k];
                 var i0 = a;
                 var i1 = flip ? c : b;
                 var i2 = flip ? b : c;
@@ -1314,6 +1870,7 @@ public static class UyaMobyGltfExporter
                 switch (TryAppendTriangle(indices, seenTriangles, i0, i1, i2, validMask, positions))
                 {
                     case TriangleAppendResult.Added:
+                        AddTriangleToTextureGroup(textureGroups, strip.TextureId, i0, i1, i2);
                         break;
                     case TriangleAppendResult.Degenerate:
                         rejectedDegenerateTriangleCount++;
@@ -1328,7 +1885,43 @@ public static class UyaMobyGltfExporter
             }
         }
 
+        finalTextureId = textureId;
         return indices.Count >= 3;
+    }
+
+    private sealed class VifStrip(int? textureId)
+    {
+        public int? TextureId { get; } = textureId;
+        public List<uint> Indices { get; } = [];
+    }
+
+    private static int? ReadTexturePrimitiveTextureId(byte[]? texturePayload, int texturePrimitiveIndex)
+    {
+        var offset = texturePrimitiveIndex * 0x40 + 0x20;
+        if (texturePayload is null || offset + 4 > texturePayload.Length)
+        {
+            return null;
+        }
+
+        var raw = BitConverter.ToInt32(texturePayload, offset);
+        return raw >= 0 ? raw : null;
+    }
+
+    private static void AddTriangleToTextureGroup(
+        List<VifTextureIndexGroup> textureGroups,
+        int? textureId,
+        uint i0,
+        uint i1,
+        uint i2)
+    {
+        if (textureGroups.Count == 0 || textureGroups[^1].TextureId != textureId)
+        {
+            textureGroups.Add(new VifTextureIndexGroup(textureId, []));
+        }
+
+        textureGroups[^1].Indices.Add(i0);
+        textureGroups[^1].Indices.Add(i1);
+        textureGroups[^1].Indices.Add(i2);
     }
 
     private enum TriangleAppendResult
@@ -1413,7 +2006,7 @@ public static class UyaMobyGltfExporter
         return combined;
     }
 
-    private static byte[]? SelectTexturePayload(UyaVifPacket indexUnpack, List<UyaVifPacket> mainUnpacks, List<UyaVifPacket> textureListUnpacks)
+    private static byte[]? SelectTexturePayload(MobyVifPacket indexUnpack, List<MobyVifPacket> mainUnpacks, List<MobyVifPacket> textureListUnpacks)
     {
         if (indexUnpack.Payload.Length < 4)
         {
@@ -1425,6 +2018,472 @@ public static class UyaMobyGltfExporter
             ?? textureListUnpacks.FirstOrDefault(packet => packet.Kind == "UNPACK_V4_32" && packet.Payload.Length >= 0x10 && packet.Immediate == expectedTextureAddr)?.Payload
             ?? textureListUnpacks.FirstOrDefault(packet => packet.Kind == "UNPACK_V4_32" && packet.Payload.Length >= 0x10)?.Payload
             ?? mainUnpacks.FirstOrDefault(packet => packet.Kind == "UNPACK_V4_32" && packet.Payload.Length >= 0x10)?.Payload;
+    }
+
+    private static bool TryExtractTexCoords(
+        MobyMeshTableEntry entry,
+        int vertexCount,
+        out List<Vector2> texCoords)
+    {
+        texCoords = [];
+        if (vertexCount <= 0 || entry.VifData.Length < 8)
+        {
+            return false;
+        }
+
+        var packet = MobyVifPacketReader
+            .Read(entry.VifData)
+            .FirstOrDefault(packet => packet.Kind == "UNPACK_V2_16" && packet.Payload.Length >= vertexCount * 4);
+        if (packet is null)
+        {
+            return false;
+        }
+
+        const float uvScale = 4096f;
+        texCoords = new List<Vector2>(vertexCount);
+        for (var i = 0; i < vertexCount; i++)
+        {
+            var offset = i * 4;
+            texCoords.Add(new Vector2(
+                BitConverter.ToInt16(packet.Payload, offset) / uvScale,
+                BitConverter.ToInt16(packet.Payload, offset + 2) / uvScale));
+        }
+
+        return true;
+    }
+
+    private static int AddDebugUvMaterial(List<object> materials)
+    {
+        var index = materials.Count;
+        materials.Add(new
+        {
+            name = "debug_uv_vertex_colors",
+            doubleSided = true,
+            pbrMetallicRoughness = new
+            {
+                baseColorFactor = new[] { 1f, 1f, 1f, 1f },
+                metallicFactor = 0f,
+                roughnessFactor = 1f
+            }
+        });
+        return index;
+    }
+
+    private static bool TryGetExternalTextureMaterialIndex(
+        int? textureId,
+        IReadOnlyDictionary<int, string>? textureUris,
+        List<object> images,
+        List<object> textures,
+        List<object> materials,
+        Dictionary<int, int> materialIndexByTextureId,
+        out int materialIndex)
+    {
+        materialIndex = 0;
+        if (textureUris is null || !textureId.HasValue)
+        {
+            return false;
+        }
+
+        if (!textureUris.TryGetValue(textureId.Value, out var uri) || string.IsNullOrWhiteSpace(uri))
+        {
+            return false;
+        }
+
+        if (materialIndexByTextureId.TryGetValue(textureId.Value, out materialIndex))
+        {
+            return true;
+        }
+
+        var imageIndex = images.Count;
+        images.Add(new
+        {
+            name = $"tex_{textureId.Value:0000}",
+            uri
+        });
+
+        var textureIndex = textures.Count;
+        textures.Add(new
+        {
+            source = imageIndex
+        });
+
+        materialIndex = materials.Count;
+        materials.Add(new
+        {
+            name = $"tex_{textureId.Value:0000}",
+            doubleSided = true,
+            pbrMetallicRoughness = new
+            {
+                baseColorTexture = new
+                {
+                    index = textureIndex
+                },
+                baseColorFactor = new[] { 1f, 1f, 1f, 1f },
+                metallicFactor = 0f,
+                roughnessFactor = 1f
+            }
+        });
+
+        materialIndexByTextureId.Add(textureId.Value, materialIndex);
+        return true;
+    }
+
+    private static int WriteIndexAccessor(
+        BinaryWriter writer,
+        List<object> bufferViews,
+        List<object> accessors,
+        IReadOnlyList<uint> indices)
+    {
+        Align(writer, 4);
+        var indexByteOffset = checked((int)writer.BaseStream.Position);
+        foreach (var index in indices)
+        {
+            writer.Write(index);
+        }
+
+        var indexBufferView = bufferViews.Count;
+        bufferViews.Add(new
+        {
+            buffer = 0,
+            byteOffset = indexByteOffset,
+            byteLength = indices.Count * sizeof(uint),
+            target = 34963
+        });
+
+        var indexAccessor = accessors.Count;
+        accessors.Add(new
+        {
+            bufferView = indexBufferView,
+            byteOffset = 0,
+            componentType = 5125,
+            count = indices.Count,
+            type = "SCALAR",
+            min = new[] { indices.Count == 0 ? 0L : indices.Min(i => (long)i) },
+            max = new[] { indices.Count == 0 ? 0L : indices.Max(i => (long)i) }
+        });
+
+        return indexAccessor;
+    }
+
+    private static IReadOnlyList<PrimitiveIndexGroup> BuildPrimitiveIndexGroups(
+        MobyMeshType meshType,
+        MobyGltfLowLodTextureMode lowLodTextureMode,
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector2>? texCoords,
+        IReadOnlyList<uint> indices,
+        IReadOnlyList<VifTextureIndexGroup> topologyTextureGroups,
+        int? materialTextureId,
+        IReadOnlyList<TextureTriangle> highLodTextureTriangles,
+        bool inferTextureIdsFromUvTiles)
+    {
+        if (topologyTextureGroups.Count > 0
+            && topologyTextureGroups.Sum(group => group.Indices.Count) == indices.Count)
+        {
+            return MergeTopologyTextureGroups(topologyTextureGroups);
+        }
+
+        if (meshType != MobyMeshType.LowLod
+            || lowLodTextureMode != MobyGltfLowLodTextureMode.HighLodNearestTriangle
+            || highLodTextureTriangles.Count == 0)
+        {
+            return BuildUvTilePrimitiveIndexGroups(positions, texCoords, indices, materialTextureId, inferTextureIdsFromUvTiles);
+        }
+
+        var groups = new Dictionary<int, List<uint>>();
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var i0 = indices[i];
+            var i1 = indices[i + 1];
+            var i2 = indices[i + 2];
+            if (i0 >= positions.Count || i1 >= positions.Count || i2 >= positions.Count)
+            {
+                continue;
+            }
+
+            var centroid = (positions[(int)i0] + positions[(int)i1] + positions[(int)i2]) / 3f;
+            var uvCentroid = texCoords is not null && i0 < texCoords.Count && i1 < texCoords.Count && i2 < texCoords.Count
+                ? (texCoords[(int)i0] + texCoords[(int)i1] + texCoords[(int)i2]) / 3f
+                : (Vector2?)null;
+            var textureId = FindNearestTextureTriangle(centroid, uvCentroid, highLodTextureTriangles);
+            if (!groups.TryGetValue(textureId, out var groupIndices))
+            {
+                groupIndices = [];
+                groups.Add(textureId, groupIndices);
+            }
+
+            groupIndices.Add(i0);
+            groupIndices.Add(i1);
+            groupIndices.Add(i2);
+        }
+
+        return groups.Count == 0
+            ? [new PrimitiveIndexGroup(materialTextureId, indices.ToList())]
+            : groups
+                .OrderBy(group => group.Key)
+                .Select(group => new PrimitiveIndexGroup(group.Key, group.Value))
+                .ToList();
+    }
+
+    private static IReadOnlyList<PrimitiveIndexGroup> MergeTopologyTextureGroups(IReadOnlyList<VifTextureIndexGroup> topologyTextureGroups)
+    {
+        var groups = new Dictionary<int, List<uint>>();
+        var untextured = new List<uint>();
+        foreach (var sourceGroup in topologyTextureGroups)
+        {
+            if (!sourceGroup.TextureId.HasValue)
+            {
+                untextured.AddRange(sourceGroup.Indices);
+                continue;
+            }
+
+            if (!groups.TryGetValue(sourceGroup.TextureId.Value, out var groupIndices))
+            {
+                groupIndices = [];
+                groups.Add(sourceGroup.TextureId.Value, groupIndices);
+            }
+
+            groupIndices.AddRange(sourceGroup.Indices);
+        }
+
+        var result = groups
+            .OrderBy(group => group.Key)
+            .Select(group => new PrimitiveIndexGroup(group.Key, group.Value))
+            .ToList();
+        if (untextured.Count > 0)
+        {
+            result.Insert(0, new PrimitiveIndexGroup(null, untextured));
+        }
+
+        return result.Count > 0 ? result : [new PrimitiveIndexGroup(null, [])];
+    }
+
+    private static int FindNearestTextureTriangle(Vector3 centroid, Vector2? uvCentroid, IReadOnlyList<TextureTriangle> triangles)
+    {
+        var bestDistance = float.MaxValue;
+        var bestTextureId = triangles[0].TextureId;
+        foreach (var triangle in triangles)
+        {
+            var distance = Vector3.DistanceSquared(centroid, triangle.Centroid);
+            if (uvCentroid.HasValue && triangle.UvCentroid.HasValue)
+            {
+                var uvDistance = Vector2.DistanceSquared(WrapUv(uvCentroid.Value), WrapUv(triangle.UvCentroid.Value));
+                distance += uvDistance * 0.25f;
+            }
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                bestTextureId = triangle.TextureId;
+            }
+        }
+
+        return bestTextureId;
+    }
+
+    private static IReadOnlyList<PrimitiveIndexGroup> BuildUvTilePrimitiveIndexGroups(
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector2>? texCoords,
+        IReadOnlyList<uint> indices,
+        int? materialTextureId,
+        bool inferTextureIdsFromUvTiles)
+    {
+        if (!inferTextureIdsFromUvTiles || !materialTextureId.HasValue || texCoords is null)
+        {
+            return [new PrimitiveIndexGroup(materialTextureId, indices.ToList())];
+        }
+
+        var groups = new Dictionary<int, List<uint>>();
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var i0 = indices[i];
+            var i1 = indices[i + 1];
+            var i2 = indices[i + 2];
+            if (i0 >= positions.Count || i1 >= positions.Count || i2 >= positions.Count
+                || i0 >= texCoords.Count || i1 >= texCoords.Count || i2 >= texCoords.Count)
+            {
+                continue;
+            }
+
+            var uvCentroid = (texCoords[(int)i0] + texCoords[(int)i1] + texCoords[(int)i2]) / 3f;
+            var textureId = ResolveTextureIdFromUvTile(uvCentroid, materialTextureId.Value);
+            if (!groups.TryGetValue(textureId, out var groupIndices))
+            {
+                groupIndices = [];
+                groups.Add(textureId, groupIndices);
+            }
+
+            groupIndices.Add(i0);
+            groupIndices.Add(i1);
+            groupIndices.Add(i2);
+        }
+
+        return groups.Count == 0
+            ? [new PrimitiveIndexGroup(materialTextureId, indices.ToList())]
+            : groups
+                .OrderBy(group => group.Key)
+                .Select(group => new PrimitiveIndexGroup(group.Key, group.Value))
+                .ToList();
+    }
+
+    private static Vector2 WrapUv(Vector2 uv)
+    {
+        return new Vector2(uv.X - MathF.Floor(uv.X), uv.Y - MathF.Floor(uv.Y));
+    }
+
+    private static int ResolveTextureIdFromUvTile(Vector2 uv, int fallbackTextureId)
+    {
+        if (fallbackTextureId is not 0 and not 1)
+        {
+            return fallbackTextureId;
+        }
+
+        var uTile = (int)MathF.Floor(uv.X);
+        var page = ((uTile % 2) + 2) % 2;
+        return page == 0 ? 1 : 0;
+    }
+
+    private static void AddTextureTriangleSamples(
+        List<TextureTriangle> samples,
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector2>? texCoords,
+        IReadOnlyList<uint> indices,
+        int textureId,
+        bool inferTextureIdsFromUvTiles)
+    {
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var i0 = indices[i];
+            var i1 = indices[i + 1];
+            var i2 = indices[i + 2];
+            if (i0 >= positions.Count || i1 >= positions.Count || i2 >= positions.Count)
+            {
+                continue;
+            }
+
+            var uvCentroid = texCoords is not null && i0 < texCoords.Count && i1 < texCoords.Count && i2 < texCoords.Count
+                ? (texCoords[(int)i0] + texCoords[(int)i1] + texCoords[(int)i2]) / 3f
+                : (Vector2?)null;
+            samples.Add(new TextureTriangle(
+                (positions[(int)i0] + positions[(int)i1] + positions[(int)i2]) / 3f,
+                uvCentroid,
+                uvCentroid.HasValue && inferTextureIdsFromUvTiles
+                    ? ResolveTextureIdFromUvTile(uvCentroid.Value, textureId)
+                    : textureId));
+        }
+    }
+
+    private static int? ResolveLowLodTextureId(
+        Bounds3 bounds,
+        int? explicitTextureId,
+        int? fallbackTextureId,
+        IReadOnlyList<TextureBounds> highLodTextureBounds,
+        MobyGltfLowLodTextureMode mode)
+    {
+        if (mode == MobyGltfLowLodTextureMode.Rolling)
+        {
+            return fallbackTextureId;
+        }
+
+        if (mode == MobyGltfLowLodTextureMode.ExplicitOnly)
+        {
+            return explicitTextureId;
+        }
+
+        if (highLodTextureBounds.Count == 0)
+        {
+            return fallbackTextureId;
+        }
+
+        if (mode == MobyGltfLowLodTextureMode.HighLodNearestCenter)
+        {
+            var center = bounds.Center;
+            var bestDistance = float.MaxValue;
+            int? nearestTextureId = null;
+            foreach (var highLod in highLodTextureBounds)
+            {
+                var distance = Vector3.DistanceSquared(center, highLod.Bounds.Center);
+                if (distance < bestDistance)
+                {
+                    bestDistance = distance;
+                    nearestTextureId = highLod.TextureId;
+                }
+            }
+
+            return nearestTextureId ?? fallbackTextureId;
+        }
+
+        var bestOverlap = 0f;
+        int? bestTextureId = null;
+        foreach (var highLod in highLodTextureBounds)
+        {
+            var overlap = bounds.OverlapVolume(highLod.Bounds);
+            if (overlap > bestOverlap)
+            {
+                bestOverlap = overlap;
+                bestTextureId = highLod.TextureId;
+            }
+        }
+
+        return bestOverlap > 1e-5f ? bestTextureId : fallbackTextureId;
+    }
+
+    private static bool TryGetPrimaryTextureId(MobyMeshTableEntry entry, out int textureId)
+    {
+        textureId = 0;
+        var ids = entry.GifTag?.TextureIds;
+        if (ids is not null)
+        {
+            foreach (var id in ids)
+            {
+                if (id != 0xFF)
+                {
+                    textureId = id;
+                    return true;
+                }
+            }
+        }
+
+        var activeTextureId = TryReadActiveTextureIdFromVifTextureData(entry.VifTextureData);
+        if (activeTextureId.HasValue && activeTextureId.Value <= int.MaxValue)
+        {
+            textureId = (int)activeTextureId.Value;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static uint? TryReadActiveTextureIdFromVifTextureData(byte[]? vifTextureData)
+    {
+        if (vifTextureData is null)
+        {
+            return null;
+        }
+
+        foreach (var packet in MobyVifPacketReader.Read(vifTextureData))
+        {
+            if (!packet.IsUnpack || (packet.Command & 0x0F) != 0x0C || packet.Payload.Length < 0x30)
+            {
+                continue;
+            }
+
+            return BitConverter.ToUInt32(packet.Payload, 0x20);
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<Vector4> BuildDebugUvColors(IReadOnlyList<Vector2> texCoords)
+    {
+        foreach (var texCoord in texCoords)
+        {
+            var u = texCoord.X - MathF.Floor(texCoord.X);
+            var v = texCoord.Y - MathF.Floor(texCoord.Y);
+            var checker = (((int)MathF.Floor(u * 12f) + (int)MathF.Floor(v * 12f)) & 1) == 0;
+            yield return checker
+                ? new Vector4(1f, u, 0.08f, 1f)
+                : new Vector4(0.05f, 0.25f, 1f - v, 1f);
+        }
     }
 
     private static ushort ReadLowHalfword(byte[] block)

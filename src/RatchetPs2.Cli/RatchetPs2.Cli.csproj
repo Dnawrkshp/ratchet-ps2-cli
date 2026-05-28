@@ -1,6 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <ItemGroup>
     <ProjectReference Include="..\RatchetPs2.Core\RatchetPs2.Core.csproj" SetTargetFramework="TargetFramework=net9.0" />
+    <ProjectReference Include="..\RatchetPs2.Experimental\RatchetPs2.Experimental.csproj" />
     <ProjectReference Include="..\RatchetPs2.Games.RC1\RatchetPs2.Games.RC1.csproj" />
     <ProjectReference Include="..\RatchetPs2.Games.GC\RatchetPs2.Games.GC.csproj" />
     <ProjectReference Include="..\RatchetPs2.Games.UYA\RatchetPs2.Games.UYA.csproj" />

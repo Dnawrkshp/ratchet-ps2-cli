@@ -1,34 +1,34 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public static class UyaMobyModelUnpacker
+public static class MobyModelUnpacker
 {
-    private static readonly IReadOnlyDictionary<UyaMobyMeshType, string> MeshTypeFolders =
-        new Dictionary<UyaMobyMeshType, string>
+    private static readonly IReadOnlyDictionary<MobyMeshType, string> MeshTypeFolders =
+        new Dictionary<MobyMeshType, string>
         {
-            [UyaMobyMeshType.HighLod] = "lod_high",
-            [UyaMobyMeshType.LowLod] = "lod_low",
-            [UyaMobyMeshType.MeshType2] = "mesh_type_2",
-            [UyaMobyMeshType.Bangle] = "bangle",
-            [UyaMobyMeshType.Metal] = "metal"
+            [MobyMeshType.HighLod] = "lod_high",
+            [MobyMeshType.LowLod] = "lod_low",
+            [MobyMeshType.MeshType2] = "mesh_type_2",
+            [MobyMeshType.Bangle] = "bangle",
+            [MobyMeshType.Metal] = "metal"
         };
 
-    public static UyaMobyModel Unpack(Stream input, IMobyModelOutput output)
+    public static MobyModel Unpack(Stream input, IMobyModelOutput output, MobyModelReadOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(input);
         ArgumentNullException.ThrowIfNull(output);
 
-        var model = UyaMobyModelReader.Read(input);
+        var model = MobyModelReader.Read(input, options);
         Export(model, output);
         return model;
     }
 
-    public static void Export(UyaMobyModel model, IMobyModelOutput output)
+    public static void Export(MobyModel model, IMobyModelOutput output)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(output);
 
-        output.WriteBytes("header.def", UyaMobyModelWriter.WriteHeader(model));
-        output.WriteBytes("bsphere.def", UyaMobyModelWriter.WriteBoundingSphere(model.BoundingSphere));
+        output.WriteBytes("header.def", MobyModelWriter.WriteHeader(model));
+        output.WriteBytes("bsphere.def", MobyModelWriter.WriteBoundingSphere(model.BoundingSphere));
 
         ExportMeshes(model, output);
         ExportTeamPalettes(model, output);
@@ -43,7 +43,7 @@ public static class UyaMobyModelUnpacker
         ExportAnimations(model, output);
     }
 
-    private static void ExportMeshes(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportMeshes(MobyModel model, IMobyModelOutput output)
     {
         if (model.MeshTable is null)
         {
@@ -54,7 +54,7 @@ public static class UyaMobyModelUnpacker
         {
             var entry = model.MeshTable.Entries[i];
             var folder = Path.Combine("mesh", MeshTypeFolders[entry.MeshType], i.ToString("0000"));
-            output.WriteBytes(Path.Combine(folder, "entry.def"), UyaMobyModelWriter.WriteMeshEntry(entry));
+            output.WriteBytes(Path.Combine(folder, "entry.def"), MobyModelWriter.WriteMeshEntry(entry));
             output.WriteBytes(Path.Combine(folder, "vif_list.bin"), entry.VifData);
             output.WriteBytes(Path.Combine(folder, "vertex_list.bin"), entry.VertexData);
 
@@ -65,12 +65,12 @@ public static class UyaMobyModelUnpacker
 
             if (entry.GifTag is not null)
             {
-                output.WriteBytes(Path.Combine(folder, "gif_tag.def"), UyaMobyModelWriter.WriteGifTag(entry.GifTag));
+                output.WriteBytes(Path.Combine(folder, "gif_tag.def"), MobyModelWriter.WriteGifTag(entry.GifTag));
             }
         }
     }
 
-    private static void ExportTeamPalettes(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportTeamPalettes(MobyModel model, IMobyModelOutput output)
     {
         foreach (var (textureId, palettes) in model.TeamPaletteData)
         {
@@ -82,15 +82,15 @@ public static class UyaMobyModelUnpacker
         }
     }
 
-    private static void ExportBangles(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportBangles(MobyModel model, IMobyModelOutput output)
     {
         if (model.BangleTable is not null)
         {
-            output.WriteBytes("bangles.def", UyaMobyModelWriter.WriteBangleTable(model.BangleTable));
+            output.WriteBytes("bangles.def", MobyModelWriter.WriteBangleTable(model.BangleTable));
         }
     }
 
-    private static void ExportCornCob(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportCornCob(MobyModel model, IMobyModelOutput output)
     {
         if (model.CornCob is null)
         {
@@ -117,7 +117,7 @@ public static class UyaMobyModelUnpacker
         }
     }
 
-    private static byte[] GetCornKernelBytes(UyaMobyCornCob cornCob, int kernelIndex)
+    private static byte[] GetCornKernelBytes(MobyCornCob cornCob, int kernelIndex)
     {
         if (cornCob.RawData is not null)
         {
@@ -146,18 +146,18 @@ public static class UyaMobyModelUnpacker
         }
 
         var kernel = kernelIndex < cornCob.Kernels.Count ? cornCob.Kernels[kernelIndex] : null;
-        return kernel is null ? [] : UyaMobyModelWriter.WriteCornKernel(kernel);
+        return kernel is null ? [] : MobyModelWriter.WriteCornKernel(kernel);
     }
 
-    private static void ExportCollision(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportCollision(MobyModel model, IMobyModelOutput output)
     {
         if (model.Collision is not null)
         {
-            output.WriteBytes("collision.bin", UyaMobyModelWriter.WriteCollision(model.Collision));
+            output.WriteBytes("collision.bin", MobyModelWriter.WriteCollision(model.Collision));
         }
     }
 
-    private static void ExportShadow(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportShadow(MobyModel model, IMobyModelOutput output)
     {
         if (model.Shadow > 0 && model.ShadowData is not null)
         {
@@ -170,7 +170,7 @@ public static class UyaMobyModelUnpacker
         }
     }
 
-    private static void ExportSkeleton(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportSkeleton(MobyModel model, IMobyModelOutput output)
     {
         if (model.Skeleton?.Bones is null)
         {
@@ -181,11 +181,11 @@ public static class UyaMobyModelUnpacker
         {
             output.WriteBytes(
                 Path.Combine("skeleton", $"bone_{i:0000}.def"),
-                UyaMobyModelWriter.WriteBone(model.Skeleton.Bones[i]));
+                MobyModelWriter.WriteBone(model.Skeleton.Bones[i]));
         }
     }
 
-    private static void ExportAnimationJoints(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportAnimationJoints(MobyModel model, IMobyModelOutput output)
     {
         if (model.AnimationJoints is null)
         {
@@ -196,11 +196,11 @@ public static class UyaMobyModelUnpacker
         {
             output.WriteBytes(
                 Path.Combine("anim_joints", $"joint_{i:0000}.def"),
-                UyaMobyModelWriter.WriteAnimationJoint(model.AnimationJoints[i]));
+                MobyModelWriter.WriteAnimationJoint(model.AnimationJoints[i]));
         }
     }
 
-    private static void ExportSounds(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportSounds(MobyModel model, IMobyModelOutput output)
     {
         if (model.Sounds is null)
         {
@@ -211,24 +211,33 @@ public static class UyaMobyModelUnpacker
         {
             output.WriteBytes(
                 Path.Combine("sound_defs", $"sound_{i:0000}.def"),
-                UyaMobyModelWriter.WriteSound(model.Sounds[i]));
+                MobyModelWriter.WriteSound(model.Sounds[i]));
         }
     }
 
-    private static void ExportAnimations(UyaMobyModel model, IMobyModelOutput output)
+    private static void ExportAnimations(MobyModel model, IMobyModelOutput output)
     {
         for (var i = 0; i < model.Sequences.Count; i++)
         {
             var sequence = model.Sequences[i];
             var folder = Path.Combine("animations", i.ToString("0000"));
-            output.WriteBytes(Path.Combine(folder, "seq.def"), UyaMobyModelWriter.WriteSequenceHeader(sequence));
+            if (sequence.RawData is { Length: > 0 })
+            {
+                output.WriteBytes(Path.Combine(folder, "sequence.bin"), sequence.RawData);
+                if (sequence.Format == MobyAnimationFormat.Compact)
+                {
+                    continue;
+                }
+            }
+
+            output.WriteBytes(Path.Combine(folder, "seq.def"), MobyModelWriter.WriteSequenceHeader(sequence));
 
             for (var frameIndex = 0; frameIndex < sequence.Frames.Count; frameIndex++)
             {
                 var frame = sequence.Frames[frameIndex];
                 output.WriteBytes(
                     Path.Combine(folder, $"frame_{frameIndex:0000}.def"),
-                    UyaMobyModelWriter.WriteAnimationFrameHeader(frame));
+                    MobyModelWriter.WriteAnimationFrameHeader(frame));
                 output.WriteBytes(Path.Combine(folder, $"frame_{frameIndex:0000}.bin"), frame.FrameData);
             }
 
@@ -236,7 +245,7 @@ public static class UyaMobyModelUnpacker
             {
                 output.WriteBytes(
                     Path.Combine(folder, $"trig_{triggerIndex:0000}.def"),
-                    UyaMobyModelWriter.WriteAnimationTrigger(sequence.Triggers[triggerIndex]));
+                    MobyModelWriter.WriteAnimationTrigger(sequence.Triggers[triggerIndex]));
             }
         }
     }

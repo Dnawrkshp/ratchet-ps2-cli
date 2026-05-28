@@ -1,4 +1,4 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
 public interface IMobyModelInput
 {

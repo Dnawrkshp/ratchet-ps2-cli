@@ -1,14 +1,14 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public static class UyaMobyModelPacker
+public static class MobyModelPacker
 {
-    public static byte[] Pack(IMobyModelInput input)
+    public static byte[] Pack(IMobyModelInput input, MobyLooseModelReadOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(input);
-        return Build(UyaMobyLooseModelReader.Read(input));
+        return Build(MobyLooseModelReader.Read(input, options));
     }
 
-    public static byte[] Build(UyaMobyModel model)
+    public static byte[] Build(MobyModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
 
@@ -40,14 +40,20 @@ public static class UyaMobyModelPacker
         WriteGifTags(writer, model);
 
         writer.BaseStream.Seek(0, SeekOrigin.Begin);
-        writer.Write(UyaMobyModelWriter.WriteHeader(model));
+        writer.Write(MobyModelWriter.WriteHeader(model));
         writer.Flush();
 
         return stream.ToArray();
     }
 
-    private static void WritePreAnimationSectionPadding(BinaryWriter writer, UyaMobyModel model)
+    private static void WritePreAnimationSectionPadding(BinaryWriter writer, MobyModel model)
     {
+        if (model.PreAnimationSectionPadding is not null)
+        {
+            writer.Write(model.PreAnimationSectionPadding);
+            return;
+        }
+
         var candidateOffsets = new List<int>();
         if (model.BangleTable is not null && model.BangleTableOffset > 0)
         {
@@ -73,7 +79,7 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteBangles(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteBangles(BinaryWriter writer, MobyModel model)
     {
         if (model.BangleTable is null || model.BangleTable.BangleCount <= 0)
         {
@@ -85,7 +91,7 @@ public static class UyaMobyModelPacker
         model.BangleTable.Write(writer);
     }
 
-    private static void WriteCornCob(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteCornCob(BinaryWriter writer, MobyModel model)
     {
         if (model.CornCob is null || (model.CornCob.RawData is null && model.CornCob.Kernels.Count == 0))
         {
@@ -113,7 +119,7 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteAnimations(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteAnimations(BinaryWriter writer, MobyModel model)
     {
         for (var i = 0; i < model.Sequences.Count; i++)
         {
@@ -132,8 +138,20 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteSequence(BinaryWriter writer, UyaMobySequence sequence, int globalOffset)
+    private static void WriteSequence(BinaryWriter writer, MobySequence sequence, int globalOffset)
     {
+        if (sequence.RawData is not null)
+        {
+            writer.Write(sequence.RawData);
+            return;
+        }
+
+        if (sequence.Format == MobyAnimationFormat.Compact)
+        {
+            WriteCompactSequence(writer, sequence);
+            return;
+        }
+
         sequence.WriteHeader(writer);
         var frameListOffset = checked((int)writer.BaseStream.Position);
         writer.Write(new byte[sequence.Frames.Count * 0x04]);
@@ -160,7 +178,57 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteCollision(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteCompactSequence(BinaryWriter writer, MobySequence sequence)
+    {
+        var startOffset = checked((int)writer.BaseStream.Position);
+        sequence.TriggerCount = checked((byte)sequence.Triggers.Count);
+        sequence.FrameCount = checked((byte)sequence.CompactFrames.Count);
+
+        WriteCompactSequenceHeader(writer, sequence);
+        foreach (var frame in sequence.CompactFrames)
+        {
+            frame.Write(writer);
+        }
+
+        if (sequence.TriggerCount > 0)
+        {
+            sequence.CompactTriggerOffset = checked((int)(writer.BaseStream.Position - startOffset));
+            foreach (var trigger in sequence.Triggers)
+            {
+                trigger.Write(writer);
+            }
+        }
+        else
+        {
+            sequence.CompactTriggerOffset = 0;
+        }
+
+        sequence.CompactAnimDataOffset = checked((int)(writer.BaseStream.Position - startOffset));
+        writer.Write(sequence.CompactAnimInfoData.Length == 0 ? new byte[0x08] : sequence.CompactAnimInfoData);
+        Align(writer, 0x10);
+
+        sequence.CompactFrameDataOffset = checked((int)(writer.BaseStream.Position - startOffset));
+        writer.Write(sequence.CompactFrameData);
+
+        var endOffset = writer.BaseStream.Position;
+        writer.BaseStream.Seek(startOffset, SeekOrigin.Begin);
+        WriteCompactSequenceHeader(writer, sequence);
+        writer.BaseStream.Seek(endOffset, SeekOrigin.Begin);
+    }
+
+    private static void WriteCompactSequenceHeader(BinaryWriter writer, MobySequence sequence)
+    {
+        sequence.BoundingSphere.Write(writer);
+        writer.Write(sequence.FrameCount);
+        writer.Write(sequence.Sound);
+        writer.Write(sequence.TriggerCount);
+        writer.Write(sequence.Padding);
+        writer.Write(sequence.CompactTriggerOffset);
+        writer.Write(sequence.CompactAnimDataOffset);
+        writer.Write(sequence.CompactFrameDataOffset);
+    }
+
+    private static void WriteCollision(BinaryWriter writer, MobyModel model)
     {
         if (model.Collision is null)
         {
@@ -173,7 +241,7 @@ public static class UyaMobyModelPacker
         Align(writer, 0x10);
     }
 
-    private static void WriteShadow(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteShadow(BinaryWriter writer, MobyModel model)
     {
         if (model.ShadowData is not null)
         {
@@ -191,33 +259,54 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteSkeleton(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteSkeleton(BinaryWriter writer, MobyModel model)
     {
         model.JointCount = checked((byte)(model.Skeleton?.Bones.Count ?? 0));
         if (model.JointCount == 0 || model.Skeleton is null)
         {
-            model.SkeletonOffset = 0;
+            if (model.SkeletonOffset > writer.BaseStream.Length)
+            {
+                writer.Write(new byte[model.SkeletonOffset - writer.BaseStream.Length]);
+            }
+
+            model.SkeletonOffset = model.SkeletonOffset > 0
+                ? checked((int)writer.BaseStream.Length)
+                : 0;
             return;
         }
 
         model.SkeletonOffset = checked((int)writer.BaseStream.Length);
         foreach (var bone in model.Skeleton.Bones)
         {
-            bone.Write(writer);
+            if (model.SkeletonFormat == MobyAnimationFormat.Compact)
+            {
+                bone.WriteCompact(writer);
+            }
+            else
+            {
+                bone.Write(writer);
+            }
         }
     }
 
-    private static void WriteCommonTransforms(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteCommonTransforms(BinaryWriter writer, MobyModel model)
     {
         model.CommonTransOffset = checked((int)writer.BaseStream.Length);
         writer.Write(model.CommonTransforms ?? []);
     }
 
-    private static void WriteAnimationJoints(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteAnimationJoints(BinaryWriter writer, MobyModel model)
     {
         if (model.AnimationJoints is null)
         {
-            model.AnimationJointsOffset = 0;
+            if (model.AnimationJointsOffset > writer.BaseStream.Length)
+            {
+                writer.Write(new byte[model.AnimationJointsOffset - writer.BaseStream.Length]);
+            }
+
+            model.AnimationJointsOffset = model.AnimationJointsOffset > 0
+                ? checked((int)writer.BaseStream.Length)
+                : 0;
             return;
         }
 
@@ -237,7 +326,7 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteSounds(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteSounds(BinaryWriter writer, MobyModel model)
     {
         if (model.Sounds is null)
         {
@@ -254,7 +343,7 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteMeshData(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteMeshData(BinaryWriter writer, MobyModel model)
     {
         if (model.MeshTable is null)
         {
@@ -289,7 +378,7 @@ public static class UyaMobyModelPacker
         writer.BaseStream.Seek(writer.BaseStream.Length, SeekOrigin.Begin);
     }
 
-    private static void WriteTeamPalettes(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteTeamPalettes(BinaryWriter writer, MobyModel model)
     {
         if (model.TeamPaletteData.Count == 0)
         {
@@ -304,7 +393,7 @@ public static class UyaMobyModelPacker
         }
     }
 
-    private static void WriteGifTags(BinaryWriter writer, UyaMobyModel model)
+    private static void WriteGifTags(BinaryWriter writer, MobyModel model)
     {
         if (model.MeshTable is null)
         {
@@ -312,29 +401,50 @@ public static class UyaMobyModelPacker
             return;
         }
 
-        var entriesWithGifTags = model.MeshTable.Entries.Where(entry => entry.GifTag is not null).ToList();
-        if (entriesWithGifTags.Count == 0)
+        var gifTags = GetGifTagsToWrite(model);
+        if (gifTags.Count == 0)
         {
             model.GifUsageOffset = 0;
             return;
         }
 
         model.GifUsageOffset = checked((int)writer.BaseStream.Length);
-        var last = entriesWithGifTags[^1];
-        foreach (var entry in entriesWithGifTags)
+        for (var i = 0; i < gifTags.Count; i++)
         {
-            if (entry.GifTag is null)
+            var tag = gifTags[i];
+            writer.Write(tag.TextureIds);
+            var gifDataOffset = tag.GifDataOffset & 0x7FFFFFFFu;
+            if (i == gifTags.Count - 1)
+            {
+                gifDataOffset |= 0x80000000u;
+            }
+
+            writer.Write(gifDataOffset);
+        }
+    }
+
+    private static List<MobyGifTag> GetGifTagsToWrite(MobyModel model)
+    {
+        var gifTags = model.GifTags.Count > 0
+            ? [.. model.GifTags]
+            : new List<MobyGifTag>();
+
+        if (model.MeshTable is null)
+        {
+            return gifTags;
+        }
+
+        foreach (var entry in model.MeshTable.Entries)
+        {
+            if (entry.GifTag is null || gifTags.Any(tag => ReferenceEquals(tag, entry.GifTag)))
             {
                 continue;
             }
 
-            if (ReferenceEquals(entry, last))
-            {
-                entry.GifTag.GifDataOffset += 0x80000000;
-            }
-
-            entry.GifTag.Write(writer);
+            gifTags.Add(entry.GifTag);
         }
+
+        return gifTags;
     }
 
     private static void Align(BinaryWriter writer, int alignment)

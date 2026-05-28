@@ -1,9 +1,11 @@
 using System.Numerics;
 
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public sealed class UyaMobyModel
+public sealed class MobyModel
 {
+    public MobyAnimationFormat AnimationFormat { get; set; } = MobyAnimationFormat.Standard;
+    public MobyAnimationFormat SkeletonFormat { get; set; } = MobyAnimationFormat.Standard;
     public int MeshTableOffset { get; set; }
     public byte HighLodMeshCount { get; set; }
     public byte LowLodMeshCount { get; set; }
@@ -27,37 +29,44 @@ public sealed class UyaMobyModel
     public byte BangleTableOffset { get; set; }
     public byte MipmapDistance { get; set; }
     public short CornCobOffset { get; set; }
-    public UyaBoundingSphere BoundingSphere { get; set; } = new();
+    public MobyBoundingSphere BoundingSphere { get; set; } = new();
     public int GlowRgba { get; set; }
     public short ModeBits { get; set; }
     public byte Type { get; set; }
     public byte ModeBits2 { get; set; }
 
-    public UyaMobyMeshTable? MeshTable { get; set; }
-    public UyaMobyCollision? Collision { get; set; }
-    public UyaMobyBangleTable? BangleTable { get; set; }
-    public UyaMobyCornCob? CornCob { get; set; }
-    public List<UyaMobySequence> Sequences { get; } = [];
-    public UyaMobySkeleton? Skeleton { get; set; }
-    public List<UyaMobyAnimationJoint>? AnimationJoints { get; set; }
+    public MobyMeshTable? MeshTable { get; set; }
+    public MobyCollision? Collision { get; set; }
+    public MobyBangleTable? BangleTable { get; set; }
+    public MobyCornCob? CornCob { get; set; }
+    public List<MobySequence> Sequences { get; } = [];
+    public MobySkeleton? Skeleton { get; set; }
+    public List<MobyAnimationJoint>? AnimationJoints { get; set; }
     public byte[]? CommonTransforms { get; set; }
-    public List<UyaMobyGifTag> GifTags { get; } = [];
+    public List<MobyGifTag> GifTags { get; } = [];
     public Dictionary<int, List<byte[]>> TeamPaletteData { get; } = [];
-    public List<UyaMobySound>? Sounds { get; set; }
+    public List<MobySound>? Sounds { get; set; }
     public byte[]? ShadowData { get; set; }
     public byte[]? ShadowPrefixData { get; set; }
+    public byte[]? PreAnimationSectionPadding { get; set; }
 }
 
-public sealed class UyaBoundingSphere
+public enum MobyAnimationFormat
+{
+    Standard,
+    Compact
+}
+
+public sealed class MobyBoundingSphere
 {
     public float X { get; set; }
     public float Y { get; set; }
     public float Z { get; set; }
     public float Radius { get; set; }
 
-    public static UyaBoundingSphere Read(BinaryReader reader)
+    public static MobyBoundingSphere Read(BinaryReader reader)
     {
-        return new UyaBoundingSphere
+        return new MobyBoundingSphere
         {
             X = reader.ReadSingle(),
             Y = reader.ReadSingle(),
@@ -75,7 +84,7 @@ public sealed class UyaBoundingSphere
     }
 }
 
-public enum UyaMobyMeshType
+public enum MobyMeshType
 {
     HighLod,
     LowLod,
@@ -84,26 +93,28 @@ public enum UyaMobyMeshType
     Metal
 }
 
-public sealed class UyaMobyMeshTable
+public sealed class MobyMeshTable
 {
-    public List<UyaMobyMeshTableEntry> Entries { get; } = [];
+    public List<MobyMeshTableEntry> Entries { get; } = [];
 }
 
-public sealed class UyaMobyMeshTableEntry
+public sealed class MobyMeshTableEntry
 {
     public int VifListOffset { get; set; }
     public short VifListSize { get; set; }
     public short VifListTextureSize { get; set; }
     public int VertexDataOffset { get; set; }
     public byte VertexDataSize { get; set; }
+    // Observed as ceil(VertexCount * 3 / 8), likely a 3-bit-per-vertex control payload byte count.
     public byte Unknown0A { get; set; }
+    // Despite the old name, static meshes use this as ceil(VertexCount / 4) even when JointCount is zero.
     public byte CommonTransformJointIndex { get; set; }
     public byte VertexCount { get; set; }
-    public UyaMobyMeshType MeshType { get; set; }
+    public MobyMeshType MeshType { get; set; }
     public byte[] VifData { get; set; } = [];
     public byte[] VertexData { get; set; } = [];
     public byte[]? VifTextureData { get; set; }
-    public UyaMobyGifTag? GifTag { get; set; }
+    public MobyGifTag? GifTag { get; set; }
 
     public void WriteHeader(BinaryWriter writer)
     {
@@ -118,7 +129,7 @@ public sealed class UyaMobyMeshTableEntry
     }
 }
 
-public sealed class UyaMobyGifTag
+public sealed class MobyGifTag
 {
     public byte[] TextureIds { get; set; } = new byte[0x0C];
     public uint GifDataOffset { get; set; }
@@ -130,26 +141,37 @@ public sealed class UyaMobyGifTag
     }
 }
 
-public sealed class UyaMobySkeleton
+public sealed class MobySkeleton
 {
-    public List<UyaMatrix4> Bones { get; } = [];
+    public List<MobyMatrix4> Bones { get; } = [];
 }
 
-public sealed class UyaMatrix4
+public sealed class MobyMatrix4
 {
-    public UyaMatrixRow Row1 { get; set; } = new();
-    public UyaMatrixRow Row2 { get; set; } = new();
-    public UyaMatrixRow Row3 { get; set; } = new();
-    public UyaMatrixRow Row4 { get; set; } = new();
+    public MobyMatrixRow Row1 { get; set; } = new();
+    public MobyMatrixRow Row2 { get; set; } = new();
+    public MobyMatrixRow Row3 { get; set; } = new();
+    public MobyMatrixRow Row4 { get; set; } = new();
 
-    public static UyaMatrix4 Read(BinaryReader reader)
+    public static MobyMatrix4 Read(BinaryReader reader)
     {
-        return new UyaMatrix4
+        return new MobyMatrix4
         {
-            Row1 = UyaMatrixRow.Read(reader),
-            Row2 = UyaMatrixRow.Read(reader),
-            Row3 = UyaMatrixRow.Read(reader),
-            Row4 = UyaMatrixRow.Read(reader)
+            Row1 = MobyMatrixRow.Read(reader),
+            Row2 = MobyMatrixRow.Read(reader),
+            Row3 = MobyMatrixRow.Read(reader),
+            Row4 = MobyMatrixRow.Read(reader)
+        };
+    }
+
+    public static MobyMatrix4 ReadCompact(BinaryReader reader)
+    {
+        return new MobyMatrix4
+        {
+            Row1 = MobyMatrixRow.Read(reader),
+            Row2 = MobyMatrixRow.Read(reader),
+            Row3 = MobyMatrixRow.Read(reader),
+            Row4 = new MobyMatrixRow { W = 1f }
         };
     }
 
@@ -160,18 +182,25 @@ public sealed class UyaMatrix4
         Row3.Write(writer);
         Row4.Write(writer);
     }
+
+    public void WriteCompact(BinaryWriter writer)
+    {
+        Row1.Write(writer);
+        Row2.Write(writer);
+        Row3.Write(writer);
+    }
 }
 
-public sealed class UyaMatrixRow
+public sealed class MobyMatrixRow
 {
     public float X { get; set; }
     public float Y { get; set; }
     public float Z { get; set; }
     public float W { get; set; }
 
-    public static UyaMatrixRow Read(BinaryReader reader)
+    public static MobyMatrixRow Read(BinaryReader reader)
     {
-        return new UyaMatrixRow
+        return new MobyMatrixRow
         {
             X = reader.ReadSingle(),
             Y = reader.ReadSingle(),
@@ -189,7 +218,7 @@ public sealed class UyaMatrixRow
     }
 }
 
-public sealed class UyaMobyAnimationJoint
+public sealed class MobyAnimationJoint
 {
     public short SubSkeletonTokenOffset { get; set; }
     public short AnimationJointFlagsOrAuxIndex { get; set; }
@@ -203,9 +232,11 @@ public sealed class UyaMobyAnimationJoint
     }
 }
 
-public sealed class UyaMobySequence
+public sealed class MobySequence
 {
-    public UyaBoundingSphere BoundingSphere { get; set; } = new();
+    public MobyAnimationFormat Format { get; set; } = MobyAnimationFormat.Standard;
+    public byte[]? RawData { get; set; }
+    public MobyBoundingSphere BoundingSphere { get; set; } = new();
     public byte FrameCount { get; set; }
     public byte Sound { get; set; }
     public byte TriggerCount { get; set; }
@@ -213,8 +244,14 @@ public sealed class UyaMobySequence
     public int Unknown14 { get; set; }
     public int Unknown18 { get; set; }
     public List<uint> FrameOffsets { get; } = [];
-    public List<UyaMobyAnimationTrigger> Triggers { get; } = [];
-    public List<UyaMobyAnimationFrame> Frames { get; } = [];
+    public int CompactTriggerOffset { get; set; }
+    public int CompactAnimDataOffset { get; set; }
+    public int CompactFrameDataOffset { get; set; }
+    public List<MobyCompactAnimationFrame> CompactFrames { get; } = [];
+    public byte[] CompactAnimInfoData { get; set; } = new byte[0x08];
+    public byte[] CompactFrameData { get; set; } = [];
+    public List<MobyAnimationTrigger> Triggers { get; } = [];
+    public List<MobyAnimationFrame> Frames { get; } = [];
 
     public void WriteHeader(BinaryWriter writer)
     {
@@ -228,7 +265,19 @@ public sealed class UyaMobySequence
     }
 }
 
-public sealed class UyaMobyAnimationFrame
+public sealed class MobyCompactAnimationFrame
+{
+    public short Unknown00 { get; set; }
+    public short FrameId { get; set; }
+
+    public void Write(BinaryWriter writer)
+    {
+        writer.Write(Unknown00);
+        writer.Write(FrameId);
+    }
+}
+
+public sealed class MobyAnimationFrame
 {
     public byte Unknown00 { get; set; }
     public byte Unknown01 { get; set; }
@@ -257,7 +306,7 @@ public sealed class UyaMobyAnimationFrame
     }
 }
 
-public sealed class UyaMobyAnimationTrigger
+public sealed class MobyAnimationTrigger
 {
     public short Unknown00 { get; set; }
     public short Unknown02 { get; set; }
@@ -269,14 +318,14 @@ public sealed class UyaMobyAnimationTrigger
     }
 }
 
-public sealed class UyaMobyBangleTable
+public sealed class MobyBangleTable
 {
     public byte Unknown00 { get; set; }
     public byte BangleCount { get; set; }
     public byte Unknown02 { get; set; }
     public byte Unknown03 { get; set; }
-    public List<UyaMobyBangleListEntry> OffsetList { get; } = [];
-    public List<UyaMobyBangleData> DataList { get; } = [];
+    public List<MobyBangleListEntry> OffsetList { get; } = [];
+    public List<MobyBangleData> DataList { get; } = [];
 
     public void Write(BinaryWriter writer)
     {
@@ -297,7 +346,7 @@ public sealed class UyaMobyBangleTable
     }
 }
 
-public sealed class UyaMobyBangleListEntry
+public sealed class MobyBangleListEntry
 {
     public short MeshTableIndex { get; set; }
     public short Unknown02 { get; set; }
@@ -309,7 +358,7 @@ public sealed class UyaMobyBangleListEntry
     }
 }
 
-public sealed class UyaMobyBangleData
+public sealed class MobyBangleData
 {
     public int Unknown00 { get; set; }
     public int Unknown04 { get; set; }
@@ -325,17 +374,17 @@ public sealed class UyaMobyBangleData
     }
 }
 
-public sealed class UyaMobyCornCob
+public sealed class MobyCornCob
 {
     public byte[] KernelOffsets { get; set; } = new byte[0x10];
-    public List<UyaMobyCornKernel?> Kernels { get; } = [];
+    public List<MobyCornKernel?> Kernels { get; } = [];
     public byte[]? RawData { get; set; }
 }
 
-public sealed class UyaMobyCornKernel
+public sealed class MobyCornKernel
 {
     public Vector4 Vector { get; set; }
-    public List<UyaMobyKernelVertex> Vertices { get; } = [];
+    public List<MobyKernelVertex> Vertices { get; } = [];
 
     public void Write(BinaryWriter writer)
     {
@@ -351,7 +400,7 @@ public sealed class UyaMobyCornKernel
     }
 }
 
-public sealed class UyaMobyKernelVertex
+public sealed class MobyKernelVertex
 {
     public int Unknown00 { get; set; }
     public short Unknown04 { get; set; }
@@ -365,7 +414,7 @@ public sealed class UyaMobyKernelVertex
     }
 }
 
-public sealed class UyaMobyCollision
+public sealed class MobyCollision
 {
     public int Unknown00 { get; set; }
     public int Size1 { get; set; }
@@ -396,7 +445,7 @@ public sealed class UyaMobyCollision
     }
 }
 
-public sealed class UyaMobySound
+public sealed class MobySound
 {
     public float MinRange { get; set; }
     public float MaxRange { get; set; }

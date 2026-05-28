@@ -44,6 +44,7 @@ artifacts/
 [Tt]est[Rr]esult*/
 [Bb]enchmark[Dd]ot[Nn]et.Artifacts/
 TestResults/
+exports/
 
 # Generated files
 Generated/
@@ -61,3 +62,5 @@ Thumbs.db
 test-assets/
 src/RatchetPs2.Wasm/dist/
 src/RatchetPs2.Wasm/package-dist/
+tools/
+docs/.local-only/

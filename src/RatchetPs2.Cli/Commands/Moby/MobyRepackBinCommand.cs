@@ -6,21 +6,17 @@ using System.CommandLine;
 
 namespace RatchetPs2.Cli.Commands.Moby;
 
-internal static class MobyUnpackCommand
+internal static class MobyRepackBinCommand
 {
     public static Command Build(GameModuleResolver gameModuleResolver)
     {
         var gameOption = CommonOptions.Game();
         var inputOption = CommonOptions.InputFile("Path to the source moby model binary.");
-        var outputOption = new Option<DirectoryInfo>("--output")
-        {
-            Description = "Path to the output directory for loose moby model files.",
-            Required = true
-        };
+        var outputOption = CommonOptions.OutputFile("Path to write the repacked moby model binary.");
 
         var command = CliCommandBuilder.Create(
-            "unpack",
-            "Unpack a moby model into loose binary definition files.",
+            "repack-bin",
+            "Read a moby binary and write it back through the model packer.",
             gameOption,
             inputOption,
             outputOption);
@@ -29,19 +25,19 @@ internal static class MobyUnpackCommand
         {
             var gameValue = parseResult.GetValue(gameOption);
             var inputFile = parseResult.GetValue(inputOption);
-            var outputDirectory = parseResult.GetValue(outputOption);
+            var outputFile = parseResult.GetValue(outputOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
                 parseResult.GetResult(gameOption)?.AddError(
-                    $"Unsupported --game value '{gameValue}'. Expected UYA or DL for moby unpack.");
+                    $"Unsupported --game value '{gameValue}'. Expected UYA or DL for moby repack-bin.");
                 return;
             }
 
             if (gameId is not (GameId.UYA or GameId.DL))
             {
                 parseResult.GetResult(gameOption)?.AddError(
-                    $"Moby unpack currently supports only UYA and DL. Received {gameId}.");
+                    $"Moby repack-bin currently supports only UYA and DL. Received {gameId}.");
                 return;
             }
 
@@ -51,28 +47,35 @@ internal static class MobyUnpackCommand
                 return;
             }
 
-            if (outputDirectory is null)
+            if (outputFile is null)
             {
                 parseResult.GetResult(outputOption)?.AddError("Missing required --output option.");
                 return;
             }
 
-            outputDirectory.Create();
+            if (!inputFile.Exists)
+            {
+                parseResult.GetResult(inputOption)?.AddError(
+                    $"Input file '{inputFile.FullName}' does not exist.");
+                return;
+            }
 
             var format = MobyGameFormats.Resolve(gameModuleResolver, gameId);
+
             using var input = inputFile.OpenRead();
-            var output = new FileSystemMobyModelOutput(outputDirectory.FullName);
-            var model = MobyModelUnpacker.Unpack(
+            var model = MobyModelReader.Read(
                 input,
-                output,
                 new MobyModelReadOptions
                 {
                     AnimationFormat = format
                 });
 
+            var bytes = MobyModelPacker.Build(model);
+            outputFile.Directory?.Create();
+            File.WriteAllBytes(outputFile.FullName, bytes);
+
             Console.WriteLine(
-                $"Unpacked {gameId} moby '{inputFile.FullName}' to '{outputDirectory.FullName}' " +
-                $"({model.MeshTable?.Entries.Count ?? 0} meshes, {model.Sequences.Count} animations).");
+                $"Repacked {gameId} moby '{inputFile.FullName}' to '{outputFile.FullName}' ({bytes.Length} bytes).");
         });
 
         return command;

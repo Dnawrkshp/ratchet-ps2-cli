@@ -2,50 +2,53 @@ using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Moby;
+using RatchetPs2.Experimental.Moby.Diagnostics;
 using System.CommandLine;
 
 namespace RatchetPs2.Cli.Commands.Moby;
 
-internal static class MobyPackCommand
+internal static class MobyAnalyzeSkinCommand
 {
     public static Command Build(GameModuleResolver gameModuleResolver)
     {
         var gameOption = CommonOptions.Game();
-        var inputOption = new Option<DirectoryInfo>("--input")
+        var inputOption = CommonOptions.InputFile("Path to a UYA/DL moby model binary.");
+        var outputOption = CommonOptions.OutputFile("Path to write the skin analysis JSON.");
+        var decodeScaleOption = new Option<float?>("--decode-scale")
         {
-            Description = "Path to the unpacked loose moby model directory.",
-            Required = true
+            Description = "Override vertex decode scale. Defaults to moby scale / 1024."
         };
-        var outputOption = CommonOptions.OutputFile("Path to write the packed moby model binary.");
 
         var command = CliCommandBuilder.Create(
-            "pack",
-            "Pack loose moby model definition files into a binary model.",
+            "analyze-skin",
+            "Analyze decoded moby skin joint bounds.",
             gameOption,
             inputOption,
-            outputOption);
+            outputOption,
+            decodeScaleOption);
 
         command.SetAction(parseResult =>
         {
             var gameValue = parseResult.GetValue(gameOption);
-            var inputDirectory = parseResult.GetValue(inputOption);
+            var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
+            var decodeScale = parseResult.GetValue(decodeScaleOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
                 parseResult.GetResult(gameOption)?.AddError(
-                    $"Unsupported --game value '{gameValue}'. Expected UYA or DL for moby pack.");
+                    $"Unsupported --game value '{gameValue}'. Expected UYA or DL.");
                 return;
             }
 
             if (gameId is not (GameId.UYA or GameId.DL))
             {
                 parseResult.GetResult(gameOption)?.AddError(
-                    $"Moby pack currently supports only UYA and DL. Received {gameId}.");
+                    $"Moby skin analysis currently supports UYA and DL. Received {gameId}.");
                 return;
             }
 
-            if (inputDirectory is null)
+            if (inputFile is null)
             {
                 parseResult.GetResult(inputOption)?.AddError("Missing required --input option.");
                 return;
@@ -57,27 +60,26 @@ internal static class MobyPackCommand
                 return;
             }
 
-            if (!inputDirectory.Exists)
+            if (!inputFile.Exists)
             {
                 parseResult.GetResult(inputOption)?.AddError(
-                    $"Input directory '{inputDirectory.FullName}' does not exist.");
+                    $"Input file '{inputFile.FullName}' does not exist.");
                 return;
             }
 
-            var format = MobyGameFormats.Resolve(gameModuleResolver, gameId);
-            var input = new FileSystemMobyModelInput(inputDirectory.FullName);
-            var bytes = MobyModelPacker.Pack(
+            using var input = inputFile.OpenRead();
+            var model = MobyModelReader.Read(
                 input,
-                new MobyLooseModelReadOptions
+                new MobyModelReadOptions
                 {
-                    AnimationFormat = format
+                    AnimationFormat = MobyGameFormats.Resolve(gameModuleResolver, gameId)
                 });
-
+            var analysis = MobySkinAnalyzer.AnalyzeReferenceSkin(model, decodeScale);
             outputFile.Directory?.Create();
-            File.WriteAllBytes(outputFile.FullName, bytes);
+            File.WriteAllBytes(outputFile.FullName, MobySkinAnalyzer.WriteJson(analysis));
 
             Console.WriteLine(
-                $"Packed {gameId} moby '{inputDirectory.FullName}' to '{outputFile.FullName}' ({bytes.Length} bytes).");
+                $"Analyzed {gameId} moby skin '{inputFile.FullName}' and wrote '{outputFile.FullName}'.");
         });
 
         return command;

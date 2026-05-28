@@ -1,4 +1,5 @@
-﻿Microsoft Visual Studio Solution File, Format Version 12.00
+﻿
+Microsoft Visual Studio Solution File, Format Version 12.00
 # Visual Studio Version 17
 VisualStudioVersion = 17.0.31903.59
 MinimumVisualStudioVersion = 10.0.40219.1
@@ -19,6 +20,12 @@ EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.Wasm", "src\RatchetPs2.Wasm\RatchetPs2.Wasm.csproj", "{B6F66273-69CA-4423-8C0B-6417D83C2CF1}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.Wasm.Generator", "src\RatchetPs2.Wasm.Generator\RatchetPs2.Wasm.Generator.csproj", "{40FA6C46-6433-41E8-8C2C-0B4A7F985D26}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.Experimental", "src\RatchetPs2.Experimental\RatchetPs2.Experimental.csproj", "{4741E03D-3FE5-43FF-ABB5-E6E7107864F8}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0ED5DB14-DC73-4AB9-8800-466C737A06A1}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.RoundtripTests", "tests\RatchetPs2.RoundtripTests\RatchetPs2.RoundtripTests.csproj", "{DA87DBFA-E620-4214-BB7D-454DD7B904E8}"
 EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
@@ -58,6 +65,14 @@ Global
 		{40FA6C46-6433-41E8-8C2C-0B4A7F985D26}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{40FA6C46-6433-41E8-8C2C-0B4A7F985D26}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{40FA6C46-6433-41E8-8C2C-0B4A7F985D26}.Release|Any CPU.Build.0 = Release|Any CPU
+		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -70,5 +85,7 @@ Global
 		{DB6F9941-E115-4D1F-84E3-64AE9A32192D} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
 		{B6F66273-69CA-4423-8C0B-6417D83C2CF1} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
 		{40FA6C46-6433-41E8-8C2C-0B4A7F985D26} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
+		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
+		{DA87DBFA-E620-4214-BB7D-454DD7B904E8} = {0ED5DB14-DC73-4AB9-8800-466C737A06A1}
 	EndGlobalSection
 EndGlobal

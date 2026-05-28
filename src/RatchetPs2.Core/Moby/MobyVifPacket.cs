@@ -1,6 +1,6 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-internal sealed class UyaVifPacket
+internal sealed class MobyVifPacket
 {
     public int Offset { get; init; }
     public int Command { get; init; }
@@ -18,7 +18,7 @@ internal sealed class UyaVifPacket
     public byte[] Payload { get; init; } = [];
 }
 
-internal static class UyaVifPacketReader
+internal static class MobyVifPacketReader
 {
     private static readonly IReadOnlyDictionary<int, (string Name, int ComponentCount, int ComponentByteSize, int BytesPerElement)> UnpackFormats =
         new Dictionary<int, (string, int, int, int)>
@@ -41,9 +41,9 @@ internal static class UyaVifPacketReader
             [0xF] = ("V4_5_PACKED", 4, 2, 2)
         };
 
-    public static List<UyaVifPacket> Read(byte[] data)
+    public static List<MobyVifPacket> Read(byte[] data)
     {
-        var packets = new List<UyaVifPacket>();
+        var packets = new List<MobyVifPacket>();
         if (data.Length < 4)
         {
             return packets;
@@ -75,7 +75,7 @@ internal static class UyaVifPacketReader
             var safePayloadSize = Math.Max(0, Math.Min(rawPayloadSize, data.Length - offset));
             var payload = safePayloadSize == 0 ? [] : data[offset..(offset + safePayloadSize)];
 
-            packets.Add(new UyaVifPacket
+            packets.Add(new MobyVifPacket
             {
                 Offset = packetOffset,
                 Command = command,

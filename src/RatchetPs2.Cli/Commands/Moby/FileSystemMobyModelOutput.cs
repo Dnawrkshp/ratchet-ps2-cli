@@ -1,4 +1,4 @@
-using RatchetPs2.Games.UYA.Moby;
+using RatchetPs2.Core.Moby;
 
 namespace RatchetPs2.Cli.Commands.Moby;
 

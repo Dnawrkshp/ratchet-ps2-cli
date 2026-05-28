@@ -1,19 +1,27 @@
 using System.Numerics;
 
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-public static class UyaMobyModelReader
+public static class MobyModelReader
 {
-    public static UyaMobyModel Read(Stream input)
+    public static MobyModel Read(Stream input, MobyModelReadOptions? options = null)
     {
         ArgumentNullException.ThrowIfNull(input);
+        options ??= new MobyModelReadOptions();
 
         using var reader = new BinaryReader(input, System.Text.Encoding.UTF8, leaveOpen: true);
         var model = ReadHeader(reader);
+        model.AnimationFormat = options.AnimationFormat;
+        model.SkeletonFormat = options.AnimationFormat;
 
-        ReadSequences(reader, model);
+        if (!options.SkipAnimationSequences)
+        {
+            ReadSequences(reader, model, options.AnimationFormat);
+        }
+        ReadPreAnimationSectionPadding(reader, model);
+
         ReadShadow(reader, model);
-        ReadSkeleton(reader, model);
+        ReadSkeleton(reader, model, options.AnimationFormat);
         ReadAnimationJoints(reader, model);
         ReadCommonTransforms(reader, model);
         ReadGifTags(reader, model);
@@ -27,9 +35,9 @@ public static class UyaMobyModelReader
         return model;
     }
 
-    internal static UyaMobyModel ReadHeader(BinaryReader reader)
+    internal static MobyModel ReadHeader(BinaryReader reader)
     {
-        return new UyaMobyModel
+        return new MobyModel
         {
             MeshTableOffset = reader.ReadInt32(),
             HighLodMeshCount = reader.ReadByte(),
@@ -54,7 +62,7 @@ public static class UyaMobyModelReader
             BangleTableOffset = reader.ReadByte(),
             MipmapDistance = reader.ReadByte(),
             CornCobOffset = reader.ReadInt16(),
-            BoundingSphere = UyaBoundingSphere.Read(reader),
+            BoundingSphere = MobyBoundingSphere.Read(reader),
             GlowRgba = reader.ReadInt32(),
             ModeBits = reader.ReadInt16(),
             Type = reader.ReadByte(),
@@ -62,27 +70,179 @@ public static class UyaMobyModelReader
         };
     }
 
-    private static void ReadSequences(BinaryReader reader, UyaMobyModel model)
+    private static void ReadSequences(BinaryReader reader, MobyModel model, MobyAnimationFormat format)
     {
+        var animationOffsets = new int[model.AnimationCount];
         for (var i = 0; i < model.AnimationCount; i++)
         {
             reader.BaseStream.Seek(0x48 + 0x04 * i, SeekOrigin.Begin);
-            var animationOffset = reader.ReadInt32();
+            animationOffsets[i] = reader.ReadInt32();
+        }
+
+        for (var i = 0; i < model.AnimationCount; i++)
+        {
+            var animationOffset = animationOffsets[i];
             if (animationOffset == 0)
             {
                 continue;
             }
 
             reader.BaseStream.Seek(animationOffset, SeekOrigin.Begin);
-            model.Sequences.Add(ReadSequence(reader));
+            model.Sequences.Add(format == MobyAnimationFormat.Compact
+                ? ReadCompactSequence(reader, model, animationOffset, animationOffsets)
+                : ReadSequence(reader, model, animationOffset, animationOffsets));
         }
     }
 
-    private static UyaMobySequence ReadSequence(BinaryReader reader)
+    private static void ReadPreAnimationSectionPadding(BinaryReader reader, MobyModel model)
     {
-        var sequence = new UyaMobySequence
+        var afterAnimationOffsets = 0x48 + model.AnimationCount * 0x04;
+        var alignedStart = Align(afterAnimationOffsets, 0x10);
+        var nextSectionOffset = FindNextPreAnimationSectionOffset(reader, model);
+        if (nextSectionOffset <= alignedStart)
         {
-            BoundingSphere = UyaBoundingSphere.Read(reader),
+            model.PreAnimationSectionPadding = [];
+            return;
+        }
+
+        reader.BaseStream.Seek(alignedStart, SeekOrigin.Begin);
+        model.PreAnimationSectionPadding = reader.ReadBytes(checked(nextSectionOffset - alignedStart));
+    }
+
+    private static int FindNextPreAnimationSectionOffset(BinaryReader reader, MobyModel model)
+    {
+        var candidates = new List<int>();
+        if (model.BangleTableOffset > 0)
+        {
+            candidates.Add(model.BangleTableOffset * 0x10);
+        }
+
+        if (model.CornCobOffset > 0)
+        {
+            candidates.Add(model.CornCobOffset * 0x10);
+        }
+
+        for (var i = 0; i < model.AnimationCount; i++)
+        {
+            reader.BaseStream.Seek(0x48 + 0x04 * i, SeekOrigin.Begin);
+            var animationOffset = reader.ReadInt32();
+            if (animationOffset > 0)
+            {
+                candidates.Add(animationOffset);
+            }
+        }
+
+        if (model.MeshTableOffset > 0)
+        {
+            candidates.Add(model.MeshTableOffset);
+        }
+
+        return candidates.Where(offset => offset > 0).DefaultIfEmpty(model.MeshTableOffset).Min();
+    }
+
+    private static MobySequence ReadCompactSequence(
+        BinaryReader reader,
+        MobyModel model,
+        int startOffset,
+        IReadOnlyList<int> animationOffsets)
+    {
+        var endOffset = FindNextSequenceEndOffset(reader, model, startOffset, animationOffsets);
+        var rawData = Array.Empty<byte>();
+        if (endOffset > startOffset)
+        {
+            reader.BaseStream.Seek(startOffset, SeekOrigin.Begin);
+            rawData = reader.ReadBytes(checked((int)(endOffset - startOffset)));
+        }
+
+        reader.BaseStream.Seek(startOffset, SeekOrigin.Begin);
+        var sequence = new MobySequence
+        {
+            Format = MobyAnimationFormat.Compact,
+            RawData = rawData,
+            BoundingSphere = MobyBoundingSphere.Read(reader),
+            FrameCount = reader.ReadByte(),
+            Sound = reader.ReadByte(),
+            TriggerCount = reader.ReadByte(),
+            Padding = reader.ReadByte(),
+            CompactTriggerOffset = reader.ReadInt32(),
+            CompactAnimDataOffset = reader.ReadInt32(),
+            CompactFrameDataOffset = reader.ReadInt32()
+        };
+
+        for (var i = 0; i < sequence.FrameCount; i++)
+        {
+            sequence.CompactFrames.Add(new MobyCompactAnimationFrame
+            {
+                Unknown00 = reader.ReadInt16(),
+                FrameId = reader.ReadInt16()
+            });
+        }
+
+        return sequence;
+    }
+
+    private static long FindNextSequenceEndOffset(
+        BinaryReader reader,
+        MobyModel model,
+        long startOffset,
+        IReadOnlyList<int> animationOffsets)
+    {
+        var originalPosition = reader.BaseStream.Position;
+        var candidates = animationOffsets
+            .Where(offset => offset > startOffset)
+            .Select(offset => (long)offset)
+            .ToList();
+
+        candidates.Add(model.MeshTableOffset);
+        if (model.BangleTableOffset > 0)
+        {
+            candidates.Add(model.BangleTableOffset * 0x10L);
+        }
+        if (model.CornCobOffset > 0)
+        {
+            candidates.Add(model.CornCobOffset * 0x10L);
+        }
+
+        reader.BaseStream.Seek(originalPosition, SeekOrigin.Begin);
+        return candidates
+            .Where(offset => offset > startOffset)
+            .DefaultIfEmpty(reader.BaseStream.Length)
+            .Min();
+    }
+
+    private static int Align(int value, int alignment)
+    {
+        var remainder = value % alignment;
+        return remainder == 0 ? value : value + alignment - remainder;
+    }
+
+    private static void AddPositive(List<int> values, int value)
+    {
+        if (value > 0)
+        {
+            values.Add(value);
+        }
+    }
+
+    private static MobySequence ReadSequence(
+        BinaryReader reader,
+        MobyModel model,
+        int startOffset,
+        IReadOnlyList<int> animationOffsets)
+    {
+        var endOffset = FindNextSequenceEndOffset(reader, model, startOffset, animationOffsets);
+        var rawData = Array.Empty<byte>();
+        if (endOffset > startOffset)
+        {
+            reader.BaseStream.Seek(startOffset, SeekOrigin.Begin);
+            rawData = reader.ReadBytes(checked((int)(endOffset - startOffset)));
+        }
+
+        reader.BaseStream.Seek(startOffset, SeekOrigin.Begin);
+        var sequence = new MobySequence
+        {
+            RawData = rawData,
+            BoundingSphere = MobyBoundingSphere.Read(reader),
             FrameCount = reader.ReadByte(),
             Sound = reader.ReadByte(),
             TriggerCount = reader.ReadByte(),
@@ -98,7 +258,7 @@ public static class UyaMobyModelReader
 
         for (var i = 0; i < sequence.TriggerCount; i++)
         {
-            sequence.Triggers.Add(new UyaMobyAnimationTrigger
+            sequence.Triggers.Add(new MobyAnimationTrigger
             {
                 Unknown00 = reader.ReadInt16(),
                 Unknown02 = reader.ReadInt16()
@@ -114,9 +274,9 @@ public static class UyaMobyModelReader
         return sequence;
     }
 
-    private static UyaMobyAnimationFrame ReadAnimationFrame(BinaryReader reader)
+    private static MobyAnimationFrame ReadAnimationFrame(BinaryReader reader)
     {
-        var frame = new UyaMobyAnimationFrame
+        var frame = new MobyAnimationFrame
         {
             Unknown00 = reader.ReadByte(),
             Unknown01 = reader.ReadByte(),
@@ -134,7 +294,7 @@ public static class UyaMobyModelReader
         return frame;
     }
 
-    private static void ReadShadow(BinaryReader reader, UyaMobyModel model)
+    private static void ReadShadow(BinaryReader reader, MobyModel model)
     {
         if (model.Shadow <= 0 || model.SkeletonOffset == 0)
         {
@@ -155,7 +315,7 @@ public static class UyaMobyModelReader
         model.ShadowData = reader.ReadBytes(shadowSize);
     }
 
-    private static void ReadSkeleton(BinaryReader reader, UyaMobyModel model)
+    private static void ReadSkeleton(BinaryReader reader, MobyModel model, MobyAnimationFormat format)
     {
         if (model.SkeletonOffset == 0)
         {
@@ -163,16 +323,18 @@ public static class UyaMobyModelReader
         }
 
         reader.BaseStream.Seek(model.SkeletonOffset, SeekOrigin.Begin);
-        var skeleton = new UyaMobySkeleton();
+        var skeleton = new MobySkeleton();
         for (var i = 0; i < model.JointCount; i++)
         {
-            skeleton.Bones.Add(UyaMatrix4.Read(reader));
+            skeleton.Bones.Add(format == MobyAnimationFormat.Compact
+                ? MobyMatrix4.ReadCompact(reader)
+                : MobyMatrix4.Read(reader));
         }
 
         model.Skeleton = skeleton;
     }
 
-    private static void ReadAnimationJoints(BinaryReader reader, UyaMobyModel model)
+    private static void ReadAnimationJoints(BinaryReader reader, MobyModel model)
     {
         if (model.AnimationJointsOffset == 0)
         {
@@ -194,9 +356,9 @@ public static class UyaMobyModelReader
         }
     }
 
-    private static UyaMobyAnimationJoint ReadAnimationJoint(BinaryReader reader)
+    private static MobyAnimationJoint ReadAnimationJoint(BinaryReader reader)
     {
-        var joint = new UyaMobyAnimationJoint
+        var joint = new MobyAnimationJoint
         {
             SubSkeletonTokenOffset = reader.ReadInt16(),
             AnimationJointFlagsOrAuxIndex = reader.ReadInt16()
@@ -214,35 +376,85 @@ public static class UyaMobyModelReader
         return joint;
     }
 
-    private static void ReadCommonTransforms(BinaryReader reader, UyaMobyModel model)
+    private static void ReadCommonTransforms(BinaryReader reader, MobyModel model)
     {
         if (model.CommonTransOffset == 0)
         {
             return;
         }
 
+        var byteCount = GetCommonTransformByteCount(reader, model);
         reader.BaseStream.Seek(model.CommonTransOffset, SeekOrigin.Begin);
-        model.CommonTransforms = reader.ReadBytes(model.JointCount * 0x10);
+        model.CommonTransforms = reader.ReadBytes(byteCount);
     }
 
-    private static void ReadGifTags(BinaryReader reader, UyaMobyModel model)
+    private static int GetCommonTransformByteCount(BinaryReader reader, MobyModel model)
+    {
+        if (model.AnimationJointsOffset >= model.CommonTransOffset && model.AnimationJointsOffset != 0)
+        {
+            return model.AnimationJointsOffset - model.CommonTransOffset;
+        }
+
+        var nextSectionOffset = FindNextSectionOffset(reader, model, model.CommonTransOffset);
+        if (nextSectionOffset > model.CommonTransOffset)
+        {
+            return checked((int)(nextSectionOffset - model.CommonTransOffset));
+        }
+
+        return GetCommonTransformCount(reader, model) * 0x10;
+    }
+
+    private static int GetCommonTransformCount(BinaryReader reader, MobyModel model)
+    {
+        var count = (int)model.JointCount;
+        if (model.MeshTableOffset <= 0)
+        {
+            return count;
+        }
+
+        var entryCount = model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2 + model.MetalCount;
+        if (entryCount <= 0)
+        {
+            return count;
+        }
+
+        var currentPosition = reader.BaseStream.Position;
+        try
+        {
+            for (var i = 0; i < entryCount; i++)
+            {
+                reader.BaseStream.Seek(model.MeshTableOffset + i * 0x10 + 0x0E, SeekOrigin.Begin);
+                var commonTransformIndex = reader.ReadByte();
+                count = Math.Max(count, commonTransformIndex + 1);
+            }
+        }
+        finally
+        {
+            reader.BaseStream.Seek(currentPosition, SeekOrigin.Begin);
+        }
+
+        return count;
+    }
+
+    private static void ReadGifTags(BinaryReader reader, MobyModel model)
     {
         if (model.GifUsageOffset == 0)
         {
             return;
         }
 
-        for (var index = 0; index < 50; index++)
+        var maxGifTags = Math.Max((reader.BaseStream.Length - model.GifUsageOffset) / 0x10, 1);
+        for (var index = 0; index < maxGifTags; index++)
         {
             reader.BaseStream.Seek(model.GifUsageOffset + 0x10 * index, SeekOrigin.Begin);
-            var tag = new UyaMobyGifTag
+            var tag = new MobyGifTag
             {
                 TextureIds = reader.ReadBytes(0x0C),
                 GifDataOffset = reader.ReadUInt32()
             };
 
             model.GifTags.Add(tag);
-            if (tag.GifDataOffset >> 24 == 0x80)
+            if ((tag.GifDataOffset & 0x80000000u) != 0)
             {
                 tag.GifDataOffset -= 0x80000000;
                 return;
@@ -250,7 +462,7 @@ public static class UyaMobyModelReader
         }
     }
 
-    private static void ReadBangleTable(BinaryReader reader, UyaMobyModel model)
+    private static void ReadBangleTable(BinaryReader reader, MobyModel model)
     {
         if (model.BangleTableOffset == 0)
         {
@@ -258,7 +470,7 @@ public static class UyaMobyModelReader
         }
 
         reader.BaseStream.Seek(model.BangleTableOffset * 0x10, SeekOrigin.Begin);
-        var table = new UyaMobyBangleTable
+        var table = new MobyBangleTable
         {
             Unknown00 = reader.ReadByte(),
             BangleCount = reader.ReadByte(),
@@ -268,7 +480,7 @@ public static class UyaMobyModelReader
 
         for (var i = 0; i < 15; i++)
         {
-            table.OffsetList.Add(new UyaMobyBangleListEntry
+            table.OffsetList.Add(new MobyBangleListEntry
             {
                 MeshTableIndex = reader.ReadInt16(),
                 Unknown02 = reader.ReadInt16()
@@ -282,7 +494,7 @@ public static class UyaMobyModelReader
                 continue;
             }
 
-            table.DataList.Add(new UyaMobyBangleData
+            table.DataList.Add(new MobyBangleData
             {
                 Unknown00 = reader.ReadInt32(),
                 Unknown04 = reader.ReadInt32(),
@@ -294,7 +506,7 @@ public static class UyaMobyModelReader
         model.BangleTable = table;
     }
 
-    private static void ReadCornCob(BinaryReader reader, UyaMobyModel model)
+    private static void ReadCornCob(BinaryReader reader, MobyModel model)
     {
         if (model.CornCobOffset == 0)
         {
@@ -303,7 +515,7 @@ public static class UyaMobyModelReader
 
         reader.BaseStream.Seek(model.CornCobOffset * 0x10, SeekOrigin.Begin);
         var startOffset = reader.BaseStream.Position;
-        var cornCob = new UyaMobyCornCob
+        var cornCob = new MobyCornCob
         {
             KernelOffsets = reader.ReadBytes(0x10)
         };
@@ -337,7 +549,7 @@ public static class UyaMobyModelReader
         model.CornCob = cornCob;
     }
 
-    private static long FindNextSectionOffset(BinaryReader reader, UyaMobyModel model, long startOffset)
+    private static long FindNextSectionOffset(BinaryReader reader, MobyModel model, long startOffset)
     {
         var originalPosition = reader.BaseStream.Position;
         var candidates = new List<long>
@@ -365,9 +577,9 @@ public static class UyaMobyModelReader
             .Min();
     }
 
-    private static UyaMobyCornKernel ReadCornKernel(BinaryReader reader)
+    private static MobyCornKernel ReadCornKernel(BinaryReader reader)
     {
-        var kernel = new UyaMobyCornKernel
+        var kernel = new MobyCornKernel
         {
             Vector = new Vector4(reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle(), reader.ReadSingle())
         };
@@ -382,9 +594,9 @@ public static class UyaMobyModelReader
         return kernel;
     }
 
-    private static UyaMobyKernelVertex ReadKernelVertex(BinaryReader reader)
+    private static MobyKernelVertex ReadKernelVertex(BinaryReader reader)
     {
-        return new UyaMobyKernelVertex
+        return new MobyKernelVertex
         {
             Unknown00 = reader.ReadInt32(),
             Unknown04 = reader.ReadInt16(),
@@ -392,7 +604,7 @@ public static class UyaMobyModelReader
         };
     }
 
-    private static void ReadMeshes(BinaryReader reader, UyaMobyModel model)
+    private static void ReadMeshes(BinaryReader reader, MobyModel model)
     {
         if (model.MeshTableOffset == 0)
         {
@@ -400,14 +612,14 @@ public static class UyaMobyModelReader
         }
 
         reader.BaseStream.Seek(model.MeshTableOffset, SeekOrigin.Begin);
-        var table = new UyaMobyMeshTable();
-        var meshCounts = new (UyaMobyMeshType Type, int Count)[]
+        var table = new MobyMeshTable();
+        var meshCounts = new (MobyMeshType Type, int Count)[]
         {
-            (UyaMobyMeshType.HighLod, model.HighLodMeshCount),
-            (UyaMobyMeshType.LowLod, model.LowLodMeshCount),
-            (UyaMobyMeshType.MeshType2, model.MeshCountType2),
-            (UyaMobyMeshType.Bangle, model.BangleTable?.BangleCount ?? 0),
-            (UyaMobyMeshType.Metal, model.MetalCount)
+            (MobyMeshType.HighLod, model.HighLodMeshCount),
+            (MobyMeshType.LowLod, model.LowLodMeshCount),
+            (MobyMeshType.MeshType2, model.MeshCountType2),
+            (MobyMeshType.Bangle, model.BangleTable?.BangleCount ?? 0),
+            (MobyMeshType.Metal, model.MetalCount)
         };
 
         var tableOffset = model.MeshTableOffset;
@@ -426,9 +638,9 @@ public static class UyaMobyModelReader
         model.MeshTable = table;
     }
 
-    private static UyaMobyMeshTableEntry ReadMeshEntry(BinaryReader reader, UyaMobyMeshType type)
+    private static MobyMeshTableEntry ReadMeshEntry(BinaryReader reader, MobyMeshType type)
     {
-        return new UyaMobyMeshTableEntry
+        return new MobyMeshTableEntry
         {
             VifListOffset = reader.ReadInt32(),
             VifListSize = reader.ReadInt16(),
@@ -442,7 +654,7 @@ public static class UyaMobyModelReader
         };
     }
 
-    private static void AttachMeshData(BinaryReader reader, UyaMobyMeshTableEntry entry, List<UyaMobyGifTag> gifTags)
+    private static void AttachMeshData(BinaryReader reader, MobyMeshTableEntry entry, List<MobyGifTag> gifTags)
     {
         if (entry.VifListOffset != 0)
         {
@@ -469,7 +681,7 @@ public static class UyaMobyModelReader
         entry.VertexData = reader.ReadBytes(entry.VertexDataSize * 0x10);
     }
 
-    private static void ReadTeamPalettes(BinaryReader reader, UyaMobyModel model)
+    private static void ReadTeamPalettes(BinaryReader reader, MobyModel model)
     {
         if (model.MeshTable is null || model.TeamPalettes == 0)
         {
@@ -499,7 +711,7 @@ public static class UyaMobyModelReader
         }
     }
 
-    private static void ReadSoundDefs(BinaryReader reader, UyaMobyModel model)
+    private static void ReadSoundDefs(BinaryReader reader, MobyModel model)
     {
         if (model.SoundDefOffset <= 0)
         {
@@ -510,7 +722,7 @@ public static class UyaMobyModelReader
         model.Sounds = [];
         for (var i = 0; i < model.SoundCount; i++)
         {
-            model.Sounds.Add(new UyaMobySound
+            model.Sounds.Add(new MobySound
             {
                 MinRange = reader.ReadSingle(),
                 MaxRange = reader.ReadSingle(),
@@ -526,7 +738,7 @@ public static class UyaMobyModelReader
         }
     }
 
-    private static void ReadCollision(BinaryReader reader, UyaMobyModel model)
+    private static void ReadCollision(BinaryReader reader, MobyModel model)
     {
         if (model.CollisionOffset == 0)
         {
@@ -534,7 +746,7 @@ public static class UyaMobyModelReader
         }
 
         reader.BaseStream.Seek(model.CollisionOffset, SeekOrigin.Begin);
-        var collision = new UyaMobyCollision
+        var collision = new MobyCollision
         {
             Unknown00 = reader.ReadInt32(),
             Size1 = reader.ReadInt32(),
@@ -557,4 +769,10 @@ public static class UyaMobyModelReader
 
         model.Collision = collision;
     }
+}
+
+public sealed class MobyModelReadOptions
+{
+    public bool SkipAnimationSequences { get; init; }
+    public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
 }

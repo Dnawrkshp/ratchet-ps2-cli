@@ -1,8 +1,8 @@
-namespace RatchetPs2.Games.UYA.Moby;
+namespace RatchetPs2.Core.Moby;
 
-internal static class UyaMobyModelWriter
+internal static class MobyModelWriter
 {
-    public static byte[] WriteHeader(UyaMobyModel model)
+    public static byte[] WriteHeader(MobyModel model)
     {
         return WriteToBytes(writer =>
         {
@@ -37,62 +37,62 @@ internal static class UyaMobyModelWriter
         });
     }
 
-    public static byte[] WriteBoundingSphere(UyaBoundingSphere boundingSphere)
+    public static byte[] WriteBoundingSphere(MobyBoundingSphere boundingSphere)
     {
         return WriteToBytes(boundingSphere.Write);
     }
 
-    public static byte[] WriteMeshEntry(UyaMobyMeshTableEntry entry)
+    public static byte[] WriteMeshEntry(MobyMeshTableEntry entry)
     {
         return WriteToBytes(entry.WriteHeader);
     }
 
-    public static byte[] WriteGifTag(UyaMobyGifTag tag)
+    public static byte[] WriteGifTag(MobyGifTag tag)
     {
         return WriteToBytes(tag.Write);
     }
 
-    public static byte[] WriteBangleTable(UyaMobyBangleTable table)
+    public static byte[] WriteBangleTable(MobyBangleTable table)
     {
         return WriteToBytes(table.Write);
     }
 
-    public static byte[] WriteCornKernel(UyaMobyCornKernel kernel)
+    public static byte[] WriteCornKernel(MobyCornKernel kernel)
     {
         return WriteToBytes(kernel.Write);
     }
 
-    public static byte[] WriteCollision(UyaMobyCollision collision)
+    public static byte[] WriteCollision(MobyCollision collision)
     {
         return WriteToBytes(collision.Write);
     }
 
-    public static byte[] WriteBone(UyaMatrix4 bone)
+    public static byte[] WriteBone(MobyMatrix4 bone)
     {
         return WriteToBytes(bone.Write);
     }
 
-    public static byte[] WriteAnimationJoint(UyaMobyAnimationJoint joint)
+    public static byte[] WriteAnimationJoint(MobyAnimationJoint joint)
     {
         return WriteToBytes(joint.Write);
     }
 
-    public static byte[] WriteSequenceHeader(UyaMobySequence sequence)
+    public static byte[] WriteSequenceHeader(MobySequence sequence)
     {
         return WriteToBytes(sequence.WriteHeader);
     }
 
-    public static byte[] WriteAnimationFrameHeader(UyaMobyAnimationFrame frame)
+    public static byte[] WriteAnimationFrameHeader(MobyAnimationFrame frame)
     {
         return WriteToBytes(frame.WriteHeader);
     }
 
-    public static byte[] WriteAnimationTrigger(UyaMobyAnimationTrigger trigger)
+    public static byte[] WriteAnimationTrigger(MobyAnimationTrigger trigger)
     {
         return WriteToBytes(trigger.Write);
     }
 
-    public static byte[] WriteSound(UyaMobySound sound)
+    public static byte[] WriteSound(MobySound sound)
     {
         return WriteToBytes(sound.Write);
     }

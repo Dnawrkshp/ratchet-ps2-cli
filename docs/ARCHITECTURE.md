@@ -70,8 +70,39 @@ Current major areas in `Core` are:
 - `Wad/`: WAD compression, decompression, archive readers, TOC readers, and WAD model types
 - `Textures/`: texture models, conversion options, PIF readers/exporters, and PNG encoding helpers
 - `Hud/Hw3d/`: HW3D/HBN archive parsing, structural reporting, and early visualization helpers
+- `Moby/`: stable moby model, binary, VIF, and normal glTF import/export primitives
 
-The texture pipeline intentionally exposes byte/stream-oriented entry points. This is important because the same PIF conversion path is used by both the CLI and the browser-facing WASM host.
+The texture pipeline intentionally exposes byte/stream-oriented entry points.
+This is important because the same PIF conversion path is used by both the CLI
+and the browser-facing WASM host.
+
+Moby diagnostics and research workflows should not be added directly to the
+stable moby root. If a diagnostic or research tool still needs importer
+internals, keep it in `RatchetPs2.Experimental` until the dependency can be
+extracted behind a stable model.
+
+### `RatchetPs2.Experimental`
+
+This project is reserved for research and sandbox workflows that are useful for
+development and CLI inspection, but are not part of the stable Core domain
+model.
+
+Use this project for:
+
+- generated/custom-static moby import experiments
+- moby structural analysis reports under `Moby/Diagnostics/`
+- skin and vertex-control inspection under `Moby/Diagnostics/`
+- diagnostic JSON writers
+- debug visualizations
+- topology and packet-budget probes
+- player-moby research workflows
+- one-off or unstable workflows that should not be promoted to Core yet
+
+If an experimental path becomes reliable and generally useful, promote the stable
+domain pieces into `RatchetPs2.Core` and leave only exploratory orchestration
+here. It may depend on `RatchetPs2.Core`; Core exposes limited internal access to
+this assembly where a diagnostic needs implementation details without making
+those details public SDK API.
 
 ### `RatchetPs2.Games.RC1`, `GC`, `UYA`, `DL`
 
@@ -191,8 +222,10 @@ Dependencies should generally point inward like this:
 
 ```text
 RatchetPs2.Cli -> RatchetPs2.Core
+RatchetPs2.Cli -> RatchetPs2.Experimental
 RatchetPs2.Cli -> RatchetPs2.Games.*
 RatchetPs2.Games.* -> RatchetPs2.Core
+RatchetPs2.Experimental -> RatchetPs2.Core
 RatchetPs2.Wasm -> RatchetPs2.Core
 RatchetPs2.Wasm -> RatchetPs2.Wasm.Generator (build-time only)
 ```

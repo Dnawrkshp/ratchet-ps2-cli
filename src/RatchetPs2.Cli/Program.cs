@@ -25,7 +25,7 @@ var gameModuleResolver = new GameModuleResolver(gameModules);
 
 rootCommand.Subcommands.Add(HelloCommand.Build(gameModuleResolver));
 rootCommand.Subcommands.Add(Hw3dCommand.Build());
-rootCommand.Subcommands.Add(MobyCommand.Build());
+rootCommand.Subcommands.Add(MobyCommand.Build(gameModuleResolver));
 rootCommand.Subcommands.Add(PifCommand.Build());
 rootCommand.Subcommands.Add(WadCommand.Build());
 
