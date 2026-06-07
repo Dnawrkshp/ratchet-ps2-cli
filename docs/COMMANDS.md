@@ -26,6 +26,7 @@ Top-level commands:
 - `hello`: Print a hello-world style greeting for a selected game.
 - `hw3d`: Inspect experimental HUD widget 3D files.
 - `pif`: Work with PIF texture files.
+- `skybox`: Work with skybox geometry files.
 - `tie`: Work with tie static world geometry files.
 - `wad`: Work with WAD-compressed files.
 
@@ -94,6 +95,98 @@ Examples:
 ratchet-ps2 pif to-png --input texture.pif --output texture.png
 ratchet-ps2 pif to-png --input minimap.pif --output minimap.png --double-alpha
 ratchet-ps2 pif to-png --input icon.pif --output icon.png --png-format indexed8
+```
+
+## `skybox`
+
+Commands for skybox geometry files.
+
+```bash
+ratchet-ps2 skybox [command] [options]
+```
+
+Subcommands:
+
+- `export-gltf`: Export skybox geometry to a glTF model.
+- `export-gltf-batch`: Export a directory of skybox binaries and write a viewer manifest.
+
+Skybox support currently accepts `UYA` and `DL`.
+
+### `skybox export-gltf`
+
+Export skybox geometry to a glTF model.
+
+```bash
+ratchet-ps2 skybox export-gltf --game <UYA|DL> --input <input> --output <output> [--preserve-alpha]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--input <input>`: Required path to the input `sky.bin` binary.
+- `--output <output>`: Required path to write the output `.gltf` file.
+- `--preserve-alpha`: Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup.
+
+Output behavior:
+
+- A sibling `.buffer.bin` is written for binary glTF buffers.
+- A sibling `.diagnostics.json` is written with shell, cluster, triangle, and texture counts.
+- Embedded skybox textures are converted to PNGs in a sibling `textures/` folder and referenced by glTF materials.
+- UYA and DL texture payloads are decoded with the palette-index remap used by the PIF texture utilities; DL also uses RAC4 pixel unswizzling.
+- By default, UYA and DL skybox texture alpha is doubled to glTF alpha while source RGB is kept intact; nonzero alpha is preserved for layered shell blending.
+- Fully transparent texture pixels have nearby RGB dilated into them to avoid dark filtered edges around alpha-blended shells.
+- Skybox glTF textures use clamp-to-edge samplers so ST values on `0`/`4096` shell edges do not wrap-filter against the opposite texture edge.
+- UYA/DL shell flag `0x2` exports a separate bloom material variant with emissive texture metadata and `KHR_materials_emissive_strength`.
+- Untextured gouraud sky shells export the packed RGBA values stored in the cluster `st_ofs` table as `COLOR_0`; RGB source bytes are converted from sRGB-style values to glTF linear color.
+- Triangle records are grouped by texture id; texture id `255` is exported as an untextured material.
+
+Example:
+
+```bash
+ratchet-ps2 skybox export-gltf --game DL --input sky.bin --output sky.gltf
+```
+
+### `skybox export-gltf-batch`
+
+Export a directory of skybox binaries to glTF and write a manifest for
+`tools/skybox-viewer`.
+
+```bash
+ratchet-ps2 skybox export-gltf-batch --game <UYA|DL> --input-root <input-root> --output-root <output-root> [--sky-file-name <name>] [--manifest-name <name>] [--preserve-alpha] [--limit <count>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--input-root <input-root>`: Required directory to scan recursively.
+- `--output-root <output-root>`: Required directory for exported models and the manifest.
+- `--sky-file-name <name>`: Skybox binary file name to scan for. Defaults to `sky.bin`.
+- `--manifest-name <name>`: Viewer manifest file name. Defaults to `manifest.json`.
+- `--preserve-alpha`: Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup.
+- `--limit <count>`: Optional maximum number of skyboxes to export.
+
+Output behavior:
+
+- Each source skybox gets an output subdirectory containing `sky.gltf`,
+  `sky.buffer.bin`, `sky.diagnostics.json`, and converted PNG textures.
+- The manifest records per-skybox shell, cluster, triangle, texture, alpha, and
+  conversion timing metadata.
+- `tools/skybox-viewer/index.html` loads
+  `/test-assets/skyboxes/_viewer/DL/manifest.json` by default and can switch to
+  `/test-assets/skyboxes/_viewer/UYA/manifest.json` from the game dropdown.
+
+Examples:
+
+```bash
+ratchet-ps2 skybox export-gltf-batch --game DL --input-root test-assets/skyboxes/DL --output-root test-assets/skyboxes/_viewer/DL
+ratchet-ps2 skybox export-gltf-batch --game UYA --input-root test-assets/skyboxes/UYA --output-root test-assets/skyboxes/_viewer/UYA
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000/tools/skybox-viewer/index.html
 ```
 
 ## `tie`
