@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RatchetPs2.Core.Geometry;
+using RatchetPs2.Core.Gltf;
 
 namespace RatchetPs2.Core.Moby;
 
@@ -922,7 +923,7 @@ public static class MobyGltfExporter
             var x = BitConverter.ToSingle(commonTransforms, offset) * scale;
             var sourceY = BitConverter.ToSingle(commonTransforms, offset + 0x04) * scale;
             var sourceZ = BitConverter.ToSingle(commonTransforms, offset + 0x08) * scale;
-            positions[i] = new Vector3(x, sourceZ, -sourceY);
+            positions[i] = GltfCoordinateBasis.FromPs2Position(x, sourceY, sourceZ);
         }
 
         return positions;
@@ -1202,7 +1203,7 @@ public static class MobyGltfExporter
                     ["meshType"] = entry.MeshType.ToString(),
                     ["modelScale"] = model.Scale,
                     ["positionScale"] = scale,
-                    ["coordinateBasis"] = "gltf=(x,z,-y)_from_ps2",
+                    ["coordinateBasis"] = GltfCoordinateBasis.Ps2XzyBasisDescription,
                     ["commonTransformJointIndex"] = entry.CommonTransformJointIndex,
                     ["primaryTextureId"] = explicitTextureId,
                     ["effectiveTextureId"] = effectiveTextureId,
@@ -1990,7 +1991,7 @@ public static class MobyGltfExporter
         var x = BitConverter.ToInt16(vertex, 0x0A) * scale;
         var sourceY = BitConverter.ToInt16(vertex, 0x0C) * scale;
         var sourceZ = BitConverter.ToInt16(vertex, 0x0E) * scale;
-        return new Vector3(x, sourceZ, -sourceY);
+        return GltfCoordinateBasis.FromPs2Position(x, sourceY, sourceZ);
     }
 
     private static byte[] Combine(byte[] first, byte[]? second)

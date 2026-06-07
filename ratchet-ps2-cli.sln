@@ -27,6 +27,8 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{0ED5DB14
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.RoundtripTests", "tests\RatchetPs2.RoundtripTests\RatchetPs2.RoundtripTests.csproj", "{DA87DBFA-E620-4214-BB7D-454DD7B904E8}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "RatchetPs2.TieTests", "tests\RatchetPs2.TieTests\RatchetPs2.TieTests.csproj", "{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -73,6 +75,10 @@ Global
 		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{DA87DBFA-E620-4214-BB7D-454DD7B904E8}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -87,5 +93,6 @@ Global
 		{40FA6C46-6433-41E8-8C2C-0B4A7F985D26} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
 		{4741E03D-3FE5-43FF-ABB5-E6E7107864F8} = {14A9A38D-1268-4DC4-AD46-186592C8A0D9}
 		{DA87DBFA-E620-4214-BB7D-454DD7B904E8} = {0ED5DB14-DC73-4AB9-8800-466C737A06A1}
+		{D664D2C8-A0A5-4190-94B6-7C84E1BA6FAD} = {0ED5DB14-DC73-4AB9-8800-466C737A06A1}
 	EndGlobalSection
 EndGlobal

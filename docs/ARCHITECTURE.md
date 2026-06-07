@@ -117,7 +117,7 @@ They should contain:
 
 If a type or behavior is truly shared, it should be moved to `RatchetPs2.Core`.
 
-At the moment these modules are lightweight. They implement `IGameModule` with a `GameId` and display name, and provide the extension point where future per-game services and quirks should live.
+At the moment these modules are lightweight. They implement `IGameModule` with a `GameId` and display name, and provide the extension point where future per-game services and quirks should live. Shared tie reader/exporter code now lives in `RatchetPs2.Core`; keep future per-game tie quirks in the game projects and promote only behavior that has cross-game evidence.
 
 ### `RatchetPs2.Wasm`
 

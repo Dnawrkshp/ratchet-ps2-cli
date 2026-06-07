@@ -26,6 +26,7 @@ Top-level commands:
 - `hello`: Print a hello-world style greeting for a selected game.
 - `hw3d`: Inspect experimental HUD widget 3D files.
 - `pif`: Work with PIF texture files.
+- `tie`: Work with tie static world geometry files.
 - `wad`: Work with WAD-compressed files.
 
 ## Game IDs
@@ -93,6 +94,119 @@ Examples:
 ratchet-ps2 pif to-png --input texture.pif --output texture.png
 ratchet-ps2 pif to-png --input minimap.pif --output minimap.png --double-alpha
 ratchet-ps2 pif to-png --input icon.pif --output icon.png --png-format indexed8
+```
+
+## `tie`
+
+Commands for tie static world geometry files.
+
+```bash
+ratchet-ps2 tie [command] [options]
+```
+
+Subcommands:
+
+- `inspect`: Inspect a tie class binary and dump its currently understood structure.
+- `export-gltf`: Export tie geometry to a glTF model.
+- `export-gltf-batch`: Export a directory of tie class binaries and write a viewer manifest.
+
+Tie support currently accepts `GC`, `UYA`, and `DL`.
+
+### `tie inspect`
+
+Inspect a tie class binary and dump its currently understood structure.
+
+```bash
+ratchet-ps2 tie inspect --game <GC|UYA|DL> --input <input> [--output <output>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
+- `--input <input>`: Required path to the input `tie.bin` class binary.
+- `--output <output>`: Optional path to write the structural report. The report is always printed to stdout.
+
+Example:
+
+```bash
+ratchet-ps2 tie inspect --game DL --input tie.bin --output tie-report.txt
+```
+
+### `tie export-gltf`
+
+Export tie geometry to a glTF model.
+
+```bash
+ratchet-ps2 tie export-gltf --game <GC|UYA|DL> --input <input> --output <output> [--lod <lod>] [--texture-directory <directory>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
+- `--input <input>`: Required path to the input `tie.bin` class binary.
+- `--output <output>`: Required path to write the output `.gltf` file.
+- `--lod <lod>`: LOD packet group to export: `0`, `1`, or `2`. Defaults to `0`.
+- `--texture-directory <directory>`: Optional directory containing Wrench numeric PNGs or `tex.####.0.png` files. Defaults to the input tie's directory.
+
+Output behavior:
+
+- A sibling `.buffer.bin` is written for binary glTF buffers.
+- A sibling `.diagnostics.json` is written with export counts and packet summaries.
+- Diagnostics include structured packet tables, setup-row word roles, and
+  consistency checks for decoded shader switches/references and row counts.
+- When matching PNGs are found, they are copied into a sibling `textures/`
+  folder and referenced by glTF materials.
+- Texture alpha is scanned while copying. Materials that reference non-opaque
+  opacity textures use glTF `MASK` or `BLEND` alpha mode. Reflective-mask
+  materials keep their alpha metadata but stay opaque in glTF, and diagnostics
+  include texture alpha min/max metadata.
+- Glow RGBA remains separate from vertex colors through `_TIE_GLOW_0` and
+  emissive preview material variants. Standalone tie exports do not bake
+  instance-sourced vertex colors into `COLOR_0`.
+
+Example:
+
+```bash
+ratchet-ps2 tie export-gltf --game DL --input tie.bin --output tie.gltf
+ratchet-ps2 tie export-gltf --game DL --input tie.bin --output tie-lod1.gltf --lod 1
+ratchet-ps2 tie export-gltf --game DL --input tie.bin --output tie.gltf --texture-directory textures
+```
+
+### `tie export-gltf-batch`
+
+Export a directory of tie class binaries to glTF and write a manifest for
+`tools/tie-viewer`.
+
+```bash
+ratchet-ps2 tie export-gltf-batch --game <GC|UYA|DL> --input-root <input-root> --output-root <output-root> [--core-file-name <name>] [--manifest-name <name>] [--lod <lod>] [--limit <count>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
+- `--input-root <input-root>`: Required directory to scan recursively.
+- `--output-root <output-root>`: Required directory for exported models and the manifest.
+- `--core-file-name <name>`: Tie class binary file name to scan for. Defaults to `core.bin`.
+- `--manifest-name <name>`: Viewer manifest file name. Defaults to `manifest.json`.
+- `--lod <lod>`: LOD packet group to export: `0`, `1`, or `2`. Defaults to `0`.
+- `--limit <count>`: Optional maximum number of ties to export.
+
+Output behavior:
+
+- Each source tie gets an output subdirectory containing `tie.gltf`,
+  `tie.buffer.bin`, `tie.diagnostics.json`, and copied `textures/` when PNGs
+  are available.
+- The manifest records per-model header, geometry, packet, glow, texture, and
+  conversion timing metadata.
+- Manifest totals include found/succeeded/failed counts, total conversion time,
+  average and median successful export time, and total input/output bytes.
+- Aggregate packet metadata includes multipass type, shader count, and setup
+  tail-word distributions.
+
+Example:
+
+```bash
+ratchet-ps2 tie export-gltf-batch --game DL --input-root "test-assets/DL Ties/ALL DL" --output-root "test-assets/DL Ties/ALL DL/_viewer"
 ```
 
 ## `wad`
