@@ -32,7 +32,7 @@ public static class Ps2VifPacket
             var num = vifData[offset + 2];
             var commandByte = vifData[offset + 3];
             var command = commandByte & 0x7F;
-            var payloadLength = GetPayloadLength(command, num);
+            var payloadLength = GetPayloadLength(command, immediate, num);
             var alignedPayloadLength = Align(payloadLength, 4);
             var availablePayloadLength = vifData.Length - offset - 4;
             if (alignedPayloadLength > availablePayloadLength)
@@ -65,6 +65,11 @@ public static class Ps2VifPacket
 
     public static int GetPayloadLength(int command, int num)
     {
+        return GetPayloadLength(command, immediate: 0, num);
+    }
+
+    private static int GetPayloadLength(int command, int immediate, int num)
+    {
         if (command < 0x60)
         {
             return command switch
@@ -74,6 +79,12 @@ public static class Ps2VifPacket
                 0x03 => 12,
                 0x04 => 16,
                 0x05 => num * 4,
+                0x20 => 4,
+                0x30 => 16,
+                0x31 => 16,
+                0x4A => num * 8,
+                0x50 => immediate * 16,
+                0x51 => immediate * 16,
                 _ => 0
             };
         }

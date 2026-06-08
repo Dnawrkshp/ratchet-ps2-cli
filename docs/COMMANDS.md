@@ -26,6 +26,7 @@ Top-level commands:
 - `hello`: Print a hello-world style greeting for a selected game.
 - `hw3d`: Inspect experimental HUD widget 3D files.
 - `pif`: Work with PIF texture files.
+- `shrub`: Work with shrub static foliage geometry files.
 - `skybox`: Work with skybox geometry files.
 - `tie`: Work with tie static world geometry files.
 - `wad`: Work with WAD-compressed files.
@@ -187,6 +188,99 @@ Then open:
 
 ```text
 http://127.0.0.1:8000/tools/skybox-viewer/index.html
+```
+
+## `shrub`
+
+Commands for shrub static foliage geometry files.
+
+```bash
+ratchet-ps2 shrub [command] [options]
+```
+
+Subcommands:
+
+- `export-gltf`: Export one shrub to a glTF model.
+- `export-gltf-batch`: Export a directory of shrubs and write a viewer manifest.
+
+Shrub support currently accepts `GC`, `UYA`, and `DL`.
+
+### `shrub export-gltf`
+
+Export shrub geometry to a glTF model. The input must be a packed shrub class
+binary, such as `core.bin`.
+
+```bash
+ratchet-ps2 shrub export-gltf --game <GC|UYA|DL> --input <input> --output <output> [--texture-directory <directory>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
+- `--input <input>`: Required packed shrub binary.
+- `--output <output>`: Required path to write the output `.gltf` file.
+- `--texture-directory <directory>`: Optional directory containing PNG textures
+  for packed shrub binaries. Defaults to the input shrub's directory.
+
+Output behavior:
+
+- A sibling `.buffer.bin` is written for binary glTF buffers.
+- A sibling `.diagnostics.json` is written with mesh, triangle, texture, source,
+  and billboard metadata.
+- Packed shrub binaries are decoded from the 0x40-byte `ShrubClass` header,
+  packet table, three VIF unpack payloads, fixed 24-normal table, and optional
+  billboard record.
+
+Examples:
+
+```bash
+ratchet-ps2 shrub export-gltf --game UYA --input test-assets/shrubs/1091/core.bin --output /tmp/uya-shrub/shrub.gltf
+ratchet-ps2 shrub export-gltf --game DL --input test-assets/shrubs/1146/core.bin --output /tmp/dl-shrub/shrub.gltf
+```
+
+### `shrub export-gltf-batch`
+
+Export a directory of shrubs to glTF and write a manifest for
+`tools/shrub-viewer`.
+
+```bash
+ratchet-ps2 shrub export-gltf-batch --input-root <input-root> --output-root <output-root> [--game <auto|GC|UYA|DL>] [--source-kind <kind>] [--core-file-name <name>] [--manifest-name <name>] [--limit <count>]
+```
+
+Options:
+
+- `--game <game>`: Optional game ID override. Defaults to `auto`, which reads
+  sibling `.fbx.meta` labels and accepts `GC`, `UYA`, or `DL`.
+- `--input-root <input-root>`: Required directory to scan recursively.
+- `--output-root <output-root>`: Required directory for exported models and the manifest.
+- `--source-kind <kind>`: `auto` or `packed`. Defaults to `auto`.
+- `--core-file-name <name>`: Packed shrub class binary file name. Defaults to `core.bin`.
+- `--manifest-name <name>`: Viewer manifest file name. Defaults to `manifest.json`.
+- `--limit <count>`: Optional maximum number of shrubs to export.
+
+Output behavior:
+
+- `auto` scans packed `core.bin` files.
+- Each source shrub gets an output subdirectory containing `shrub.gltf`,
+  `shrub.buffer.bin`, `shrub.diagnostics.json`, and referenced PNG textures.
+- The manifest records per-shrub mesh, primitive, vertex, triangle, texture,
+  billboard, source labels, inferred game, and conversion timing metadata.
+- `tools/shrub-viewer/index.html` loads
+  `/test-assets/shrubs/_viewer/DL/manifest.json` by default and can switch to
+  `/test-assets/shrubs/_viewer/UYA/manifest.json` from the game dropdown.
+
+Examples:
+
+```bash
+ratchet-ps2 shrub export-gltf-batch --input-root test-assets/shrubs --output-root test-assets/shrubs/_viewer
+ratchet-ps2 shrub export-gltf-batch --game DL --input-root test-assets/shrubs --output-root /tmp/dl-shrub-view --limit 25
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000/tools/shrub-viewer/index.html
 ```
 
 ## `tie`
