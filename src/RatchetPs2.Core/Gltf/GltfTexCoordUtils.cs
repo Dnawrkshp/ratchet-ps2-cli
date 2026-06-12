@@ -2,7 +2,7 @@ using System.Numerics;
 
 namespace RatchetPs2.Core.Gltf;
 
-public static class GltfTexCoordUtils
+public static partial class GltfTexCoordUtils
 {
     public static Vector2? ApplyMaterialUvScale(
         List<Vector2>? texCoords,

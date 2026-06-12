@@ -7,7 +7,8 @@ internal static class TextureResourcePreparer
     public static TextureResources? PrepareExternalTextures(
         DirectoryInfo? sourceDirectory,
         DirectoryInfo outputDirectory,
-        string? outputSubdirectoryName = "textures")
+        string? outputSubdirectoryName = "textures",
+        byte? normalizePs2FullOpacityAlpha = null)
     {
         ArgumentNullException.ThrowIfNull(outputDirectory);
 
@@ -38,14 +39,23 @@ internal static class TextureResourcePreparer
         foreach (var (sourceFile, textureId) in candidates)
         {
             var destinationFile = new FileInfo(Path.Combine(textureOutputDirectory.FullName, sourceFile.Name));
-            if (!Path.GetFullPath(sourceFile.FullName).Equals(Path.GetFullPath(destinationFile.FullName), StringComparison.Ordinal))
+            var metadata = ReadTextureMetadata(sourceFile);
+            if (normalizePs2FullOpacityAlpha.HasValue
+                && ShouldNormalizePs2Alpha(metadata.Alpha, normalizePs2FullOpacityAlpha.Value))
+            {
+                using var normalizedInput = sourceFile.OpenRead();
+                using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
+                metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
+                    normalizedInput,
+                    normalizedOutput,
+                    normalizePs2FullOpacityAlpha.Value);
+            }
+            else if (!Path.GetFullPath(sourceFile.FullName).Equals(Path.GetFullPath(destinationFile.FullName), StringComparison.Ordinal))
             {
                 sourceFile.CopyTo(destinationFile.FullName, overwrite: true);
             }
 
             var uri = CliPathUtils.ToUriPath(Path.GetRelativePath(outputDirectory.FullName, destinationFile.FullName));
-            using var textureInput = sourceFile.OpenRead();
-            var metadata = PngTextureMetadataReader.ReadPng(textureInput);
             uris[textureId!.Value] = uri;
             sizes[textureId.Value] = metadata.Size;
             alpha[textureId.Value] = metadata.Alpha;
@@ -63,6 +73,17 @@ internal static class TextureResourcePreparer
         }
 
         return new TextureResources(uris, sizes, alpha, entries);
+    }
+
+    private static TextureMetadata ReadTextureMetadata(FileInfo sourceFile)
+    {
+        using var textureInput = sourceFile.OpenRead();
+        return PngTextureMetadataReader.ReadPng(textureInput);
+    }
+
+    private static bool ShouldNormalizePs2Alpha(TextureAlphaInfo alpha, byte fullOpacityAlpha)
+    {
+        return alpha.HasAlpha && alpha.MaxAlpha <= fullOpacityAlpha;
     }
 
     public static bool TryParseTextureId(string fileName, out int textureId)

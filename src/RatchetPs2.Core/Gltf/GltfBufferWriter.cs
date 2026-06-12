@@ -8,6 +8,7 @@ public sealed class GltfBufferWriter
     public const int ElementArrayBufferTarget = 34963;
     public const int FloatComponentType = 5126;
     public const int UnsignedIntComponentType = 5125;
+    public const int UnsignedByteComponentType = 5121;
 
     private readonly BinaryWriter _writer;
 
@@ -85,6 +86,26 @@ public sealed class GltfBufferWriter
         return AddAccessor(CreateAccessor(bufferView, FloatComponentType, values.Count, "VEC4"));
     }
 
+    public int WriteNormalizedByteVector4Accessor(IReadOnlyList<Vector4> values, int target = ArrayBufferTarget)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        Align(4);
+        var byteOffset = checked((int)_writer.BaseStream.Position);
+        foreach (var value in values)
+        {
+            _writer.Write(ToNormalizedByte(value.X));
+            _writer.Write(ToNormalizedByte(value.Y));
+            _writer.Write(ToNormalizedByte(value.Z));
+            _writer.Write(ToNormalizedByte(value.W));
+        }
+
+        var bufferView = AddBufferView(byteOffset, values.Count * 4, target);
+        var accessor = CreateAccessor(bufferView, UnsignedByteComponentType, values.Count, "VEC4");
+        accessor["normalized"] = true;
+        return AddAccessor(accessor);
+    }
+
     public int WriteUInt32IndexAccessor(IReadOnlyList<uint> indices)
     {
         ArgumentNullException.ThrowIfNull(indices);
@@ -146,5 +167,10 @@ public sealed class GltfBufferWriter
         {
             _writer.Write(new byte[alignment - remainder]);
         }
+    }
+
+    private static byte ToNormalizedByte(float value)
+    {
+        return (byte)Math.Clamp(MathF.Round(value * 255f), 0f, 255f);
     }
 }

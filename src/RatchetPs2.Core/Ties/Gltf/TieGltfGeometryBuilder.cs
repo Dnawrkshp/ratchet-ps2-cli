@@ -1,4 +1,5 @@
 using System.Numerics;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Ties;
@@ -58,7 +59,7 @@ internal static class TieGltfGeometryBuilder
                 var aIndex = checked((int)group.Indices[i]);
                 var bIndex = checked((int)group.Indices[i + 1]);
                 var cIndex = checked((int)group.Indices[i + 2]);
-                var adjustedTexCoords = TieGltfTexCoordBuilder.AdjustTriangleTexCoords(
+                var adjustedTexCoords = GltfTexCoordUtils.AdjustTriangleTexCoords(
                     texCoords[aIndex],
                     texCoords[bIndex],
                     texCoords[cIndex],

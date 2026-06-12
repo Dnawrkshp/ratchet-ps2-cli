@@ -28,6 +28,7 @@ Top-level commands:
 - `pif`: Work with PIF texture files.
 - `shrub`: Work with shrub static foliage geometry files.
 - `skybox`: Work with skybox geometry files.
+- `tfrag`: Work with tfrag terrain geometry files.
 - `tie`: Work with tie static world geometry files.
 - `wad`: Work with WAD-compressed files.
 
@@ -188,6 +189,109 @@ Then open:
 
 ```text
 http://127.0.0.1:8000/tools/skybox-viewer/index.html
+```
+
+## `tfrag`
+
+Commands for tfrag terrain geometry files.
+
+```bash
+ratchet-ps2 tfrag [command] [options]
+```
+
+Subcommands:
+
+- `export-gltf`: Export tfrag terrain geometry to a glTF model.
+- `export-gltf-batch`: Export a directory of tfrag terrain files and write a
+  viewer manifest.
+
+Tfrag support currently accepts `UYA` and `DL`.
+
+### `tfrag export-gltf`
+
+Export tfrag terrain geometry from a `terrain.bin` file to a glTF model grouped
+by LOD and chunk.
+
+```bash
+ratchet-ps2 tfrag export-gltf --game <UYA|DL> --input <input> --output <output> [--texture-directory <directory>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--input <input>`: Required path to the input `terrain.bin` tfrag binary.
+- `--output <output>`: Required path to write the output `.gltf` file.
+- `--texture-directory <directory>`: Optional directory containing `tex.####.0.png`
+  files. Defaults to the input terrain's directory.
+
+Output behavior:
+
+- A sibling `.buffer.bin` is written for binary glTF buffers.
+- A sibling `.diagnostics.json` is written with chunk, LOD, VIF packet, triangle,
+  and texture counts.
+- PNG textures are copied to a sibling `textures/` folder and referenced by glTF
+  materials when matching `tex.####.0.png` files are present.
+- The glTF node hierarchy contains a root `tfrag` node with separate `lod_0`,
+  `lod_1`, and `lod_2` groups; decoded chunk nodes are placed under the matching
+  LOD group.
+- LOD ranges follow the runtime tfrag upload behavior: `lod_2` uses
+  `lod_2_ofs/lod_2_size`, `lod_1` uses `shared_ofs/lod_1_size`, and `lod_0`
+  uses `shared_ofs/common_size` plus `lod_0_ofs/lod_0_size`.
+- Texture assignment is currently a preview mapping from decoded topology packets
+  to sequential tfrag texture entries, and is recorded in glTF extras and
+  diagnostics.
+
+Examples:
+
+```bash
+ratchet-ps2 tfrag export-gltf --game DL --input terrain.bin --output terrain.gltf
+ratchet-ps2 tfrag export-gltf --game UYA --input test-assets/tfrags/UYA/level3/terrain/terrain.bin --output /tmp/uya-tfrag/terrain.gltf
+```
+
+### `tfrag export-gltf-batch`
+
+Export a directory of tfrag terrain files to glTF and write a manifest for
+`tools/tfrag-viewer`.
+
+```bash
+ratchet-ps2 tfrag export-gltf-batch --game <UYA|DL> --input-root <input-root> --output-root <output-root> [--terrain-file-name <name>] [--manifest-name <name>] [--limit <count>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--input-root <input-root>`: Required directory to scan recursively.
+- `--output-root <output-root>`: Required directory for exported models and the
+  manifest.
+- `--terrain-file-name <name>`: Tfrag terrain binary file name to scan for.
+  Defaults to `terrain.bin`.
+- `--manifest-name <name>`: Viewer manifest file name. Defaults to
+  `manifest.json`.
+- `--limit <count>`: Optional maximum number of terrain files to export.
+
+Output behavior:
+
+- Each source terrain file gets an output subdirectory containing `terrain.gltf`,
+  `terrain.buffer.bin`, `terrain.diagnostics.json`, and copied PNG textures when
+  matching files are present.
+- The manifest records per-terrain chunk, LOD, triangle, texture, and conversion
+  timing metadata.
+- `tools/tfrag-viewer/index.html` loads
+  `/test-assets/tfrags/_viewer/DL/manifest.json` by default and can switch to
+  `/test-assets/tfrags/_viewer/UYA/manifest.json` from the game dropdown.
+
+Examples:
+
+```bash
+ratchet-ps2 tfrag export-gltf-batch --game DL --input-root test-assets/tfrags/DL --output-root test-assets/tfrags/_viewer/DL
+ratchet-ps2 tfrag export-gltf-batch --game UYA --input-root test-assets/tfrags/UYA --output-root test-assets/tfrags/_viewer/UYA
+python3 -m http.server 8000 --bind 127.0.0.1
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8000/tools/tfrag-viewer/index.html
 ```
 
 ## `shrub`

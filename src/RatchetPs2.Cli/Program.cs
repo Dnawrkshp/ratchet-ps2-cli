@@ -4,6 +4,7 @@ using RatchetPs2.Cli.Commands.Moby;
 using RatchetPs2.Cli.Commands.Pif;
 using RatchetPs2.Cli.Commands.Shrub;
 using RatchetPs2.Cli.Commands.Skybox;
+using RatchetPs2.Cli.Commands.Tfrag;
 using RatchetPs2.Cli.Commands.Tie;
 using RatchetPs2.Cli.Commands.Wad;
 using RatchetPs2.Cli.GameSelection;
@@ -32,6 +33,7 @@ rootCommand.Subcommands.Add(MobyCommand.Build(gameModuleResolver));
 rootCommand.Subcommands.Add(PifCommand.Build());
 rootCommand.Subcommands.Add(ShrubCommand.Build());
 rootCommand.Subcommands.Add(SkyboxCommand.Build());
+rootCommand.Subcommands.Add(TfragCommand.Build());
 rootCommand.Subcommands.Add(TieCommand.Build());
 rootCommand.Subcommands.Add(WadCommand.Build());
 

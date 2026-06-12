@@ -40,6 +40,53 @@ public static class PngTextureMetadataReader
     {
         ArgumentNullException.ThrowIfNull(stream);
 
+        var png = ReadPngData(stream);
+        return new TextureMetadata(
+            new TextureSize(png.Header.Width, png.Header.Height),
+            ReadAlphaInfo(png.Header, png.Idat, png.Trns));
+    }
+
+    public static Rgba32Image ReadRgba32(Stream stream)
+    {
+        ArgumentNullException.ThrowIfNull(stream);
+
+        var png = ReadPngData(stream);
+        if (png.Header.InterlaceMethod != 0)
+        {
+            throw new InvalidDataException("Interlaced PNG images are not supported for RGBA decoding.");
+        }
+
+        var rows = InflateRows(png.Idat);
+        var bitsPerPixel = GetBitsPerPixel(png.Header);
+        var rowByteCount = checked((png.Header.Width * bitsPerPixel + 7) / 8);
+        var bytesPerPixel = Math.Max(1, (bitsPerPixel + 7) / 8);
+        var expectedLength = checked(png.Header.Height * (rowByteCount + 1));
+        if (rows.Length < expectedLength)
+        {
+            throw new InvalidDataException(
+                $"PNG pixel payload is too short. Expected at least {expectedLength} byte(s), got {rows.Length}.");
+        }
+
+        var pixels = new byte[checked(png.Header.Width * png.Header.Height * 4)];
+        var row = new byte[rowByteCount];
+        var previousRow = new byte[rowByteCount];
+        var offset = 0;
+
+        for (var y = 0; y < png.Header.Height; y++)
+        {
+            var filter = rows[offset++];
+            rows.AsSpan(offset, rowByteCount).CopyTo(row);
+            offset += rowByteCount;
+            UnfilterRow(row, previousRow, bytesPerPixel, filter);
+            DecodeRowRgba(png.Header, row, png.Plte, png.Trns, pixels.AsSpan(checked(y * png.Header.Width * 4)));
+            (row, previousRow) = (previousRow, row);
+        }
+
+        return new Rgba32Image(png.Header.Width, png.Header.Height, pixels);
+    }
+
+    private static PngData ReadPngData(Stream stream)
+    {
         Span<byte> signature = stackalloc byte[PngSignature.Length];
         stream.ReadExactly(signature);
         if (!signature.SequenceEqual(PngSignature))
@@ -48,6 +95,7 @@ public static class PngTextureMetadataReader
         }
 
         PngHeader? header = null;
+        byte[]? plte = null;
         byte[]? trns = null;
         var chunkHeader = new byte[8];
         var crc = new byte[4];
@@ -77,6 +125,9 @@ public static class PngTextureMetadataReader
                 case "IHDR":
                     header = ReadHeader(data);
                     break;
+                case "PLTE":
+                    plte = data;
+                    break;
                 case "tRNS":
                     trns = data;
                     break;
@@ -89,9 +140,7 @@ public static class PngTextureMetadataReader
                         throw new InvalidDataException("PNG is missing an IHDR chunk.");
                     }
 
-                    return new TextureMetadata(
-                        new TextureSize(resolvedHeader.Width, resolvedHeader.Height),
-                        ReadAlphaInfo(resolvedHeader, idat.ToArray(), trns));
+                    return new PngData(resolvedHeader, idat.ToArray(), plte, trns);
             }
         }
     }
@@ -288,6 +337,136 @@ public static class PngTextureMetadataReader
         }
     }
 
+    private static void DecodeRowRgba(
+        PngHeader header,
+        byte[] row,
+        byte[]? plte,
+        byte[]? trns,
+        Span<byte> destination)
+    {
+        switch (header.ColorType)
+        {
+            case 0:
+                DecodeGrayscaleRow(header, row, trns, destination);
+                return;
+            case 2:
+                DecodeTruecolorRow(header, row, trns, destination);
+                return;
+            case 3:
+                DecodeIndexedRow(header, row, plte, trns, destination);
+                return;
+            case 4:
+                DecodeGrayscaleAlphaRow(header, row, destination);
+                return;
+            case 6:
+                DecodeRgbaRow(header, row, destination);
+                return;
+            default:
+                throw new InvalidDataException($"PNG color type {header.ColorType} is not supported.");
+        }
+    }
+
+    private static void DecodeGrayscaleRow(PngHeader header, byte[] row, byte[]? trns, Span<byte> destination)
+    {
+        var transparentSample = trns is { Length: >= 2 }
+            ? BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(0, 2))
+            : (ushort?)null;
+        for (var x = 0; x < header.Width; x++)
+        {
+            var sample = ReadSample(row, x, header.BitDepth, channels: 1, channel: 0);
+            var value = SampleToByte(sample, header.BitDepth);
+            var destinationOffset = checked(x * 4);
+            destination[destinationOffset] = value;
+            destination[destinationOffset + 1] = value;
+            destination[destinationOffset + 2] = value;
+            destination[destinationOffset + 3] = sample == transparentSample ? (byte)0 : (byte)255;
+        }
+    }
+
+    private static void DecodeTruecolorRow(PngHeader header, byte[] row, byte[]? trns, Span<byte> destination)
+    {
+        var transparentR = trns is { Length: >= 6 }
+            ? BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(0, 2))
+            : (ushort?)null;
+        var transparentG = trns is { Length: >= 6 }
+            ? BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(2, 2))
+            : (ushort?)null;
+        var transparentB = trns is { Length: >= 6 }
+            ? BinaryPrimitives.ReadUInt16BigEndian(trns.AsSpan(4, 2))
+            : (ushort?)null;
+
+        for (var x = 0; x < header.Width; x++)
+        {
+            var r = ReadSample(row, x, header.BitDepth, channels: 3, channel: 0);
+            var g = ReadSample(row, x, header.BitDepth, channels: 3, channel: 1);
+            var b = ReadSample(row, x, header.BitDepth, channels: 3, channel: 2);
+            var destinationOffset = checked(x * 4);
+            destination[destinationOffset] = SampleToByte(r, header.BitDepth);
+            destination[destinationOffset + 1] = SampleToByte(g, header.BitDepth);
+            destination[destinationOffset + 2] = SampleToByte(b, header.BitDepth);
+            destination[destinationOffset + 3] = r == transparentR && g == transparentG && b == transparentB
+                ? (byte)0
+                : (byte)255;
+        }
+    }
+
+    private static void DecodeIndexedRow(
+        PngHeader header,
+        byte[] row,
+        byte[]? plte,
+        byte[]? trns,
+        Span<byte> destination)
+    {
+        if (plte is null || plte.Length == 0 || plte.Length % 3 != 0)
+        {
+            throw new InvalidDataException("Indexed PNG is missing a valid PLTE chunk.");
+        }
+
+        for (var x = 0; x < header.Width; x++)
+        {
+            var index = ReadPackedSample(row, x, header.BitDepth);
+            var paletteOffset = checked(index * 3);
+            if (paletteOffset + 2 >= plte.Length)
+            {
+                throw new InvalidDataException($"Indexed PNG palette index {index} is outside the PLTE chunk.");
+            }
+
+            var destinationOffset = checked(x * 4);
+            destination[destinationOffset] = plte[paletteOffset];
+            destination[destinationOffset + 1] = plte[paletteOffset + 1];
+            destination[destinationOffset + 2] = plte[paletteOffset + 2];
+            destination[destinationOffset + 3] = trns is not null && index < trns.Length
+                ? trns[index]
+                : (byte)255;
+        }
+    }
+
+    private static void DecodeGrayscaleAlphaRow(PngHeader header, byte[] row, Span<byte> destination)
+    {
+        for (var x = 0; x < header.Width; x++)
+        {
+            var value = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 2, channel: 0), header.BitDepth);
+            var alpha = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 2, channel: 1), header.BitDepth);
+            var destinationOffset = checked(x * 4);
+            destination[destinationOffset] = value;
+            destination[destinationOffset + 1] = value;
+            destination[destinationOffset + 2] = value;
+            destination[destinationOffset + 3] = alpha;
+        }
+    }
+
+    private static void DecodeRgbaRow(PngHeader header, byte[] row, Span<byte> destination)
+    {
+        for (var x = 0; x < header.Width; x++)
+        {
+            var destinationOffset = checked(x * 4);
+            destination[destinationOffset] = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 4, channel: 0), header.BitDepth);
+            destination[destinationOffset + 1] = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 4, channel: 1), header.BitDepth);
+            destination[destinationOffset + 2] = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 4, channel: 2), header.BitDepth);
+            destination[destinationOffset + 3] = SampleToByte(ReadSample(row, x, header.BitDepth, channels: 4, channel: 3), header.BitDepth);
+        }
+    }
+
     private static void ScanGrayscaleAlpha(PngHeader header, byte[] row, byte[]? trns, Action<byte> addAlpha)
     {
         if (trns is null || trns.Length < 2)
@@ -419,4 +598,6 @@ public static class PngTextureMetadataReader
         byte CompressionMethod,
         byte FilterMethod,
         byte InterlaceMethod);
+
+    private readonly record struct PngData(PngHeader Header, byte[] Idat, byte[]? Plte, byte[]? Trns);
 }
