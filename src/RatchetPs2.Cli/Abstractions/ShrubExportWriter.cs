@@ -167,7 +167,9 @@ internal static class ShrubExportWriter
         var sourceId = sourceDirectory.Name;
         var searchDirectories = new[]
         {
+            new DirectoryInfo(Path.Combine(sourceDirectory.FullName, "billboard")),
             new DirectoryInfo(Path.Combine(sourceDirectory.FullName, "Textures")),
+            new DirectoryInfo(Path.Combine(sourceDirectory.FullName, "textures")),
             sourceDirectory
         };
 
@@ -190,6 +192,17 @@ internal static class ShrubExportWriter
             if (fallback is not null)
             {
                 return fallback;
+            }
+        }
+
+        foreach (var directory in searchDirectories.Where(directory => directory.Exists))
+        {
+            var extracted = directory.EnumerateFiles("tex.*.png", SearchOption.TopDirectoryOnly)
+                .OrderBy(file => file.Name, StringComparer.OrdinalIgnoreCase)
+                .FirstOrDefault();
+            if (extracted is not null)
+            {
+                return extracted;
             }
         }
 

@@ -144,7 +144,8 @@ internal static class TieGltfGeneratedNormalBuilder
         IReadOnlyList<uint> indices,
         Vector3[] indexNormals,
         bool flipDownwardHorizontalFaces,
-        bool restoreOpposedNonHorizontalFaces)
+        bool restoreOpposedNonHorizontalFaces,
+        IReadOnlySet<int>? protectedIndexOffsets = null)
     {
         var indexCount = Math.Min(indices.Count, indexNormals.Length);
         for (var i = 0; i + 2 < indexCount; i += 3)
@@ -184,6 +185,11 @@ internal static class TieGltfGeneratedNormalBuilder
 
             void RestoreIndexNormal(int indexOffset)
             {
+                if (protectedIndexOffsets?.Contains(indexOffset) == true)
+                {
+                    return;
+                }
+
                 if (Vector3.Dot(faceNormal, indexNormals[indexOffset]) < minimumDot)
                 {
                     indexNormals[indexOffset] = faceNormal;
@@ -281,17 +287,21 @@ internal static class TieGltfGeneratedNormalBuilder
     public static void WeldIndexNormalsByPosition(
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<uint> indices,
-        Vector3[] indexNormals)
+        Vector3[] indexNormals,
+        IReadOnlySet<int>? protectedIndexOffsets = null)
     {
         foreach (var indexOffsets in BuildIndexOffsetsByPosition(positions, indices, indexNormals.Length).Values)
         {
-            if (indexOffsets.Count < 2)
+            IReadOnlyList<int> unprotectedIndexOffsets = protectedIndexOffsets is null
+                ? indexOffsets
+                : indexOffsets.Where(indexOffset => !protectedIndexOffsets.Contains(indexOffset)).ToArray();
+            if (unprotectedIndexOffsets.Count < 2)
             {
                 continue;
             }
 
-            var normal = AverageIndexNormal(indexNormals, indexOffsets);
-            foreach (var indexOffset in indexOffsets)
+            var normal = AverageIndexNormal(indexNormals, unprotectedIndexOffsets);
+            foreach (var indexOffset in unprotectedIndexOffsets)
             {
                 indexNormals[indexOffset] = normal;
             }
@@ -301,17 +311,21 @@ internal static class TieGltfGeneratedNormalBuilder
     public static void SmoothCompatibleIndexNormalsByPosition(
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<uint> indices,
-        Vector3[] indexNormals)
+        Vector3[] indexNormals,
+        IReadOnlySet<int>? protectedIndexOffsets = null)
     {
         foreach (var indexOffsets in BuildIndexOffsetsByPosition(positions, indices, indexNormals.Length).Values)
         {
-            if (indexOffsets.Count < 2)
+            IReadOnlyList<int> unprotectedIndexOffsets = protectedIndexOffsets is null
+                ? indexOffsets
+                : indexOffsets.Where(indexOffset => !protectedIndexOffsets.Contains(indexOffset)).ToArray();
+            if (unprotectedIndexOffsets.Count < 2)
             {
                 continue;
             }
 
             var clusters = new List<List<int>>();
-            foreach (var indexOffset in indexOffsets)
+            foreach (var indexOffset in unprotectedIndexOffsets)
             {
                 var normal = indexNormals[indexOffset];
                 var clusterIndex = -1;

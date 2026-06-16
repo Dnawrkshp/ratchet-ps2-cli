@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text.Json;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Ties;
@@ -14,6 +15,7 @@ internal static class TieGltfDocumentBuilder
         TieGltfNormalBuildResult normalResult,
         TieGltfSourceNormalPhaseAnalysis sourceNormalPhaseAnalysis,
         TieGltfGlowBuildResult glowColorResult,
+        TieGltfAmbientBuildResult ambientIndexResult,
         IReadOnlyList<PacketIndexGroup> sourcePacketIndexGroups,
         int packetRgbaSlotCount,
         int sourceNormalPhaseWindingRepairStripCount,
@@ -31,6 +33,7 @@ internal static class TieGltfDocumentBuilder
         ArgumentNullException.ThrowIfNull(normalResult);
         ArgumentNullException.ThrowIfNull(sourceNormalPhaseAnalysis);
         ArgumentNullException.ThrowIfNull(glowColorResult);
+        ArgumentNullException.ThrowIfNull(ambientIndexResult);
         ArgumentNullException.ThrowIfNull(sourcePacketIndexGroups);
         ArgumentNullException.ThrowIfNull(profile);
 
@@ -52,6 +55,22 @@ internal static class TieGltfDocumentBuilder
             geometry.Normals,
             target: GltfBufferWriter.ArrayBufferTarget,
             includeMinMax: false);
+        var useSourceNormalMaskAttribute = geometry.SourceNormalMask.Count == geometry.Positions.Count
+            && geometry.SourceNormalMask.Any(value => value < 0.5f);
+        var sourceNormalMaskAccessor = useSourceNormalMaskAttribute
+            ? gltfBufferWriter.WriteScalarFloatAccessor(
+                geometry.SourceNormalMask,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: true)
+            : (int?)null;
+        var useSourceNormalStateAttribute = geometry.SourceNormalStates.Count == geometry.Positions.Count
+            && geometry.SourceNormalStates.Any(value => value > 0.5f);
+        var sourceNormalStateAccessor = useSourceNormalStateAttribute
+            ? gltfBufferWriter.WriteScalarFloatAccessor(
+                geometry.SourceNormalStates,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: true)
+            : (int?)null;
         var texCoordAccessor = gltfBufferWriter.WriteVector2Accessor(
             geometry.TexCoords,
             target: GltfBufferWriter.ArrayBufferTarget);
@@ -62,6 +81,14 @@ internal static class TieGltfDocumentBuilder
                 geometry.GlowColors.Select(TieGltfGlowBuilder.ToEmissionAttribute).ToArray(),
                 target: GltfBufferWriter.ArrayBufferTarget)
             : (int?)null;
+        var useAmbientIndexAttribute = geometry.AmbientIndices.Count == geometry.Positions.Count
+            && ambientIndexResult.ResolvedVertexCount > 0;
+        var ambientIndexAccessor = useAmbientIndexAttribute
+            ? gltfBufferWriter.WriteScalarFloatAccessor(
+                geometry.AmbientIndices,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: true)
+            : (int?)null;
 
         var attributes = new Dictionary<string, int>
         {
@@ -69,9 +96,21 @@ internal static class TieGltfDocumentBuilder
             ["NORMAL"] = normalAccessor,
             ["TEXCOORD_0"] = texCoordAccessor
         };
+        if (sourceNormalMaskAccessor.HasValue)
+        {
+            attributes[profile.SourceNormalAttributeName] = sourceNormalMaskAccessor.Value;
+        }
+        if (sourceNormalStateAccessor.HasValue)
+        {
+            attributes[profile.SourceNormalStateAttributeName] = sourceNormalStateAccessor.Value;
+        }
         if (glowEmissionAccessor.HasValue)
         {
             attributes[profile.GlowEmissionAttributeName] = glowEmissionAccessor.Value;
+        }
+        if (ambientIndexAccessor.HasValue)
+        {
+            attributes[profile.AmbientIndexAttributeName] = ambientIndexAccessor.Value;
         }
 
         var primitives = new List<Dictionary<string, object>>();
@@ -135,11 +174,15 @@ internal static class TieGltfDocumentBuilder
                         normalResult,
                         sourceNormalPhaseAnalysis,
                         glowColorResult,
+                        ambientIndexResult,
                         packetRgbaSlotCount,
                         sourceNormalPhaseWindingRepairStripCount,
                         sourceNormalPhaseWindingRepairTriangleCount,
                         geometry.WindingRepairResult,
                         geometry.SuppressedGeneratedNormalFallbackVertexCount,
+                        geometry.SourceNormalMask.Count(value => value < 0.5f),
+                        sourceNormalMaskAccessor.HasValue ? geometry.SourceNormalMask.Count : 0,
+                        sourceNormalStateAccessor.HasValue ? geometry.SourceNormalStates.Count : 0,
                         geometry.PacketIndexGroups.Any(group => group.UseGlowEmission),
                         gameLabel)
                 }
@@ -182,8 +225,14 @@ internal static class TieGltfDocumentBuilder
                 .Where(strip => strip.UsesPreviousStripReferencePhase)
                 .Sum(strip => strip.TriangleCount),
             SourceNormalVertexCount = normalResult.SourceNormalVertexCount,
+            SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             SourcePacketRowNormalVertexCount = normalResult.PacketRowNormalVertexCount,
             SourceTableNormalVertexCount = normalResult.TableNormalVertexCount,
+            SourceRgbaRecipeNormalVertexCount = normalResult.RgbaRecipeNormalVertexCount,
+            SourceRgbaRecipeConstantColorVertexCount = normalResult.RgbaRecipeConstantColorVertexCount,
+            SourceRgbaRecipeDegenerateBlendVertexCount = normalResult.RgbaRecipeDegenerateBlendVertexCount,
+            SourceCrossLodExactNormalVertexCount = normalResult.CrossLodExactNormalVertexCount,
+            SourceDuplicatePositionExactNormalVertexCount = normalResult.DuplicatePositionExactNormalVertexCount,
             SourceTableNormalLayout = normalResult.TableNormalLayout,
             SourceTableNormalTargetMode = normalResult.TableNormalTargetMode,
             SourceTableNormalPreserveSourceOrientation = normalResult.TableNormalPreserveSourceOrientation,
@@ -193,6 +242,7 @@ internal static class TieGltfDocumentBuilder
             SourceTableNormalInvertedAcceptedVertexCount = normalResult.TableNormalInvertedAcceptedVertexCount,
             SourceTableNormalUpperHemisphereVertexCount = normalResult.TableNormalUpperHemisphereVertexCount,
             SourceTableNormalUpperHemisphereStrongDownVertexCount = normalResult.TableNormalUpperHemisphereStrongDownVertexCount,
+            SourceNormalPhaseDominantLayout = sourceNormalPhaseAnalysis.DominantLayout?.ToString(),
             SourceNormalPhaseScoredStripCount = sourceNormalPhaseAnalysis.ScoredStripCount,
             SourceNormalPhaseCurrentVoteStripCount = sourceNormalPhaseAnalysis.CurrentVoteStripCount,
             SourceNormalPhaseInvertedVoteStripCount = sourceNormalPhaseAnalysis.InvertedVoteStripCount,
@@ -211,11 +261,57 @@ internal static class TieGltfDocumentBuilder
             WindingOpposedNormalTriangleCount = geometry.WindingRepairResult.OpposedNormalTriangleCount,
             WindingUpperHorizontalTriangleCount = geometry.WindingRepairResult.UpperHorizontalTriangleCount,
             GeneratedNormalFallbackVertexCount = sourcePositionCount - normalResult.SourceNormalVertexCount,
+            ExpandedGeneratedNormalFallbackVertexCount = geometry.SourceNormalMask.Count(value => value < 0.5f),
+            SourceNormalMaskAttributeCount = sourceNormalMaskAccessor.HasValue ? geometry.SourceNormalMask.Count : 0,
+            SourceNormalStateAttributeCount = sourceNormalStateAccessor.HasValue ? geometry.SourceNormalStates.Count : 0,
+            SourceNormalStateMissingVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.Missing),
+            SourceNormalStateTableExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.TableExact),
+            SourceNormalStatePacketRowExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.PacketRowExact),
+            SourceNormalStateAmbiguousRemapVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.AmbiguousRemap),
+            SourceNormalStateRejectedRemapVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RejectedRemap),
+            SourceNormalStateCrossLodExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.CrossLodExact),
+            SourceNormalStateDuplicatePositionExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.DuplicatePositionExact),
+            SourceNormalStateRgbaRecipeConstantColorVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RgbaRecipeConstantColor),
+            SourceNormalStateRgbaRecipeDegenerateBlendVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RgbaRecipeDegenerateBlend),
+            SourceNormalMissingDecodedDinkyVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex?.Kind == TiePacketDecodedVertexKind.Dinky),
+            SourceNormalMissingDecodedFatVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex?.Kind == TiePacketDecodedVertexKind.Fat),
+            SourceNormalMissingPrimaryAddressVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex is null
+                    && vertex.MappingKind == TieLogicalVertexMappingKind.PrimaryRowAddress),
+            SourceNormalMissingSecondaryAddressVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex is null
+                    && vertex.MappingKind == TieLogicalVertexMappingKind.SecondaryRowAddress),
             SuppressedGeneratedNormalFallbackVertexCount = geometry.SuppressedGeneratedNormalFallbackVertexCount,
             DecodedVertexNormalCount = tie.VertexNormals.Count,
             DecodedVertexNormalRemapCount = tie.VertexNormalRemaps.Count,
             PacketRgbaSlotCount = packetRgbaSlotCount,
             VertexColor0AccessorCount = 0,
+            AmbientWordCount = ambientIndexResult.AmbientWordCount,
+            AmbientSlotCount = ambientIndexResult.AmbientSlotCount,
+            AmbientNormalIndexOffset = ambientIndexResult.NormalIndexOffset,
+            AmbientIndexTargetMode = ambientIndexResult.TargetMode,
+            AmbientIndexAccessorCount = ambientIndexAccessor.HasValue ? geometry.AmbientIndices.Count : 0,
+            ResolvedAmbientIndexVertexCount = ambientIndexResult.ResolvedVertexCount,
+            ResolvedAmbientIndexIndexCount = ambientIndexResult.ResolvedIndexCount,
+            AmbientIndexFallbackResolvedVertexCount = ambientIndexResult.FallbackResolvedVertexCount,
+            AmbientIndexOutOfRangeVertexCount = ambientIndexResult.OutOfRangeVertexCount,
+            AmbientColorRecipeCount = ambientIndexResult.ColorRecipes.Count,
+            AmbientColorAverage2RecipeCount = ambientIndexResult.ColorRecipes.Count(
+                recipe => string.Equals(recipe.Kind, TieRgbaRemapOperationKind.Average2.ToString(), StringComparison.Ordinal)),
             GlowRgba = FormatRgba(tie.Header.GlowRgba),
             GlowRgbaColor = BuildRgbaDiagnostic(TieRgba32.FromRaw(tie.Header.GlowRgba)),
             DecodedGlowRgbaRemapCount = tie.GlowRgbaRemaps.Count,
@@ -260,8 +356,10 @@ internal static class TieGltfDocumentBuilder
                 strip.TriangleCount,
                 strip.UsesPreviousStripReferencePhase,
                 strip.FirstToken,
+                strip.PacketDinkyUploadRemappedVertexCount,
                 strip.LogicalRemappedVertexCount,
                 strip.PacketRowRemappedVertexCount,
+                strip.PacketDinkyUploadNormalRemapChunks,
                 strip.LogicalNormalRemapChunks,
                 strip.PacketRowNormalRemapChunks,
                 strip.UsedNormalRemapChunks,
@@ -334,8 +432,39 @@ internal static class TieGltfDocumentBuilder
             rgba.G,
             rgba.B,
             rgba.A,
-            Gltf = new[] { rgba.R / 255f, rgba.G / 255f, rgba.B / 255f, Math.Min(1f, rgba.A / 128f) }
+            Gltf = new[]
+            {
+                Ps2Color.NormalizeByteComponent(rgba.R),
+                Ps2Color.NormalizeByteComponent(rgba.G),
+                Ps2Color.NormalizeByteComponent(rgba.B),
+                Ps2Color.NormalizeOpacityAlpha(rgba.A)
+            }
         };
+    }
+
+    private static int CountSourceNormalState(GltfGeometry geometry, TieGltfSourceNormalState state)
+    {
+        return geometry.SourceNormalStates.Count(value => MathF.Abs(value - (float)state) < 0.5f);
+    }
+
+    private static int CountSourceNormalState(
+        IReadOnlyList<TieGltfSourceNormalState> states,
+        TieGltfSourceNormalState state)
+    {
+        return states.Count(value => value == state);
+    }
+
+    private static int CountSourceNormalStateVertices(
+        TieLodTopology topology,
+        IReadOnlyList<TieGltfSourceNormalState> states,
+        TieGltfSourceNormalState state,
+        Func<TieLogicalVertex, bool> predicate)
+    {
+        return topology.LogicalVertices.Count(vertex =>
+            vertex.LogicalVertexIndex >= 0
+            && vertex.LogicalVertexIndex < states.Count
+            && states[vertex.LogicalVertexIndex] == state
+            && predicate(vertex));
     }
 
     private static string FormatRgba(int rawRgba)
@@ -1220,11 +1349,15 @@ internal static class TieGltfDocumentBuilder
         TieGltfNormalBuildResult normalResult,
         TieGltfSourceNormalPhaseAnalysis sourceNormalPhaseAnalysis,
         TieGltfGlowBuildResult glowColorResult,
+        TieGltfAmbientBuildResult ambientIndexResult,
         int packetRgbaSlotCount,
         int sourceNormalPhaseWindingRepairStripCount,
         int sourceNormalPhaseWindingRepairTriangleCount,
         TieGltfWindingRepairResult windingRepairResult,
         int suppressedGeneratedNormalFallbackVertexCount,
+        int expandedGeneratedNormalFallbackVertexCount,
+        int sourceNormalMaskAttributeCount,
+        int sourceNormalStateAttributeCount,
         bool usesGlowEmission,
         string gameLabel)
     {
@@ -1245,8 +1378,14 @@ internal static class TieGltfDocumentBuilder
                 .Where(strip => strip.UsesPreviousStripReferencePhase)
                 .Sum(strip => strip.TriangleCount),
             normalResult.SourceNormalVertexCount,
+            SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             normalResult.PacketRowNormalVertexCount,
             normalResult.TableNormalVertexCount,
+            normalResult.RgbaRecipeNormalVertexCount,
+            normalResult.RgbaRecipeConstantColorVertexCount,
+            normalResult.RgbaRecipeDegenerateBlendVertexCount,
+            normalResult.CrossLodExactNormalVertexCount,
+            normalResult.DuplicatePositionExactNormalVertexCount,
             normalResult.TableNormalLayout,
             normalResult.TableNormalTargetMode,
             normalResult.TableNormalPreserveSourceOrientation,
@@ -1256,6 +1395,7 @@ internal static class TieGltfDocumentBuilder
             normalResult.TableNormalInvertedAcceptedVertexCount,
             normalResult.TableNormalUpperHemisphereVertexCount,
             normalResult.TableNormalUpperHemisphereStrongDownVertexCount,
+            SourceNormalPhaseDominantLayout = sourceNormalPhaseAnalysis.DominantLayout?.ToString(),
             SourceNormalPhaseScoredStripCount = sourceNormalPhaseAnalysis.ScoredStripCount,
             SourceNormalPhaseCurrentVoteStripCount = sourceNormalPhaseAnalysis.CurrentVoteStripCount,
             SourceNormalPhaseInvertedVoteStripCount = sourceNormalPhaseAnalysis.InvertedVoteStripCount,
@@ -1273,10 +1413,61 @@ internal static class TieGltfDocumentBuilder
             WindingLocalInwardTriangleCount = windingRepairResult.LocalInwardTriangleCount,
             WindingOpposedNormalTriangleCount = windingRepairResult.OpposedNormalTriangleCount,
             WindingUpperHorizontalTriangleCount = windingRepairResult.UpperHorizontalTriangleCount,
+            ExpandedGeneratedNormalFallbackVertexCount = expandedGeneratedNormalFallbackVertexCount,
+            SourceNormalMaskAttributeCount = sourceNormalMaskAttributeCount,
+            SourceNormalStateAttributeCount = sourceNormalStateAttributeCount,
+            SourceNormalStateMissingVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.Missing),
+            SourceNormalStateTableExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.TableExact),
+            SourceNormalStatePacketRowExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.PacketRowExact),
+            SourceNormalStateAmbiguousRemapVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.AmbiguousRemap),
+            SourceNormalStateRejectedRemapVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RejectedRemap),
+            SourceNormalStateCrossLodExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.CrossLodExact),
+            SourceNormalStateDuplicatePositionExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.DuplicatePositionExact),
+            SourceNormalStateRgbaRecipeConstantColorVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RgbaRecipeConstantColor),
+            SourceNormalStateRgbaRecipeDegenerateBlendVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RgbaRecipeDegenerateBlend),
+            SourceNormalMissingDecodedDinkyVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex?.Kind == TiePacketDecodedVertexKind.Dinky),
+            SourceNormalMissingDecodedFatVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex?.Kind == TiePacketDecodedVertexKind.Fat),
+            SourceNormalMissingPrimaryAddressVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex is null
+                    && vertex.MappingKind == TieLogicalVertexMappingKind.PrimaryRowAddress),
+            SourceNormalMissingSecondaryAddressVertexCount = CountSourceNormalStateVertices(
+                topology,
+                normalResult.SourceNormalVertexStates,
+                TieGltfSourceNormalState.Missing,
+                vertex => vertex.DecodedVertex is null
+                    && vertex.MappingKind == TieLogicalVertexMappingKind.SecondaryRowAddress),
             SuppressedGeneratedNormalFallbackVertexCount = suppressedGeneratedNormalFallbackVertexCount,
             DecodedVertexNormalCount = tie.VertexNormals.Count,
             DecodedVertexNormalRemapCount = tie.VertexNormalRemaps.Count,
             PacketRgbaSlotCount = packetRgbaSlotCount,
+            AmbientWordCount = ambientIndexResult.AmbientWordCount,
+            AmbientSlotCount = ambientIndexResult.AmbientSlotCount,
+            AmbientNormalIndexOffset = ambientIndexResult.NormalIndexOffset,
+            AmbientIndexTargetMode = ambientIndexResult.TargetMode,
+            AmbientIndexAccessorCount = ambientIndexResult.ResolvedIndexCount > 0
+                ? ambientIndexResult.IndexIndices.Count
+                : ambientIndexResult.ResolvedVertexCount > 0
+                    ? ambientIndexResult.Indices.Count
+                    : 0,
+            ResolvedAmbientIndexVertexCount = ambientIndexResult.ResolvedVertexCount,
+            ResolvedAmbientIndexIndexCount = ambientIndexResult.ResolvedIndexCount,
+            AmbientIndexFallbackResolvedVertexCount = ambientIndexResult.FallbackResolvedVertexCount,
+            AmbientIndexOutOfRangeVertexCount = ambientIndexResult.OutOfRangeVertexCount,
+            AmbientColorRecipeCount = ambientIndexResult.ColorRecipes.Count,
+            AmbientColorAverage2RecipeCount = ambientIndexResult.ColorRecipes.Count(
+                recipe => string.Equals(recipe.Kind, TieRgbaRemapOperationKind.Average2.ToString(), StringComparison.Ordinal)),
+            AmbientColorRecipes = ambientIndexResult.ColorRecipes,
             GlowRgba = FormatRgba(tie.Header.GlowRgba),
             GlowRgbaColor = BuildRgbaDiagnostic(glowColorResult.Rgba),
             DecodedGlowRgbaRemapCount = tie.GlowRgbaRemaps.Count,

@@ -16,7 +16,7 @@ internal static class TfragExportGltfBatchCommand
         var gameOption = CommonOptions.Game();
         var inputRootOption = new Option<DirectoryInfo>("--input-root")
         {
-            Description = "Root directory to scan recursively for terrain.bin tfrag files.",
+            Description = "Root directory to scan recursively for tfrag.bin files.",
             Required = true
         };
         var outputRootOption = new Option<DirectoryInfo>("--output-root")
@@ -24,11 +24,12 @@ internal static class TfragExportGltfBatchCommand
             Description = "Directory to write exported glTFs and the viewer manifest.",
             Required = true
         };
-        var terrainFileNameOption = new Option<string>("--terrain-file-name")
+        var tfragFileNameOption = new Option<string>("--tfrag-file-name")
         {
-            Description = "Tfrag terrain binary file name to scan for. Defaults to terrain.bin.",
-            DefaultValueFactory = _ => "terrain.bin"
+            Description = "Tfrag binary file name to scan for. Defaults to tfrag.bin.",
+            DefaultValueFactory = _ => "tfrag.bin"
         };
+        tfragFileNameOption.Aliases.Add("--terrain-file-name");
         var manifestNameOption = new Option<string>("--manifest-name")
         {
             Description = "Viewer manifest file name. Defaults to manifest.json.",
@@ -41,11 +42,11 @@ internal static class TfragExportGltfBatchCommand
 
         var command = CliCommandBuilder.Create(
             "export-gltf-batch",
-            "Export a directory of tfrag terrain files to glTF and write a viewer manifest.",
+            "Export a directory of tfrag files to glTF and write a viewer manifest.",
             gameOption,
             inputRootOption,
             outputRootOption,
-            terrainFileNameOption,
+            tfragFileNameOption,
             manifestNameOption,
             limitOption);
 
@@ -54,7 +55,7 @@ internal static class TfragExportGltfBatchCommand
             var gameValue = parseResult.GetValue(gameOption);
             var inputRoot = parseResult.GetValue(inputRootOption);
             var outputRoot = parseResult.GetValue(outputRootOption);
-            var terrainFileName = parseResult.GetValue(terrainFileNameOption);
+            var tfragFileName = parseResult.GetValue(tfragFileNameOption);
             var manifestName = parseResult.GetValue(manifestNameOption);
             var limit = parseResult.GetValue(limitOption);
 
@@ -91,9 +92,9 @@ internal static class TfragExportGltfBatchCommand
                 return;
             }
 
-            if (string.IsNullOrWhiteSpace(terrainFileName))
+            if (string.IsNullOrWhiteSpace(tfragFileName))
             {
-                parseResult.GetResult(terrainFileNameOption)?.AddError("--terrain-file-name cannot be empty.");
+                parseResult.GetResult(tfragFileNameOption)?.AddError("--tfrag-file-name cannot be empty.");
                 return;
             }
 
@@ -112,13 +113,13 @@ internal static class TfragExportGltfBatchCommand
             outputRoot.Create();
             var manifestFile = new FileInfo(Path.Combine(outputRoot.FullName, manifestName));
             var manifestDirectory = manifestFile.Directory ?? outputRoot;
-            var terrainFiles = inputRoot
-                .EnumerateFiles(terrainFileName, SearchOption.AllDirectories)
+            var tfragFiles = inputRoot
+                .EnumerateFiles(tfragFileName, SearchOption.AllDirectories)
                 .OrderBy(file => Path.GetRelativePath(inputRoot.FullName, file.FullName), StringComparer.Ordinal)
                 .Take(limit ?? int.MaxValue)
                 .ToArray();
 
-            var entries = new List<object>(terrainFiles.Length);
+            var entries = new List<object>(tfragFiles.Length);
             var totalStopwatch = Stopwatch.StartNew();
             var successfulDurations = new List<double>();
             var totalInputBytes = 0L;
@@ -126,25 +127,25 @@ internal static class TfragExportGltfBatchCommand
             var succeeded = 0;
             var failed = 0;
 
-            for (var i = 0; i < terrainFiles.Length; i++)
+            for (var i = 0; i < tfragFiles.Length; i++)
             {
-                var terrainFile = terrainFiles[i];
-                var relativeSourceDirectory = Path.GetRelativePath(inputRoot.FullName, terrainFile.DirectoryName ?? inputRoot.FullName);
+                var tfragFile = tfragFiles[i];
+                var relativeSourceDirectory = Path.GetRelativePath(inputRoot.FullName, tfragFile.DirectoryName ?? inputRoot.FullName);
                 var sourceDirectoryName = NormalizeId(relativeSourceDirectory, i);
                 var outputDirectory = new DirectoryInfo(Path.Combine(outputRoot.FullName, relativeSourceDirectory));
                 outputDirectory.Create();
 
-                var gltfFile = new FileInfo(Path.Combine(outputDirectory.FullName, "terrain.gltf"));
-                var bufferFile = new FileInfo(Path.Combine(outputDirectory.FullName, "terrain.buffer.bin"));
-                var diagnosticsFile = new FileInfo(Path.Combine(outputDirectory.FullName, "terrain.diagnostics.json"));
+                var gltfFile = new FileInfo(Path.Combine(outputDirectory.FullName, "tfrag.gltf"));
+                var bufferFile = new FileInfo(Path.Combine(outputDirectory.FullName, "tfrag.buffer.bin"));
+                var diagnosticsFile = new FileInfo(Path.Combine(outputDirectory.FullName, "tfrag.diagnostics.json"));
                 var itemStopwatch = Stopwatch.StartNew();
 
                 try
                 {
-                    using var input = terrainFile.OpenRead();
+                    using var input = tfragFile.OpenRead();
                     var terrain = TfragTerrainReader.Read(input);
                     var textureResources = TextureResourcePreparer.PrepareExternalTextures(
-                        terrainFile.Directory,
+                        tfragFile.Directory,
                         outputDirectory,
                         normalizePs2FullOpacityAlpha: TfragTextureAlpha.FullOpacityAlpha);
                     var export = TfragGltfExporter.Export(
@@ -166,11 +167,11 @@ internal static class TfragExportGltfBatchCommand
 
                     succeeded++;
                     successfulDurations.Add(itemStopwatch.Elapsed.TotalMilliseconds);
-                    totalInputBytes += terrainFile.Length;
+                    totalInputBytes += tfragFile.Length;
                     totalOutputBytes += export.GltfBytes.Length + export.BinBytes.Length + export.DiagnosticsBytes.Length;
                     entries.Add(BuildSuccessEntry(
                         sourceDirectoryName,
-                        terrainFile,
+                        tfragFile,
                         gltfFile,
                         bufferFile,
                         diagnosticsFile,
@@ -193,16 +194,16 @@ internal static class TfragExportGltfBatchCommand
                         Game = gameId.ToString(),
                         Status = "failed",
                         SourceDirectory = CliPathUtils.ToUriPath(relativeSourceDirectory),
-                        SourceTerrain = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, terrainFile.FullName)),
+                        SourceTfrag = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, tfragFile.FullName)),
                         ConversionMs = itemStopwatch.Elapsed.TotalMilliseconds,
                         Error = ex.Message
                     });
                 }
 
-                if ((i + 1) % 25 == 0 || i + 1 == terrainFiles.Length)
+                if ((i + 1) % 25 == 0 || i + 1 == tfragFiles.Length)
                 {
                     Console.WriteLine(
-                        $"Processed {i + 1}/{terrainFiles.Length} tfrag terrain file(s) ({succeeded} ok, {failed} failed) in {totalStopwatch.Elapsed.TotalSeconds:F1}s.");
+                        $"Processed {i + 1}/{tfragFiles.Length} tfrag file(s) ({succeeded} ok, {failed} failed) in {totalStopwatch.Elapsed.TotalSeconds:F1}s.");
                 }
             }
 
@@ -214,10 +215,10 @@ internal static class TfragExportGltfBatchCommand
                 Game = gameId.ToString(),
                 SourceRoot = CliPathUtils.ToUriPath(inputRoot.FullName),
                 OutputRoot = CliPathUtils.ToUriPath(outputRoot.FullName),
-                TerrainFileName = terrainFileName,
+                TfragFileName = tfragFileName,
                 Totals = new
                 {
-                    Found = terrainFiles.Length,
+                    Found = tfragFiles.Length,
                     Succeeded = succeeded,
                     Failed = failed,
                     TotalMs = totalStopwatch.Elapsed.TotalMilliseconds,
@@ -242,7 +243,7 @@ internal static class TfragExportGltfBatchCommand
 
     private static object BuildSuccessEntry(
         string id,
-        FileInfo terrainFile,
+        FileInfo tfragFile,
         FileInfo gltfFile,
         FileInfo bufferFile,
         FileInfo diagnosticsFile,
@@ -272,12 +273,12 @@ internal static class TfragExportGltfBatchCommand
             Game = gameId.ToString(),
             Status = "ok",
             SourceDirectory = CliPathUtils.ToUriPath(relativeSourceDirectory),
-            SourceTerrain = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, terrainFile.FullName)),
+            SourceTfrag = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, tfragFile.FullName)),
             Gltf = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, gltfFile.FullName)),
             Buffer = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, bufferFile.FullName)),
             Diagnostics = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, diagnosticsFile.FullName)),
             ConversionMs = conversionMs,
-            InputBytes = terrainFile.Length,
+            InputBytes = tfragFile.Length,
             OutputBytes = export.GltfBytes.Length + export.BinBytes.Length + export.DiagnosticsBytes.Length,
             Header = new
             {
@@ -334,7 +335,7 @@ internal static class TfragExportGltfBatchCommand
     {
         if (string.IsNullOrWhiteSpace(relativeSourceDirectory) || relativeSourceDirectory == ".")
         {
-            return $"terrain_{index:0000}";
+            return $"tfrag_{index:0000}";
         }
 
         return CliPathUtils.ToUriPath(relativeSourceDirectory);

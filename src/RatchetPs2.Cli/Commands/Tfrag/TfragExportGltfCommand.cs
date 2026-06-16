@@ -10,11 +10,11 @@ internal static class TfragExportGltfCommand
     public static Command Build()
     {
         var gameOption = CommonOptions.Game();
-        var inputOption = CommonOptions.InputFile("Path to a terrain.bin tfrag binary.");
+        var inputOption = CommonOptions.InputFile("Path to a tfrag.bin binary.");
         var outputOption = CommonOptions.OutputFile("Path to write the exported .gltf file.");
         var textureDirectoryOption = new Option<DirectoryInfo?>("--texture-directory")
         {
-            Description = "Directory containing external tfrag PNG textures to reference from the exported glTF. Supports tex.####.0.png names. Defaults to the input terrain's directory when matching PNGs are present."
+            Description = "Directory containing external tfrag PNG textures to reference from the exported glTF. Supports tex.####.0.png names. Defaults to the input tfrag directory when matching PNGs are present."
         };
 
         var command = CliCommandBuilder.Create(

@@ -34,9 +34,9 @@ public static class TieClassReader
         var vertexNormalRemaps = TieVertexNormalReader.ReadRemaps(
             bytes,
             header,
-            packetDataBlocks,
             lodTopologies,
             vertexNormals.Count);
+        var rgbaRemapOperations = TieRgbaRemapOperationReader.Read(bytes, header);
         var (glowRgbaRemaps, glowRgbaVertices) = TieGlowRgbaReader.Read(
             bytes,
             header,
@@ -55,6 +55,7 @@ public static class TieClassReader
             LodTopologies = lodTopologies,
             VertexNormals = vertexNormals,
             VertexNormalRemaps = vertexNormalRemaps,
+            RgbaRemapOperations = rgbaRemapOperations,
             GlowRgbaRemaps = glowRgbaRemaps,
             GlowRgbaVertices = glowRgbaVertices,
             Shaders = shaders,

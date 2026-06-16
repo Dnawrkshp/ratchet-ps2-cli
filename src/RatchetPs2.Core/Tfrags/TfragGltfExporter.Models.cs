@@ -5,6 +5,11 @@ namespace RatchetPs2.Core.Tfrags;
 
 public static partial class TfragGltfExporter
 {
+    public const string LightSelectorAttributeName = "_DL_LIGHT_SELECTOR";
+    public const string LightBaseColorAttributeName = "_DL_LIGHT_BASE_COLOR";
+    public const string LightNormalAttributeName = "_DL_LIGHT_NORMAL";
+    public const string LightPostScaleAttributeName = "_DL_LIGHT_POST_SCALE";
+
     private sealed record TfragDecodedTerrain(
         IReadOnlyList<TfragChunkLodMesh> Meshes,
         IReadOnlyList<TfragChunkLodDecode> Decodes)
@@ -71,12 +76,14 @@ public static partial class TfragGltfExporter
             TfragMaterialKey materialKey,
             TfragTopologyPacket topologyPacket,
             TfragTopologyDecode topologyDecode,
-            TfragMaterialRange materialRange)
+            TfragMaterialRange materialRange,
+            TfragNormalBuildResult normalBuildResult)
         {
             MaterialKey = materialKey;
             TopologyPacket = topologyPacket;
             TopologyDecode = topologyDecode;
             MaterialRange = materialRange;
+            NormalBuildResult = normalBuildResult;
         }
 
         public TfragMaterialKey MaterialKey { get; }
@@ -93,6 +100,10 @@ public static partial class TfragGltfExporter
 
         public TfragMaterialRange MaterialRange { get; }
 
+        public TfragNormalBuildResult NormalBuildResult { get; }
+
+        public int WindingCorrectedTriangleCount { get; set; }
+
         public List<Vector3> Positions { get; } = [];
 
         public List<Vector3> Normals { get; } = [];
@@ -100,6 +111,14 @@ public static partial class TfragGltfExporter
         public List<Vector2> TexCoords { get; } = [];
 
         public List<Vector4> Colors { get; } = [];
+
+        public List<float> LightSelectors { get; } = [];
+
+        public List<Vector4> LightBaseColors { get; } = [];
+
+        public List<Vector3> LightNormals { get; } = [];
+
+        public List<float> LightPostScales { get; } = [];
 
         public List<uint> Indices { get; } = [];
     }
@@ -121,7 +140,45 @@ public static partial class TfragGltfExporter
 
     private readonly record struct TfragTextureWrapMode(bool ClampU, bool ClampV);
 
-    private readonly record struct TfragExpandedVertexKey(int SourceIndex, Vector2 TexCoord);
+    private readonly record struct TfragPrimitiveVertexKey(
+        int SourceIndex,
+        int ReferenceAddress,
+        int NormalX,
+        int NormalY,
+        int NormalZ)
+    {
+        public static TfragPrimitiveVertexKey From(uint sourceIndex, int referenceAddress, Vector3 normal)
+        {
+            const float scale = 1000000f;
+            return new TfragPrimitiveVertexKey(
+                checked((int)sourceIndex),
+                referenceAddress,
+                (int)MathF.Round(normal.X * scale),
+                (int)MathF.Round(normal.Y * scale),
+                (int)MathF.Round(normal.Z * scale));
+        }
+    }
+
+    private readonly record struct TfragExpandedVertexKey(
+        int SourceIndex,
+        int U,
+        int V,
+        int NormalX,
+        int NormalY,
+        int NormalZ)
+    {
+        public static TfragExpandedVertexKey From(int sourceIndex, Vector2 texCoord, Vector3 normal)
+        {
+            const float scale = 1000000f;
+            return new TfragExpandedVertexKey(
+                sourceIndex,
+                (int)MathF.Round(texCoord.X * scale),
+                (int)MathF.Round(texCoord.Y * scale),
+                (int)MathF.Round(normal.X * scale),
+                (int)MathF.Round(normal.Y * scale),
+                (int)MathF.Round(normal.Z * scale));
+        }
+    }
 
     private readonly record struct TfragInterpretedAlpha(
         bool HasOpacityAlpha,

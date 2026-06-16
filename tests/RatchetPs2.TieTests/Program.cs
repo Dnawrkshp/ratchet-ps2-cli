@@ -32,10 +32,10 @@ Expect(tie.Header.VertexNormalsOffset == 0x2030, $"expected vertex normals offse
 Expect(tie.Header.VertexNormalsCount == 334, $"expected 334 vertex normals, got {tie.Header.VertexNormalsCount}");
 Expect(tie.VertexNormals.Count == tie.Header.VertexNormalsCount, $"expected {tie.Header.VertexNormalsCount} decoded vertex normals, got {tie.VertexNormals.Count}");
 Expect(tie.VertexNormals[0].Offset == 0x2040, $"expected first vertex normal offset 0x2040, got 0x{tie.VertexNormals[0].Offset:X}");
-Expect(tie.VertexNormals[0].X == 16386, $"expected first vertex normal X 16386, got {tie.VertexNormals[0].X}");
-Expect(tie.VertexNormals[0].Y == 72, $"expected first vertex normal Y 72, got {tie.VertexNormals[0].Y}");
-Expect(tie.VertexNormals[0].Z == 30720, $"expected first vertex normal Z 30720, got {tie.VertexNormals[0].Z}");
-Expect(tie.VertexNormals[0].W == 11584, $"expected first vertex normal W 11584, got {tie.VertexNormals[0].W}");
+Expect(tie.VertexNormals[0].X == 2, $"expected first vertex normal X 2, got {tie.VertexNormals[0].X}");
+Expect(tie.VertexNormals[0].Y == 64, $"expected first vertex normal Y 64, got {tie.VertexNormals[0].Y}");
+Expect(tie.VertexNormals[0].Z == 72, $"expected first vertex normal Z 72, got {tie.VertexNormals[0].Z}");
+Expect(tie.VertexNormals[0].W == 0, $"expected first vertex normal W 0, got {tie.VertexNormals[0].W}");
 Expect(tie.VertexNormalRemaps.Count > 0, "expected decoded vertex normal remaps");
 Expect(
     tie.VertexNormalRemaps.Any(remap => remap.PacketIndex == 0 && remap.VertexRowIndex == 29 && remap.NormalIndex == 42),
@@ -3409,11 +3409,13 @@ void ValidateGlowRgbaExport(
             && EmissiveFactorMatches(emissiveFactor, expectedEmissionFactor),
             $"{relativePath}: expected LOD{lodIndex} glow-emissive material to include normalized glow RGBA emissiveFactor");
         Expect(
-            !material.TryGetProperty("emissiveTexture", out _),
-            $"{relativePath}: expected LOD{lodIndex} glow-emissive material to use uniform emission instead of emissiveTexture modulation");
+            material.GetProperty("pbrMetallicRoughness").TryGetProperty("baseColorTexture", out var baseColorTexture)
+            && material.TryGetProperty("emissiveTexture", out var emissiveTexture)
+            && emissiveTexture.GetProperty("index").GetInt32() == baseColorTexture.GetProperty("index").GetInt32(),
+            $"{relativePath}: expected LOD{lodIndex} glow-emissive material to modulate emission with the base texture");
         Expect(
-            material.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor")[0].GetSingle() == 0f,
-            $"{relativePath}: expected LOD{lodIndex} glow-emissive material to use emission-only base color preview");
+            material.GetProperty("pbrMetallicRoughness").GetProperty("baseColorFactor")[0].GetSingle() == 1f,
+            $"{relativePath}: expected LOD{lodIndex} glow-emissive material to keep the textured base color visible");
         Expect(
             material.TryGetProperty("extensions", out var materialExtensions)
             && materialExtensions.TryGetProperty("KHR_materials_emissive_strength", out var emissiveStrengthExtension)

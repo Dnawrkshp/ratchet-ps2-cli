@@ -86,6 +86,35 @@ public sealed class GltfBufferWriter
         return AddAccessor(CreateAccessor(bufferView, FloatComponentType, values.Count, "VEC4"));
     }
 
+    public int WriteScalarFloatAccessor(
+        IReadOnlyList<float> values,
+        int target = ArrayBufferTarget,
+        bool includeMinMax = false)
+    {
+        ArgumentNullException.ThrowIfNull(values);
+
+        Align(4);
+        var byteOffset = checked((int)_writer.BaseStream.Position);
+        var min = float.MaxValue;
+        var max = float.MinValue;
+        foreach (var value in values)
+        {
+            _writer.Write(value);
+            min = MathF.Min(min, value);
+            max = MathF.Max(max, value);
+        }
+
+        var bufferView = AddBufferView(byteOffset, values.Count * sizeof(float), target);
+        var accessor = CreateAccessor(bufferView, FloatComponentType, values.Count, "SCALAR");
+        if (includeMinMax)
+        {
+            accessor["min"] = new[] { values.Count == 0 ? 0f : min };
+            accessor["max"] = new[] { values.Count == 0 ? 0f : max };
+        }
+
+        return AddAccessor(accessor);
+    }
+
     public int WriteNormalizedByteVector4Accessor(IReadOnlyList<Vector4> values, int target = ArrayBufferTarget)
     {
         ArgumentNullException.ThrowIfNull(values);

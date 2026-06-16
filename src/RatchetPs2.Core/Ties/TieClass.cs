@@ -9,6 +9,7 @@ public sealed class TieClass
     public IReadOnlyList<TieLodTopology> LodTopologies { get; init; } = [];
     public IReadOnlyList<TieVertexNormal> VertexNormals { get; init; } = [];
     public IReadOnlyList<TieVertexNormalRemap> VertexNormalRemaps { get; init; } = [];
+    public IReadOnlyList<TieRgbaRemapOperation> RgbaRemapOperations { get; init; } = [];
     public IReadOnlyList<TieGlowRgbaRemap> GlowRgbaRemaps { get; init; } = [];
     public IReadOnlyList<TieGlowRgbaVertex> GlowRgbaVertices { get; init; } = [];
     public IReadOnlyList<TieShader> Shaders { get; init; } = [];
@@ -401,6 +402,7 @@ public sealed class TieVertexNormal
     public required short Y { get; init; }
     public required short Z { get; init; }
     public required short W { get; init; }
+    public ushort Packed { get; init; }
 }
 
 public sealed class TieVertexNormalRemap
@@ -414,6 +416,29 @@ public sealed class TieVertexNormalRemap
     public int? LogicalVertexIndex { get; init; }
     public required ushort RawNormal { get; init; }
     public required ushort RawVertex { get; init; }
+}
+
+public enum TieRgbaRemapOperationKind
+{
+    DirectCopy,
+    Average2,
+    WeightedAverage3To1,
+    WeightedAverage2To1To1,
+    Average4
+}
+
+public sealed class TieRgbaRemapOperation
+{
+    public required int LodIndex { get; init; }
+    public required int GroupIndex { get; init; }
+    public required int OperationIndex { get; init; }
+    public required int Offset { get; init; }
+    public required TieRgbaRemapOperationKind Kind { get; init; }
+    public required int GroupTargetSlotBase { get; init; }
+    public required int TargetSlot { get; init; }
+    public required int[] SourceSlots { get; init; }
+
+    public int TargetCacheSlot => checked(GroupTargetSlotBase + TargetSlot);
 }
 
 public readonly record struct TieRgba32(byte R, byte G, byte B, byte A)

@@ -456,8 +456,7 @@ public static class TextureConverter
     {
         for (var i = 3; i < rgba.Length; i += 4)
         {
-            var alpha = rgba[i] * 2;
-            rgba[i] = (byte)Math.Min(byte.MaxValue, alpha);
+            rgba[i] = Ps2Color.ExpandOpacityAlpha(rgba[i]);
         }
     }
 

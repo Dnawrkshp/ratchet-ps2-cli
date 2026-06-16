@@ -1,4 +1,5 @@
 using System.Numerics;
+using RatchetPs2.Core.Textures;
 
 namespace RatchetPs2.Core.Ties;
 
@@ -40,8 +41,8 @@ internal static class TieGltfGlowBuilder
 
     public static float GetEmissionStrength(TieRgba32 rgba)
     {
-        var rgbMagnitude = Math.Max(rgba.R, Math.Max(rgba.G, rgba.B)) / 128f;
-        return rgba.A / 128f * rgbMagnitude * GlowEmissionStrengthScale;
+        var rgbMagnitude = Math.Max(rgba.R, Math.Max(rgba.G, rgba.B)) / (float)Ps2Color.FullIntensity;
+        return rgba.A / (float)Ps2Color.FullOpacityAlpha * rgbMagnitude * GlowEmissionStrengthScale;
     }
 
     public static Vector4 ToEmissionAttribute(Vector4 color)
@@ -57,7 +58,7 @@ internal static class TieGltfGlowBuilder
             return Vector4.Zero;
         }
 
-        var strength = color.W * (max * 255f / 128f) * GlowEmissionStrengthScale;
+        var strength = color.W * (max * byte.MaxValue / Ps2Color.FullIntensity) * GlowEmissionStrengthScale;
         return new Vector4(color.X / max, color.Y / max, color.Z / max, strength);
     }
 
@@ -94,10 +95,10 @@ internal static class TieGltfGlowBuilder
     private static Vector4 ToGltfColor(TieRgba32 rgba)
     {
         return new Vector4(
-            rgba.R / 255f,
-            rgba.G / 255f,
-            rgba.B / 255f,
-            Math.Min(1f, rgba.A / 128f));
+            Ps2Color.NormalizeByteComponent(rgba.R),
+            Ps2Color.NormalizeByteComponent(rgba.G),
+            Ps2Color.NormalizeByteComponent(rgba.B),
+            Ps2Color.NormalizeOpacityAlpha(rgba.A));
     }
 
     public static bool IsActiveColor(Vector4 color)

@@ -40,17 +40,33 @@ internal static class TextureResourcePreparer
         {
             var destinationFile = new FileInfo(Path.Combine(textureOutputDirectory.FullName, sourceFile.Name));
             var metadata = ReadTextureMetadata(sourceFile);
+            var samePath = Path.GetFullPath(sourceFile.FullName).Equals(
+                Path.GetFullPath(destinationFile.FullName),
+                StringComparison.Ordinal);
             if (normalizePs2FullOpacityAlpha.HasValue
                 && ShouldNormalizePs2Alpha(metadata.Alpha, normalizePs2FullOpacityAlpha.Value))
             {
-                using var normalizedInput = sourceFile.OpenRead();
-                using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
-                metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
-                    normalizedInput,
-                    normalizedOutput,
-                    normalizePs2FullOpacityAlpha.Value);
+                if (samePath)
+                {
+                    var sourceBytes = File.ReadAllBytes(sourceFile.FullName);
+                    using var normalizedInput = new MemoryStream(sourceBytes);
+                    using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
+                    metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
+                        normalizedInput,
+                        normalizedOutput,
+                        normalizePs2FullOpacityAlpha.Value);
+                }
+                else
+                {
+                    using var normalizedInput = sourceFile.OpenRead();
+                    using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
+                    metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
+                        normalizedInput,
+                        normalizedOutput,
+                        normalizePs2FullOpacityAlpha.Value);
+                }
             }
-            else if (!Path.GetFullPath(sourceFile.FullName).Equals(Path.GetFullPath(destinationFile.FullName), StringComparison.Ordinal))
+            else if (!samePath)
             {
                 sourceFile.CopyTo(destinationFile.FullName, overwrite: true);
             }
@@ -97,6 +113,15 @@ internal static class TextureResourcePreparer
         }
 
         var parts = fileName.Split('.');
+        if (parts.Length == 3
+            && parts[0] == "tex"
+            && parts[2].Equals("png", StringComparison.OrdinalIgnoreCase)
+            && int.TryParse(parts[1], out textureId)
+            && textureId >= 0)
+        {
+            return true;
+        }
+
         if (parts.Length == 4
             && parts[0] == "tex"
             && parts[2] == "0"
@@ -123,20 +148,30 @@ internal static class TextureResourcePreparer
 
     private static IEnumerable<FileInfo> EnumerateTextureFiles(DirectoryInfo sourceDirectory)
     {
+        var yielded = new HashSet<string>(StringComparer.Ordinal);
         foreach (var file in sourceDirectory.EnumerateFiles("*.png", SearchOption.TopDirectoryOnly))
         {
-            yield return file;
+            if (yielded.Add(Path.GetFullPath(file.FullName)))
+            {
+                yield return file;
+            }
         }
 
-        var texturesDirectory = new DirectoryInfo(Path.Combine(sourceDirectory.FullName, "Textures"));
-        if (!texturesDirectory.Exists)
+        foreach (var directoryName in new[] { "textures", "Textures" })
         {
-            yield break;
-        }
+            var texturesDirectory = new DirectoryInfo(Path.Combine(sourceDirectory.FullName, directoryName));
+            if (!texturesDirectory.Exists)
+            {
+                continue;
+            }
 
-        foreach (var file in texturesDirectory.EnumerateFiles("*.png", SearchOption.TopDirectoryOnly))
-        {
-            yield return file;
+            foreach (var file in texturesDirectory.EnumerateFiles("*.png", SearchOption.TopDirectoryOnly))
+            {
+                if (yielded.Add(Path.GetFullPath(file.FullName)))
+                {
+                    yield return file;
+                }
+            }
         }
     }
 }

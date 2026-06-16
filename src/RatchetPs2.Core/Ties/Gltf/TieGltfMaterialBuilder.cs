@@ -147,6 +147,11 @@ internal sealed class TieGltfMaterialBuilder
             return TieMaterialAlphaUsage.ReflectiveMask;
         }
 
+        if (textureAlpha.MinAlpha >= profile.FullOpacityAlpha)
+        {
+            return TieMaterialAlphaUsage.Opaque;
+        }
+
         return TieMaterialAlphaUsage.Opacity;
     }
 
@@ -218,11 +223,9 @@ internal sealed class TieGltfMaterialBuilder
         var usesReflectiveMask = textureIndex.HasValue && alphaUsage == TieMaterialAlphaUsage.ReflectiveMask;
         var pbr = new Dictionary<string, object>
         {
-            ["baseColorFactor"] = useGlowEmission
-                ? new[] { 0f, 0f, 0f, 1f }
-                : textureIndex.HasValue
-                    ? new[] { 1f, 1f, 1f, 1f }
-                    : new[] { 0.72f, 0.72f, 0.68f, 1f },
+            ["baseColorFactor"] = textureIndex.HasValue
+                ? new[] { 1f, 1f, 1f, 1f }
+                : new[] { 0.72f, 0.72f, 0.68f, 1f },
             ["metallicFactor"] = usesReflectiveMask ? profile.ReflectiveMaskMetallicFactor : 0f,
             ["roughnessFactor"] = usesReflectiveMask
                 ? profile.ReflectiveMaskRoughnessFactor
@@ -264,6 +267,7 @@ internal sealed class TieGltfMaterialBuilder
             ["TieTextureMinAlpha"] = textureIndex.HasValue ? textureAlpha.MinAlpha : 255,
             ["TieTextureMaxAlpha"] = textureIndex.HasValue ? textureAlpha.MaxAlpha : 255,
             ["TieTextureUsesBinaryAlpha"] = !textureIndex.HasValue || textureAlpha.UsesBinaryAlpha,
+            ["TieTextureFullOpacityAlpha"] = profile.FullOpacityAlpha,
             ["TieMultipassType"] = multipassType,
             ["HeaderModeBits"] = FormatModeBits(headerModeBits)
         };
@@ -271,6 +275,13 @@ internal sealed class TieGltfMaterialBuilder
         {
             var rgba = resolvedGlowEmission.Rgba;
             material["emissiveFactor"] = ToGlowEmissionFactor(rgba);
+            if (textureIndex.HasValue)
+            {
+                material["emissiveTexture"] = new
+                {
+                    index = textureIndex.Value
+                };
+            }
             material["extensions"] = new Dictionary<string, object>
             {
                 [EmissiveStrengthExtensionName] = new
@@ -280,7 +291,9 @@ internal sealed class TieGltfMaterialBuilder
             };
             extras["TieGlowRgba"] = rgba.ToRgbaHex();
             extras["TieGlowEmissionStrength"] = resolvedGlowEmission.Strength;
-            extras["TieGlowPreviewMode"] = "UniformEmission";
+            extras["TieGlowPreviewMode"] = textureIndex.HasValue
+                ? "TextureModulatedEmission"
+                : "UniformEmission";
         }
 
         material["extras"] = extras;

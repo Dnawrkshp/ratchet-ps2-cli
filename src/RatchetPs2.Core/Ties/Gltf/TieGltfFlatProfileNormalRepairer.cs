@@ -21,9 +21,13 @@ internal static class TieGltfFlatProfileNormalRepairer
         List<Vector3> positions,
         List<Vector3> normals,
         List<Vector3>? sourceOnlyNormals,
+        List<float>? sourceNormalMask,
+        List<float>? sourceNormalStates,
         List<Vector2> texCoords,
         List<Vector4> glowColors,
         bool includeGlowColors,
+        List<float> ambientIndices,
+        bool includeAmbientIndices,
         IReadOnlyList<PacketIndexGroup> packetIndexGroups)
     {
         var sideNormalTargets = BuildFlatProfileSideNormalTargets(positions, packetIndexGroups);
@@ -100,10 +104,16 @@ internal static class TieGltfFlatProfileNormalRepairer
                     positions.Add(positions[vertexIndex]);
                     normals.Add(targetNormal);
                     sourceOnlyNormals?.Add(sourceOnlyNormals[vertexIndex]);
+                    sourceNormalMask?.Add(sourceNormalMask[vertexIndex]);
+                    sourceNormalStates?.Add(sourceNormalStates[vertexIndex]);
                     texCoords.Add(texCoords[vertexIndex]);
                     if (includeGlowColors)
                     {
                         glowColors.Add(glowColors[vertexIndex]);
+                    }
+                    if (includeAmbientIndices)
+                    {
+                        ambientIndices.Add(ambientIndices[vertexIndex]);
                     }
 
                     group.Indices[indexOffset] = expandedIndex;

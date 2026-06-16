@@ -110,6 +110,28 @@ public static partial class TfragGltfExporter
                         group.Colors,
                         target: GltfBufferWriter.ArrayBufferTarget)
                     : (int?)null;
+                var lightSelectorAccessor = group.LightSelectors.Count == group.Positions.Count
+                    ? gltfBufferWriter.WriteScalarFloatAccessor(
+                        group.LightSelectors,
+                        target: GltfBufferWriter.ArrayBufferTarget,
+                        includeMinMax: true)
+                    : (int?)null;
+                var lightBaseColorAccessor = group.LightBaseColors.Count == group.Positions.Count
+                    ? gltfBufferWriter.WriteNormalizedByteVector4Accessor(
+                        group.LightBaseColors,
+                        target: GltfBufferWriter.ArrayBufferTarget)
+                    : (int?)null;
+                var lightNormalAccessor = group.LightNormals.Count == group.Positions.Count
+                    ? gltfBufferWriter.WriteVector3Accessor(
+                        group.LightNormals,
+                        target: GltfBufferWriter.ArrayBufferTarget)
+                    : (int?)null;
+                var lightPostScaleAccessor = group.LightPostScales.Count == group.Positions.Count
+                    ? gltfBufferWriter.WriteScalarFloatAccessor(
+                        group.LightPostScales,
+                        target: GltfBufferWriter.ArrayBufferTarget,
+                        includeMinMax: true)
+                    : (int?)null;
                 var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
                 var attributes = new Dictionary<string, int>
                 {
@@ -120,6 +142,22 @@ public static partial class TfragGltfExporter
                 if (colorAccessor.HasValue)
                 {
                     attributes["COLOR_0"] = colorAccessor.Value;
+                }
+                if (lightSelectorAccessor.HasValue)
+                {
+                    attributes[LightSelectorAttributeName] = lightSelectorAccessor.Value;
+                }
+                if (lightBaseColorAccessor.HasValue)
+                {
+                    attributes[LightBaseColorAttributeName] = lightBaseColorAccessor.Value;
+                }
+                if (lightNormalAccessor.HasValue)
+                {
+                    attributes[LightNormalAttributeName] = lightNormalAccessor.Value;
+                }
+                if (lightPostScaleAccessor.HasValue)
+                {
+                    attributes[LightPostScaleAttributeName] = lightPostScaleAccessor.Value;
                 }
 
                 primitiveDefinitions.Add(new Dictionary<string, object>

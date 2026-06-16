@@ -16,27 +16,29 @@ internal static class TieGltfSourceNormalBuilder
     private const float SourceTableNormalPreserveMaximumUpperStrongDownRatio = 0.1f;
     private const float SourceTableNormalUpperStrongDownY = -0.25f;
     private const float FlatHorizontalSourceNormalMinimumGeneratedDot = 0.95f;
-    private static readonly TieGltfSourceNormalTableLayout[] SourceTableNormalLayouts =
+    private const int VertexNormalRemapTargetIndexMask = 0x3FFC;
+    private static readonly TieGltfRawSourceNormalLayout[] SourceTableNormalLayouts =
     [
-        TieGltfSourceNormalTableLayout.Xzw,
-        TieGltfSourceNormalTableLayout.Xzy,
-        TieGltfSourceNormalTableLayout.Yzx,
-        TieGltfSourceNormalTableLayout.Yzw,
-        TieGltfSourceNormalTableLayout.Wzx,
-        TieGltfSourceNormalTableLayout.Wzy
+        TieGltfRawSourceNormalLayout.Default
     ];
 
     public static TieGltfSourceNormalTableApplyResult ApplyVertexNormalTableRemaps(
         TieClass tie,
         TieLodTopology topology,
         bool allowLogicalVertexRemaps,
+        bool preferVuAddressRemaps,
         IReadOnlyList<Vector3> positions,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
         IReadOnlyList<Vector3> generatedNormals,
         IReadOnlyList<Vector3> generatedIndexNormals,
         Vector3[] normals,
         Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices)
+        HashSet<int> sourceVertexIndices,
+        HashSet<int> sourceIndexOffsets,
+        TieGltfSourceNormalState[] sourceVertexStates,
+        TieGltfSourceNormalState[] sourceIndexStates,
+        bool usePackedVertexNormalTableSource,
+        TieGltfRawSourceNormalLayout? preferredLayout)
     {
         if (tie.VertexNormals.Count == 0 || tie.VertexNormalRemaps.Count == 0)
         {
@@ -45,10 +47,13 @@ internal static class TieGltfSourceNormalBuilder
 
         var remapByLogicalVertexIndex = new Dictionary<int, List<TieVertexNormalRemap>>();
         var remapByPacketVertexRow = new Dictionary<(int PacketIndex, int VertexRowIndex), List<TieVertexNormalRemap>>();
+        var remapByVuAddress = new Dictionary<int, List<TieVertexNormalRemap>>();
         foreach (var remap in tie.VertexNormalRemaps)
         {
             if (remap.LodIndex == topology.LodIndex)
             {
+                AddNormalRemapCandidate(remapByVuAddress, DecodeNormalRemapTargetIndex(remap.RawVertex), remap);
+
                 if (remap.LogicalVertexIndex is { } logicalVertexIndex)
                 {
                     AddNormalRemapCandidate(remapByLogicalVertexIndex, logicalVertexIndex, remap);
@@ -61,16 +66,22 @@ internal static class TieGltfSourceNormalBuilder
             }
         }
 
+        var packetDinkyUploadBases = TieGltfNormalRemapTargetResolver.BuildPacketDinkyUploadBases(tie, topology);
         var tableLayout = SelectVertexNormalTableLayout(
             tie,
             topology,
             allowLogicalVertexRemaps,
+            preferVuAddressRemaps,
+            packetDinkyUploadBases,
+            remapByVuAddress,
             remapByLogicalVertexIndex,
             remapByPacketVertexRow,
             positions,
             indexOffsetsByVertex,
             generatedNormals,
-            generatedIndexNormals);
+            generatedIndexNormals,
+            usePackedVertexNormalTableSource,
+            preferredLayout);
         var appliedCount = 0;
         foreach (var vertex in topology.LogicalVertices.OrderBy(vertex => vertex.LogicalVertexIndex))
         {
@@ -82,6 +93,8 @@ internal static class TieGltfSourceNormalBuilder
                     vertex,
                     rowIndex.Value,
                     tableLayout.TargetMode,
+                    packetDinkyUploadBases,
+                    remapByVuAddress,
                     remapByLogicalVertexIndex,
                     remapByPacketVertexRow,
                     out var remaps))
@@ -89,40 +102,69 @@ internal static class TieGltfSourceNormalBuilder
                 continue;
             }
 
-            var hasAcceptedSourceNormal = TrySelectBestSourceTableNormal(
-                tie,
-                remaps,
-                tableLayout.Layout,
-                vertex.LogicalVertexIndex,
-                indexOffsetsByVertex,
-                generatedNormals,
-                generatedIndexNormals,
-                out var sourceNormal,
-                out _,
-                out _,
-                out _,
-                out _,
-                out _);
-            if (!hasAcceptedSourceNormal
-                && (!tableLayout.PreserveSourceOrientation
-                    || !TrySelectFirstSourceTableNormal(tie, remaps, tableLayout.Layout, out sourceNormal)))
-            {
-                continue;
-            }
-
             if (tableLayout.PreserveSourceOrientation)
             {
                 if (ApplySourceNormalDirect(
+                    tie,
+                    remaps,
+                    tableLayout.Layout,
+                    usePackedVertexNormalTableSource,
                     vertex.LogicalVertexIndex,
-                    sourceNormal,
                     indexOffsetsByVertex,
+                    generatedIndexNormals,
                     normals,
-                    indexNormals))
+                    indexNormals,
+                    sourceIndexOffsets,
+                    sourceVertexStates,
+                    sourceIndexStates,
+                    out var failureState))
                 {
                     sourceVertexIndices.Add(vertex.LogicalVertexIndex);
                     appliedCount++;
                 }
+                else
+                {
+                    MarkSourceNormalState(
+                        vertex.LogicalVertexIndex,
+                        indexOffsetsByVertex,
+                        sourceVertexStates,
+                        sourceIndexStates,
+                        failureState);
+                }
 
+                continue;
+            }
+
+            if (!TrySelectBestSourceTableNormal(
+                    tie,
+                    remaps,
+                    tableLayout.Layout,
+                    usePackedVertexNormalTableSource,
+                    vertex.LogicalVertexIndex,
+                    indexOffsetsByVertex,
+                    generatedNormals,
+                    generatedIndexNormals,
+                    out var sourceNormal,
+                    out _,
+                    out _,
+                    out _,
+                    out _,
+                    out var hasCandidate))
+            {
+                MarkSourceNormalState(
+                    vertex.LogicalVertexIndex,
+                    indexOffsetsByVertex,
+                    sourceVertexStates,
+                    sourceIndexStates,
+                    hasCandidate
+                        ? ClassifyRemapFailure(
+                            tie,
+                            remaps,
+                            tableLayout.Layout,
+                            usePackedVertexNormalTableSource,
+                            vertex.LogicalVertexIndex,
+                            indexOffsetsByVertex)
+                        : TieGltfSourceNormalState.RejectedRemap);
                 continue;
             }
 
@@ -135,11 +177,30 @@ internal static class TieGltfSourceNormalBuilder
                     normals,
                     indexNormals,
                     SourceTableNormalMinimumGeneratedDot,
-                    out var orientedNormal))
+                    out var orientedNormal,
+                    sourceIndexOffsets,
+                    sourceIndexStates,
+                    TieGltfSourceNormalState.TableExact))
             {
                 normals[vertex.LogicalVertexIndex] = orientedNormal;
                 sourceVertexIndices.Add(vertex.LogicalVertexIndex);
+                sourceVertexStates[vertex.LogicalVertexIndex] = TieGltfSourceNormalState.TableExact;
                 appliedCount++;
+            }
+            else
+            {
+                MarkSourceNormalState(
+                    vertex.LogicalVertexIndex,
+                    indexOffsetsByVertex,
+                    sourceVertexStates,
+                    sourceIndexStates,
+                    ClassifyRemapFailure(
+                        tie,
+                        remaps,
+                        tableLayout.Layout,
+                        usePackedVertexNormalTableSource,
+                        vertex.LogicalVertexIndex,
+                        indexOffsetsByVertex));
             }
         }
 
@@ -155,7 +216,10 @@ internal static class TieGltfSourceNormalBuilder
         Vector3[] normals,
         Vector3[] indexNormals,
         float minimumGeneratedDot,
-        out Vector3 orientedNormal)
+        out Vector3 orientedNormal,
+        HashSet<int>? sourceIndexOffsets = null,
+        TieGltfSourceNormalState[]? sourceIndexStates = null,
+        TieGltfSourceNormalState sourceState = TieGltfSourceNormalState.TableExact)
     {
         orientedNormal = default;
         if (logicalVertexIndex < 0 || logicalVertexIndex >= normals.Length)
@@ -190,6 +254,12 @@ internal static class TieGltfSourceNormalBuilder
             }
 
             indexNormals[indexOffset] = indexNormal;
+            sourceIndexOffsets?.Add(indexOffset);
+            if (sourceIndexStates is not null)
+            {
+                sourceIndexStates[indexOffset] = sourceState;
+            }
+
             orientedNormal = indexNormal;
             applied = true;
         }
@@ -216,44 +286,77 @@ internal static class TieGltfSourceNormalBuilder
         TieClass tie,
         TieLodTopology topology,
         bool allowLogicalVertexRemaps,
+        bool preferVuAddressRemaps,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByVuAddress,
         IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), List<TieVertexNormalRemap>> remapByPacketVertexRow,
         IReadOnlyList<Vector3> positions,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
         IReadOnlyList<Vector3> generatedNormals,
-        IReadOnlyList<Vector3> generatedIndexNormals)
+        IReadOnlyList<Vector3> generatedIndexNormals,
+        bool usePackedVertexNormalTableSource,
+        TieGltfRawSourceNormalLayout? preferredLayout)
     {
-        var targetModes = allowLogicalVertexRemaps && remapByLogicalVertexIndex.Count > 0
-            ? new[] { TieGltfVertexNormalRemapTargetMode.LogicalVertex }
-            : new[] { TieGltfVertexNormalRemapTargetMode.PacketVertexRow };
+        var targetModes = preferVuAddressRemaps && remapByVuAddress.Count > 0
+            ? new[] { TieGltfVertexNormalRemapTargetMode.PacketDinkyUpload }
+            : allowLogicalVertexRemaps && remapByLogicalVertexIndex.Count > 0
+                ? new[] { TieGltfVertexNormalRemapTargetMode.LogicalVertex }
+                : new[] { TieGltfVertexNormalRemapTargetMode.PacketVertexRow };
+        var usesPreferredLayout = preferredLayout.HasValue;
+        var selectedPreferredLayout = preferredLayout.GetValueOrDefault();
+        TieGltfRawSourceNormalLayout[] layoutCandidates = usesPreferredLayout
+            ? [selectedPreferredLayout]
+            : SourceTableNormalLayouts;
         var defaultScore = ScoreVertexNormalTableLayout(
-            TieGltfSourceNormalTableLayout.Xzw,
+            TieGltfRawSourceNormalLayout.Default,
             targetModes[0],
             tie,
             topology,
+            packetDinkyUploadBases,
+            remapByVuAddress,
             remapByLogicalVertexIndex,
             remapByPacketVertexRow,
             positions,
             indexOffsetsByVertex,
             generatedNormals,
-            generatedIndexNormals);
+            generatedIndexNormals,
+            usePackedVertexNormalTableSource);
 
-        var bestScore = defaultScore;
+        var bestScore = usesPreferredLayout
+            ? ScoreVertexNormalTableLayout(
+                selectedPreferredLayout,
+                targetModes[0],
+                tie,
+                topology,
+                packetDinkyUploadBases,
+                remapByVuAddress,
+                remapByLogicalVertexIndex,
+                remapByPacketVertexRow,
+                positions,
+                indexOffsetsByVertex,
+                generatedNormals,
+                generatedIndexNormals,
+                usePackedVertexNormalTableSource)
+            : defaultScore;
         foreach (var targetMode in targetModes)
         {
-            foreach (var layout in SourceTableNormalLayouts)
+            foreach (var layout in layoutCandidates)
             {
                 var score = ScoreVertexNormalTableLayout(
                     layout,
                     targetMode,
                     tie,
                     topology,
+                    packetDinkyUploadBases,
+                    remapByVuAddress,
                     remapByLogicalVertexIndex,
                     remapByPacketVertexRow,
                     positions,
                     indexOffsetsByVertex,
                     generatedNormals,
-                    generatedIndexNormals);
+                    generatedIndexNormals,
+                    usePackedVertexNormalTableSource);
                 if (score.AcceptedVertexCount > bestScore.AcceptedVertexCount
                     || (score.AcceptedVertexCount == bestScore.AcceptedVertexCount
                         && score.DotSum > bestScore.DotSum))
@@ -263,12 +366,12 @@ internal static class TieGltfSourceNormalBuilder
             }
         }
 
-        var preserveSourceOrientation = bestScore.Layout != TieGltfSourceNormalTableLayout.Xzw
-            && bestScore.AcceptedVertexCount >= SourceTableNormalLayoutMinimumDominantAcceptedVertices
-            && bestScore.AcceptedVertexCount >= defaultScore.AcceptedVertexCount * SourceTableNormalLayoutDominanceRatio
-            && HasEnoughSourceNormalPreserveCoverage(bestScore)
-            && HasEnoughSignedSourceNormalAgreement(bestScore)
-            && !HasTooManyUpperStrongDownSourceNormals(bestScore);
+        var preserveSourceOrientation =
+            HasReliableSourceNormalPreserveScore(bestScore)
+            && (usesPreferredLayout
+                || bestScore.Layout != TieGltfRawSourceNormalLayout.Default
+                && bestScore.AcceptedVertexCount >= SourceTableNormalLayoutMinimumDominantAcceptedVertices
+                && bestScore.AcceptedVertexCount >= defaultScore.AcceptedVertexCount * SourceTableNormalLayoutDominanceRatio);
 
         return new TieGltfSourceNormalTableLayoutSelection(
             bestScore.Layout,
@@ -278,16 +381,19 @@ internal static class TieGltfSourceNormalBuilder
     }
 
     private static TieGltfSourceNormalTableLayoutScore ScoreVertexNormalTableLayout(
-        TieGltfSourceNormalTableLayout layout,
+        TieGltfRawSourceNormalLayout layout,
         TieGltfVertexNormalRemapTargetMode targetMode,
         TieClass tie,
         TieLodTopology topology,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByVuAddress,
         IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), List<TieVertexNormalRemap>> remapByPacketVertexRow,
         IReadOnlyList<Vector3> positions,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
         IReadOnlyList<Vector3> generatedNormals,
-        IReadOnlyList<Vector3> generatedIndexNormals)
+        IReadOnlyList<Vector3> generatedIndexNormals,
+        bool usePackedVertexNormalTableSource)
     {
         var acceptedVertexCount = 0;
         var candidateVertexCount = 0;
@@ -308,6 +414,8 @@ internal static class TieGltfSourceNormalBuilder
                     vertex,
                     rowIndex.Value,
                     targetMode,
+                    packetDinkyUploadBases,
+                    remapByVuAddress,
                     remapByLogicalVertexIndex,
                     remapByPacketVertexRow,
                     out var remaps))
@@ -319,6 +427,7 @@ internal static class TieGltfSourceNormalBuilder
                 tie,
                 remaps,
                 layout,
+                usePackedVertexNormalTableSource,
                 vertex.LogicalVertexIndex,
                 indexOffsetsByVertex,
                 generatedNormals,
@@ -381,6 +490,13 @@ internal static class TieGltfSourceNormalBuilder
                 > score.UpperHemisphereVertexCount * SourceTableNormalPreserveMaximumUpperStrongDownRatio;
     }
 
+    private static bool HasReliableSourceNormalPreserveScore(TieGltfSourceNormalTableLayoutScore score)
+    {
+        return HasEnoughSourceNormalPreserveCoverage(score)
+            && HasEnoughSignedSourceNormalAgreement(score)
+            && !HasTooManyUpperStrongDownSourceNormals(score);
+    }
+
     private static bool HasEnoughSourceNormalPreserveCoverage(TieGltfSourceNormalTableLayoutScore score)
     {
         return score.AcceptedVertexCount >= SourceTableNormalPreserveMinimumAcceptedVertices
@@ -398,14 +514,39 @@ internal static class TieGltfSourceNormalBuilder
                 <= score.AcceptedVertexCount * SourceTableNormalPreserveMaximumInvertedAcceptedRatio;
     }
 
+    private static int DecodeNormalRemapTargetIndex(ushort rawIndex)
+    {
+        return (rawIndex & VertexNormalRemapTargetIndexMask) / 4;
+    }
+
     private static bool TryGetVertexNormalRemaps(
         TieLogicalVertex vertex,
         int rowIndex,
         TieGltfVertexNormalRemapTargetMode targetMode,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByVuAddress,
         IReadOnlyDictionary<int, List<TieVertexNormalRemap>> remapByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), List<TieVertexNormalRemap>> remapByPacketVertexRow,
         out IReadOnlyList<TieVertexNormalRemap> remaps)
     {
+        if (targetMode == TieGltfVertexNormalRemapTargetMode.PacketDinkyUpload
+            && TieGltfNormalRemapTargetResolver.TryGetPacketDinkyUploadTarget(
+                vertex,
+                packetDinkyUploadBases,
+                out var packetDinkyUploadTarget)
+            && remapByVuAddress.TryGetValue(packetDinkyUploadTarget, out var packetDinkyUploadRemaps))
+        {
+            remaps = packetDinkyUploadRemaps;
+            return true;
+        }
+
+        if (targetMode == TieGltfVertexNormalRemapTargetMode.VuAddress
+            && remapByVuAddress.TryGetValue(vertex.VuAddress, out var vuAddressRemaps))
+        {
+            remaps = vuAddressRemaps;
+            return true;
+        }
+
         if (targetMode == TieGltfVertexNormalRemapTargetMode.LogicalVertex
             && remapByLogicalVertexIndex.TryGetValue(vertex.LogicalVertexIndex, out var logicalRemaps))
         {
@@ -427,7 +568,8 @@ internal static class TieGltfSourceNormalBuilder
     private static bool TrySelectBestSourceTableNormal(
         TieClass tie,
         IReadOnlyList<TieVertexNormalRemap> remaps,
-        TieGltfSourceNormalTableLayout layout,
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
         int logicalVertexIndex,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
         IReadOnlyList<Vector3> generatedNormals,
@@ -450,7 +592,11 @@ internal static class TieGltfSourceNormalBuilder
         {
             if (remap.NormalIndex < 0
                 || remap.NormalIndex >= tie.VertexNormals.Count
-                || !TryNormalizeGltfNormal(tie.VertexNormals[remap.NormalIndex], layout, out var candidateNormal))
+                || !TryNormalizeGltfNormal(
+                    tie.VertexNormals[remap.NormalIndex],
+                    layout,
+                    usePackedVertexNormalTableSource,
+                    out var candidateNormal))
             {
                 continue;
             }
@@ -490,14 +636,19 @@ internal static class TieGltfSourceNormalBuilder
     private static bool TrySelectFirstSourceTableNormal(
         TieClass tie,
         IReadOnlyList<TieVertexNormalRemap> remaps,
-        TieGltfSourceNormalTableLayout layout,
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
         out Vector3 sourceNormal)
     {
         foreach (var remap in remaps)
         {
             if (remap.NormalIndex >= 0
                 && remap.NormalIndex < tie.VertexNormals.Count
-                && TryNormalizeGltfNormal(tie.VertexNormals[remap.NormalIndex], layout, out sourceNormal))
+                && TryNormalizeGltfNormal(
+                    tie.VertexNormals[remap.NormalIndex],
+                    layout,
+                    usePackedVertexNormalTableSource,
+                    out sourceNormal))
             {
                 return true;
             }
@@ -508,30 +659,195 @@ internal static class TieGltfSourceNormalBuilder
     }
 
     private static bool ApplySourceNormalDirect(
+        TieClass tie,
+        IReadOnlyList<TieVertexNormalRemap> remaps,
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
         int logicalVertexIndex,
-        Vector3 sourceNormal,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
+        IReadOnlyList<Vector3> generatedIndexNormals,
         Vector3[] normals,
-        Vector3[] indexNormals)
+        Vector3[] indexNormals,
+        HashSet<int> sourceIndexOffsets,
+        TieGltfSourceNormalState[] sourceVertexStates,
+        TieGltfSourceNormalState[] sourceIndexStates,
+        out TieGltfSourceNormalState failureState)
     {
+        failureState = TieGltfSourceNormalState.RejectedRemap;
         if (logicalVertexIndex < 0 || logicalVertexIndex >= normals.Length)
         {
             return false;
         }
 
-        normals[logicalVertexIndex] = sourceNormal;
-        if (indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
+        var candidates = new List<(int Offset, int NormalIndex, Vector3 SourceNormal)>();
+        foreach (var remap in remaps.OrderBy(remap => remap.Offset))
         {
-            foreach (var indexOffset in indexOffsets)
+            if (remap.NormalIndex < 0
+                || remap.NormalIndex >= tie.VertexNormals.Count
+                || !TryNormalizeGltfNormal(
+                    tie.VertexNormals[remap.NormalIndex],
+                    layout,
+                    usePackedVertexNormalTableSource,
+                    out var sourceNormal))
             {
-                if (indexOffset >= 0 && indexOffset < indexNormals.Length)
-                {
-                    indexNormals[indexOffset] = sourceNormal;
-                }
+                continue;
             }
+
+            candidates.Add((remap.Offset, remap.NormalIndex, sourceNormal));
+        }
+
+        if (candidates.Count == 0)
+        {
+            return false;
+        }
+
+        if (!indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
+        {
+            normals[logicalVertexIndex] = AverageSourceNormalCandidates(candidates);
+            sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.TableExact;
+            return true;
+        }
+
+        var validIndexOffsets = indexOffsets
+            .Where(indexOffset => indexOffset >= 0 && indexOffset < indexNormals.Length)
+            .ToArray();
+        var sourceNormalsByIndexOffset = ResolveSourceNormalCandidates(candidates, validIndexOffsets.Length);
+        if (sourceNormalsByIndexOffset is null)
+        {
+            failureState = TieGltfSourceNormalState.AmbiguousRemap;
+            return false;
+        }
+
+        normals[logicalVertexIndex] = AverageSourceNormalCandidates(candidates);
+        sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.TableExact;
+        for (var i = 0; i < validIndexOffsets.Length; i++)
+        {
+            var indexOffset = validIndexOffsets[i];
+            indexNormals[indexOffset] = sourceNormalsByIndexOffset[i];
+            sourceIndexOffsets.Add(indexOffset);
+            sourceIndexStates[indexOffset] = TieGltfSourceNormalState.TableExact;
         }
 
         return true;
+
+        static Vector3 AverageSourceNormalCandidates(
+            IReadOnlyList<(int Offset, int NormalIndex, Vector3 SourceNormal)> candidates)
+        {
+            var sum = Vector3.Zero;
+            foreach (var candidate in candidates)
+            {
+                sum += candidate.SourceNormal;
+            }
+
+            return sum.LengthSquared() <= 1e-12f
+                ? candidates[0].SourceNormal
+                : Vector3.Normalize(sum);
+        }
+
+        static Vector3[]? ResolveSourceNormalCandidates(
+            IReadOnlyList<(int Offset, int NormalIndex, Vector3 SourceNormal)> candidates,
+            int targetCount)
+        {
+            if (targetCount == 0)
+            {
+                return [];
+            }
+
+            if (candidates.Count == targetCount)
+            {
+                return candidates.Select(candidate => candidate.SourceNormal).ToArray();
+            }
+
+            if (candidates.All(candidate => NearlyEqual(candidate.SourceNormal, candidates[0].SourceNormal)))
+            {
+                return Enumerable.Repeat(candidates[0].SourceNormal, targetCount).ToArray();
+            }
+
+            return null;
+        }
+
+        static bool NearlyEqual(Vector3 left, Vector3 right)
+        {
+            return MathF.Abs(left.X - right.X) <= 0.000001f
+                && MathF.Abs(left.Y - right.Y) <= 0.000001f
+                && MathF.Abs(left.Z - right.Z) <= 0.000001f;
+        }
+    }
+
+    private static void MarkSourceNormalState(
+        int logicalVertexIndex,
+        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
+        TieGltfSourceNormalState[] sourceVertexStates,
+        TieGltfSourceNormalState[] sourceIndexStates,
+        TieGltfSourceNormalState state)
+    {
+        if (logicalVertexIndex >= 0 && logicalVertexIndex < sourceVertexStates.Length)
+        {
+            sourceVertexStates[logicalVertexIndex] = MaxState(sourceVertexStates[logicalVertexIndex], state);
+        }
+
+        if (!indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
+        {
+            return;
+        }
+
+        foreach (var indexOffset in indexOffsets)
+        {
+            if (indexOffset >= 0 && indexOffset < sourceIndexStates.Length)
+            {
+                sourceIndexStates[indexOffset] = MaxState(sourceIndexStates[indexOffset], state);
+            }
+        }
+    }
+
+    private static TieGltfSourceNormalState ClassifyRemapFailure(
+        TieClass tie,
+        IReadOnlyList<TieVertexNormalRemap> remaps,
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
+        int logicalVertexIndex,
+        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex)
+    {
+        var candidates = remaps
+            .Where(remap => remap.NormalIndex >= 0 && remap.NormalIndex < tie.VertexNormals.Count)
+            .Select(remap => TryNormalizeGltfNormal(
+                    tie.VertexNormals[remap.NormalIndex],
+                    layout,
+                    usePackedVertexNormalTableSource,
+                    out var sourceNormal)
+                ? sourceNormal
+                : default(Vector3?))
+            .Where(normal => normal.HasValue)
+            .Select(normal => normal!.Value)
+            .ToArray();
+        if (candidates.Length == 0)
+        {
+            return TieGltfSourceNormalState.RejectedRemap;
+        }
+
+        var targetCount = indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets)
+            ? indexOffsets.Count(indexOffset => indexOffset >= 0)
+            : 0;
+        var hasMultipleDistinctCandidates = candidates
+            .Skip(1)
+            .Any(candidate => !NearlyEqual(candidate, candidates[0]));
+        return hasMultipleDistinctCandidates && candidates.Length != targetCount
+            ? TieGltfSourceNormalState.AmbiguousRemap
+            : TieGltfSourceNormalState.RejectedRemap;
+    }
+
+    private static TieGltfSourceNormalState MaxState(
+        TieGltfSourceNormalState current,
+        TieGltfSourceNormalState next)
+    {
+        return (int)next > (int)current ? next : current;
+    }
+
+    private static bool NearlyEqual(Vector3 left, Vector3 right)
+    {
+        return MathF.Abs(left.X - right.X) <= 0.000001f
+            && MathF.Abs(left.Y - right.Y) <= 0.000001f
+            && MathF.Abs(left.Z - right.Z) <= 0.000001f;
     }
 
     private static bool TryScoreSourceNormal(
@@ -624,19 +940,11 @@ internal static class TieGltfSourceNormalBuilder
 
     private static bool TryNormalizeGltfNormal(
         TieVertexNormal source,
-        TieGltfSourceNormalTableLayout layout,
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
         out Vector3 normal)
     {
-        normal = layout switch
-        {
-            TieGltfSourceNormalTableLayout.Xzw => new Vector3(source.X, source.Z, -source.W),
-            TieGltfSourceNormalTableLayout.Xzy => new Vector3(source.X, source.Z, -source.Y),
-            TieGltfSourceNormalTableLayout.Yzx => new Vector3(source.Y, source.Z, -source.X),
-            TieGltfSourceNormalTableLayout.Yzw => new Vector3(source.Y, source.Z, -source.W),
-            TieGltfSourceNormalTableLayout.Wzx => new Vector3(source.W, source.Z, -source.X),
-            TieGltfSourceNormalTableLayout.Wzy => new Vector3(source.W, source.Z, -source.Y),
-            _ => new Vector3(source.X, source.Z, -source.W)
-        };
+        normal = layout.Apply(source, usePackedVertexNormalTableSource);
         if (normal.LengthSquared() <= 1e-12f)
         {
             normal = default;
@@ -646,45 +954,4 @@ internal static class TieGltfSourceNormalBuilder
         normal = Vector3.Normalize(normal);
         return true;
     }
-}
-
-internal enum TieGltfSourceNormalTableLayout
-{
-    Xzw,
-    Xzy,
-    Yzx,
-    Yzw,
-    Wzx,
-    Wzy
-}
-
-internal enum TieGltfVertexNormalRemapTargetMode
-{
-    LogicalVertex,
-    PacketVertexRow
-}
-
-internal readonly record struct TieGltfSourceNormalTableLayoutSelection(
-    TieGltfSourceNormalTableLayout Layout,
-    TieGltfVertexNormalRemapTargetMode TargetMode,
-    bool PreserveSourceOrientation,
-    TieGltfSourceNormalTableLayoutScore BestScore);
-
-internal readonly record struct TieGltfSourceNormalTableLayoutScore(
-    TieGltfSourceNormalTableLayout Layout,
-    TieGltfVertexNormalRemapTargetMode TargetMode,
-    int CandidateVertexCount,
-    int AcceptedVertexCount,
-    float DotSum,
-    int SignedAcceptedVertexCount,
-    float SignedDotSum,
-    int InvertedAcceptedVertexCount,
-    int UpperHemisphereVertexCount,
-    int UpperHemisphereStrongDownVertexCount);
-
-internal readonly record struct TieGltfSourceNormalTableApplyResult(
-    int VertexCount,
-    TieGltfSourceNormalTableLayoutSelection? Selection)
-{
-    public bool PreserveSourceOrientation => Selection?.PreserveSourceOrientation ?? false;
 }

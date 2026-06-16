@@ -91,6 +91,6 @@ public static class PifAssetExporter
     {
         ArgumentNullException.ThrowIfNull(texture);
 
-        return checked(PifHeader.SizeInBytes + texture.PaletteData.Length + texture.PixelData.Length);
+        return PifWriter.GetSerializedSize(texture);
     }
 }

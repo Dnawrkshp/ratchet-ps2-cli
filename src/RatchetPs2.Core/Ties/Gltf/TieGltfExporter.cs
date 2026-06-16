@@ -65,7 +65,7 @@ public static class TieGltfExporter
         var positions = TieGltfPositionBuilder.BuildPositions(tie, topology);
         var texCoords = TieGltfTexCoordBuilder.BuildTexCoords(tie, topology);
         var glowColorResult = TieGltfGlowBuilder.BuildColors(tie, topology, positions.Count);
-        var sourceNormalPhaseAnalysis = TieGltfSourceNormalPhaseAnalyzer.Analyze(tie, topology, positions);
+        var sourceNormalPhaseAnalysis = TieGltfSourceNormalPhaseAnalyzer.Analyze(tie, topology, positions, profile);
         var sourceNormalPhaseRepairTriangles = profile.UseSourceNormalPhaseWindingRepair
             ? sourceNormalPhaseAnalysis.RepairTriangles
             : new HashSet<TieGltfSourceNormalPhaseTriangleKey>();
@@ -74,21 +74,37 @@ public static class TieGltfExporter
             topology,
             glowColorResult.Colors,
             sourceNormalPhaseRepairTriangles);
+        var flatIndices = packetGroupResult.PacketIndexGroups.SelectMany(group => group.Indices).ToArray();
         var normalResult = TieGltfNormalBuilder.Build(
             tie,
             topology,
             positions,
-            packetGroupResult.PacketIndexGroups.SelectMany(group => group.Indices).ToArray());
+            flatIndices,
+            sourceNormalPhaseAnalysis,
+            profile);
+        var ambientIndexResult = TieGltfAmbientBuilder.BuildIndices(
+            tie,
+            topology,
+            normalResult.TableNormalTargetMode,
+            positions.Count,
+            flatIndices,
+            normalResult.IndexNormals,
+            normalResult.TableNormalLayout);
         var geometry = TieGltfGeometryBuilder.Build(
             tie.Shaders,
             positions,
             normalResult.Normals,
             normalResult.IndexNormals,
             normalResult.SourceNormalVertexIndices,
+            normalResult.SourceNormalIndexOffsets,
+            normalResult.SourceNormalVertexStates,
+            normalResult.SourceNormalIndexStates,
             profile.SuppressGeneratedNormalFallback,
             profile.UseGeometryWindingRepair,
             texCoords,
             glowColorResult.Colors,
+            ambientIndexResult.Indices,
+            ambientIndexResult.IndexIndices,
             packetGroupResult.PacketIndexGroups,
             options.ExternalTextureSizes);
 
@@ -99,6 +115,7 @@ public static class TieGltfExporter
             normalResult,
             sourceNormalPhaseAnalysis,
             glowColorResult,
+            ambientIndexResult,
             packetGroupResult.PacketIndexGroups,
             packetGroupResult.PacketRgbaSlotCount,
             packetGroupResult.SourceNormalPhaseWindingRepairStripCount,

@@ -1,3 +1,4 @@
+using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Shrubs;
@@ -10,7 +11,7 @@ public readonly record struct ShrubTextureAlphaInfo(
 
 public static class ShrubTextureAlpha
 {
-    public const byte FullOpacityAlpha = 128;
+    public const byte FullOpacityAlpha = Ps2Color.FullOpacityAlpha;
 
     public static ShrubTextureAlphaInfo Interpret(TextureAlphaInfo alpha)
     {

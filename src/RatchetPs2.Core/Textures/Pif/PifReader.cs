@@ -33,8 +33,9 @@ public static class PifReader
 
         var paletteData = stream.ReadBytesExactly(paletteSize);
         var pixelData = stream.ReadBytesExactly(pixelSize);
+        var mipPixelData = ReadMipPixelData(stream, header, handler);
 
-        return new PifTextureData(header, handler.Encoding, paletteData, pixelData);
+        return new PifTextureData(header, handler.Encoding, paletteData, pixelData, mipPixelData);
     }
 
     public static PifTextureData Read(ReadOnlySpan<byte> data)
@@ -91,7 +92,7 @@ public static class PifReader
         var handler = GetHandler(header.BaseTextureFormat);
         var paletteSize = GetPaletteSize(header);
         var pixelSize = handler.GetPixelDataSize(header);
-        var minimumLength = checked(PifHeader.SizeInBytes + paletteSize + pixelSize);
+        var minimumLength = checked(PifHeader.SizeInBytes + paletteSize + pixelSize + GetMipPixelDataSize(header, handler));
 
         if (stream.CanSeek && stream.Length < minimumLength)
         {
@@ -114,4 +115,53 @@ public static class PifReader
     private sealed record PifFormatHandler(
         PifTextureEncoding Encoding,
         Func<PifHeader, int> GetPixelDataSize);
+
+    private static IReadOnlyList<byte[]> ReadMipPixelData(Stream stream, PifHeader header, PifFormatHandler handler)
+    {
+        var mipCount = Math.Max(0, header.MipLevels - 1);
+        if (mipCount == 0)
+        {
+            return [];
+        }
+
+        var mips = new byte[mipCount][];
+        var width = header.USize;
+        var height = header.VSize;
+
+        for (var i = 0; i < mipCount; i++)
+        {
+            width = Math.Max(1, width / 2);
+            height = Math.Max(1, height / 2);
+            var mipHeader = header with
+            {
+                USize = width,
+                VSize = height
+            };
+            mips[i] = stream.ReadBytesExactly(handler.GetPixelDataSize(mipHeader));
+        }
+
+        return mips;
+    }
+
+    private static int GetMipPixelDataSize(PifHeader header, PifFormatHandler handler)
+    {
+        var mipCount = Math.Max(0, header.MipLevels - 1);
+        var total = 0;
+        var width = header.USize;
+        var height = header.VSize;
+
+        for (var i = 0; i < mipCount; i++)
+        {
+            width = Math.Max(1, width / 2);
+            height = Math.Max(1, height / 2);
+            var mipHeader = header with
+            {
+                USize = width,
+                VSize = height
+            };
+            total = checked(total + handler.GetPixelDataSize(mipHeader));
+        }
+
+        return total;
+    }
 }

@@ -101,6 +101,10 @@ public static partial class TfragGltfExporter
             group.TopologyPacket.RowCount,
             VertexCount = group.Positions.Count,
             VertexColorCount = group.Colors.Count,
+            LightSelectorCount = group.LightSelectors.Count,
+            LightBaseColorCount = group.LightBaseColors.Count,
+            LightNormalCount = group.LightNormals.Count,
+            LightPostScaleCount = group.LightPostScales.Count,
             TriangleCount = group.Indices.Count / 3,
             TextureAssignment = group.MaterialRange.TextureSlot >= 0
                 ? "DrawControlTextureSlot"
@@ -108,6 +112,18 @@ public static partial class TfragGltfExporter
             group.MaterialRange.TextureSlot,
             MaterialRangeStartIndex = group.MaterialRange.StartIndex,
             MaterialRangeIndexCount = group.MaterialRange.IndexCount,
+            Normals = new
+            {
+                group.NormalBuildResult.FlatHorizontalBounds,
+                DuplicatePositionNormalWeldMode = group.NormalBuildResult.DuplicatePositionNormalWeldMode,
+                group.NormalBuildResult.DuplicatePositionNormalPairCount,
+                group.NormalBuildResult.DuplicatePositionIncompatibleNormalPairCount,
+                group.NormalBuildResult.DuplicatePositionCurrentAverageFaceDot,
+                group.NormalBuildResult.DuplicatePositionWeldedAverageFaceDot,
+                group.NormalBuildResult.DuplicatePositionWeldedMinimumFaceDot,
+                group.NormalBuildResult.RestoredFaceNormalIndexCount,
+                group.WindingCorrectedTriangleCount
+            },
             Decode = BuildTopologyDecodeExtras(group.TopologyDecode)
         };
     }
@@ -132,6 +148,10 @@ public static partial class TfragGltfExporter
             PrimitiveCount = decoded.Meshes.Sum(mesh => mesh.Groups.Count),
             VertexCount = decoded.Meshes.Sum(mesh => mesh.VertexCount),
             VertexColorCount = decoded.Meshes.Sum(mesh => mesh.Groups.Sum(group => group.Colors.Count)),
+            LightSelectorCount = decoded.Meshes.Sum(mesh => mesh.Groups.Sum(group => group.LightSelectors.Count)),
+            LightBaseColorCount = decoded.Meshes.Sum(mesh => mesh.Groups.Sum(group => group.LightBaseColors.Count)),
+            LightNormalCount = decoded.Meshes.Sum(mesh => mesh.Groups.Sum(group => group.LightNormals.Count)),
+            LightPostScaleCount = decoded.Meshes.Sum(mesh => mesh.Groups.Sum(group => group.LightPostScales.Count)),
             TriangleCount = decoded.Meshes.Sum(mesh => mesh.TriangleCount),
             TextureIds = decoded.TextureIds,
             LodTriangleCounts = decoded.Meshes

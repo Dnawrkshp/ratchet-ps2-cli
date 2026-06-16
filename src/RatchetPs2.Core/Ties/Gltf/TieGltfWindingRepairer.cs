@@ -26,9 +26,13 @@ internal static class TieGltfWindingRepairer
         List<Vector3> positions,
         List<Vector3> normals,
         List<Vector3>? sourceOnlyNormals,
+        List<float>? sourceNormalMask,
+        List<float>? sourceNormalStates,
         List<Vector2> texCoords,
         List<Vector4> glowColors,
         bool includeGlowColors,
+        List<float> ambientIndices,
+        bool includeAmbientIndices,
         IReadOnlyList<PacketIndexGroup> packetIndexGroups,
         bool enableFlatProfileLocalInwardRepair,
         bool enableUpperHorizontalFlatFaceFallback)
@@ -442,10 +446,16 @@ internal static class TieGltfWindingRepairer
             positions.Add(positions[sourceIndex]);
             normals.Add(-normals[sourceIndex]);
             sourceOnlyNormals?.Add(sourceOnlyNormals[sourceIndex]);
+            sourceNormalMask?.Add(sourceNormalMask[sourceIndex]);
+            sourceNormalStates?.Add(sourceNormalStates[sourceIndex]);
             texCoords.Add(texCoords[sourceIndex]);
             if (includeGlowColors)
             {
                 glowColors.Add(glowColors[sourceIndex]);
+            }
+            if (includeAmbientIndices)
+            {
+                ambientIndices.Add(ambientIndices[sourceIndex]);
             }
 
             flippedVertexIndexByOriginal[vertexIndex] = expandedIndex;

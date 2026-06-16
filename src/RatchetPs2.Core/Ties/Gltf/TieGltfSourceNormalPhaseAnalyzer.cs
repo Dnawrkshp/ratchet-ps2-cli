@@ -5,15 +5,18 @@ namespace RatchetPs2.Core.Ties;
 internal static class TieGltfSourceNormalPhaseAnalyzer
 {
     private const float StrongNormalAgreementDot = 0.5f;
+    private const int VertexNormalRemapTargetIndexMask = 0x3FFC;
 
     public static TieGltfSourceNormalPhaseAnalysis Analyze(
         TieClass tie,
         TieLodTopology topology,
-        IReadOnlyList<Vector3> positions)
+        IReadOnlyList<Vector3> positions,
+        TieGameProfile profile)
     {
         ArgumentNullException.ThrowIfNull(tie);
         ArgumentNullException.ThrowIfNull(topology);
         ArgumentNullException.ThrowIfNull(positions);
+        ArgumentNullException.ThrowIfNull(profile);
 
         if (tie.VertexNormals.Count == 0 || tie.VertexNormalRemaps.Count == 0)
         {
@@ -24,28 +27,49 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
             .Where(remap => remap.LodIndex == topology.LodIndex && remap.LogicalVertexIndex.HasValue)
             .GroupBy(remap => remap.LogicalVertexIndex!.Value)
             .ToDictionary(group => group.Key, group => group.ToArray());
+        var packetDinkyUploadBases = profile.PreferVuAddressSourceNormalRemaps
+            ? TieGltfNormalRemapTargetResolver.BuildPacketDinkyUploadBases(tie, topology)
+            : new Dictionary<int, int>();
+        var remapsByPacketDinkyUpload = profile.PreferVuAddressSourceNormalRemaps
+            ? tie.VertexNormalRemaps
+                .Where(remap => remap.LodIndex == topology.LodIndex)
+                .GroupBy(remap => DecodeNormalRemapTargetIndex(remap.RawVertex))
+                .ToDictionary(group => group.Key, group => group.ToArray())
+            : new Dictionary<int, TieVertexNormalRemap[]>();
         var remapsByPacketVertexRow = tie.VertexNormalRemaps
             .Where(remap => remap.LodIndex == topology.LodIndex
                 && !remap.LogicalVertexIndex.HasValue
                 && remap.VertexRowIndex >= 0)
             .GroupBy(remap => (remap.PacketIndex, remap.VertexRowIndex))
             .ToDictionary(group => group.Key, group => group.ToArray());
-        if (remapsByLogicalVertexIndex.Count == 0 && remapsByPacketVertexRow.Count == 0)
+        if (remapsByPacketDinkyUpload.Count == 0
+            && remapsByLogicalVertexIndex.Count == 0
+            && remapsByPacketVertexRow.Count == 0)
         {
             return TieGltfSourceNormalPhaseAnalysis.Empty;
         }
 
         var strips = new List<TieGltfSourceNormalPhaseStripDiagnostic>();
-        var layouts = BuildRawNormalLayouts();
+        var layouts = RawNormalLayouts;
+        var usePackedVertexNormalTableSource = profile.UsePackedVertexNormalTableSource;
         var dominantLayout = SelectDominantSourceNormalLayout(
-            tie,
-            topology,
-            positions,
-            remapsByLogicalVertexIndex,
-            remapsByPacketVertexRow,
-            layouts);
+                tie,
+                topology,
+                positions,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
+                remapsByLogicalVertexIndex,
+                remapsByPacketVertexRow,
+                layouts,
+                usePackedVertexNormalTableSource);
         foreach (var strip in topology.Strips.OrderBy(strip => strip.StripIndex))
         {
+            var packetDinkyUploadRemappedVertexCount = strip.LogicalVertices.Count(
+                vertex => TryGetPacketDinkyUploadRemaps(
+                    vertex,
+                    packetDinkyUploadBases,
+                    remapsByPacketDinkyUpload,
+                    out _));
             var logicalRemappedVertexCount = strip.LogicalVertices.Count(
                 vertex => remapsByLogicalVertexIndex.ContainsKey(vertex.LogicalVertexIndex));
             var packetRowRemappedVertexCount = strip.LogicalVertices.Count(
@@ -53,9 +77,13 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                     && remapsByPacketVertexRow.ContainsKey((vertex.PacketIndex, vertex.VertexRowIndex.Value)));
             var remapChunkUsage = AnalyzeStripNormalRemapChunks(
                 strip,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
                 remapsByLogicalVertexIndex,
                 remapsByPacketVertexRow);
-            if (logicalRemappedVertexCount == 0 && packetRowRemappedVertexCount == 0)
+            if (packetDinkyUploadRemappedVertexCount == 0
+                && logicalRemappedVertexCount == 0
+                && packetRowRemappedVertexCount == 0)
             {
                 continue;
             }
@@ -65,9 +93,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 topology,
                 strip,
                 positions,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
                 remapsByLogicalVertexIndex,
                 remapsByPacketVertexRow,
-                dominantLayout);
+                dominantLayout,
+                usePackedVertexNormalTableSource);
             var selectedTargetModeScore = SelectTargetMode(strip, targetModeScores);
             var score = selectedTargetModeScore.Score;
             if (score.ScoredTriangleCount == 0)
@@ -81,10 +112,13 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 topology,
                 strip,
                 positions,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
                 remapsByLogicalVertexIndex,
                 remapsByPacketVertexRow,
                 dominantLayout,
-                selectedTargetModeScore.TargetMode);
+                selectedTargetModeScore.TargetMode,
+                usePackedVertexNormalTableSource);
 
             strips.Add(new TieGltfSourceNormalPhaseStripDiagnostic(
                 strip.LodIndex,
@@ -94,8 +128,10 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 strip.ShaderIndex,
                 strip.TriangleCount,
                 strip.Tokens.Length == 0 ? null : $"0x{strip.Tokens[0]:X2}",
+                packetDinkyUploadRemappedVertexCount,
                 logicalRemappedVertexCount,
                 packetRowRemappedVertexCount,
+                remapChunkUsage.PacketDinkyUploadNormalRemapChunks,
                 remapChunkUsage.LogicalNormalRemapChunks,
                 remapChunkUsage.PacketRowNormalRemapChunks,
                 remapChunkUsage.UsedNormalRemapChunks,
@@ -115,25 +151,31 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 ResolvePhaseVote(score)));
         }
 
-        return new TieGltfSourceNormalPhaseAnalysis(strips);
+        return new TieGltfSourceNormalPhaseAnalysis(dominantLayout, strips);
     }
 
     private static TieGltfRawSourceNormalLayout SelectDominantSourceNormalLayout(
         TieClass tie,
         TieLodTopology topology,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
-        IReadOnlyList<TieGltfRawSourceNormalLayout> layouts)
+        IReadOnlyList<TieGltfRawSourceNormalLayout> layouts,
+        bool usePackedVertexNormalTableSource)
     {
         return layouts
             .Select(layout => ScoreTopologyLayout(
                 tie,
                 topology,
                 positions,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
                 remapsByLogicalVertexIndex,
                 remapsByPacketVertexRow,
-                layout))
+                layout,
+                usePackedVertexNormalTableSource))
             .OrderByDescending(score => score.StrongAbsoluteTriangleCount)
             .ThenByDescending(score => score.AbsoluteDotSum)
             .ThenByDescending(score => score.ScoredTriangleCount)
@@ -146,9 +188,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieClass tie,
         TieLodTopology topology,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
-        TieGltfRawSourceNormalLayout layout)
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource)
     {
         var scoredTriangleCount = 0;
         var strongAbsoluteTriangleCount = 0;
@@ -159,10 +204,15 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                     tie,
                     topology,
                     triangle,
+                    packetDinkyUploadBases,
+                    remapsByPacketDinkyUpload,
                     remapsByLogicalVertexIndex,
                     remapsByPacketVertexRow,
                     layout,
-                    TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst,
+                    usePackedVertexNormalTableSource,
+                    remapsByPacketDinkyUpload.Count > 0
+                        ? TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload
+                        : TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst,
                     out var sourceNormal)
                 || !TryFaceNormal(
                     positions[triangle.A],
@@ -194,10 +244,13 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieLodTopology topology,
         TieTriangleStrip strip,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
         TieGltfRawSourceNormalLayout layout,
-        TieGltfSourceNormalPhaseRemapTargetMode targetMode)
+        TieGltfSourceNormalPhaseRemapTargetMode targetMode,
+        bool usePackedVertexNormalTableSource)
     {
         var scoredTriangleCount = 0;
         var currentStrongTriangleCount = 0;
@@ -210,9 +263,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                     tie,
                     topology,
                     triangle,
+                    packetDinkyUploadBases,
+                    remapsByPacketDinkyUpload,
                     remapsByLogicalVertexIndex,
                     remapsByPacketVertexRow,
                     layout,
+                    usePackedVertexNormalTableSource,
                     targetMode,
                     out var sourceNormal)
                 || !TryFaceNormal(
@@ -254,10 +310,13 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieLodTopology topology,
         TieTriangleStrip strip,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
         TieGltfRawSourceNormalLayout layout,
-        TieGltfSourceNormalPhaseRemapTargetMode targetMode)
+        TieGltfSourceNormalPhaseRemapTargetMode targetMode,
+        bool usePackedVertexNormalTableSource)
     {
         return topology.Triangles
             .Where(triangle => triangle.StripIndex == strip.StripIndex)
@@ -267,9 +326,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                         tie,
                         topology,
                         triangle,
+                        packetDinkyUploadBases,
+                        remapsByPacketDinkyUpload,
                         remapsByLogicalVertexIndex,
                         remapsByPacketVertexRow,
                         layout,
+                        usePackedVertexNormalTableSource,
                         targetMode,
                         out var sourceNormal)
                     || !TryFaceNormal(
@@ -297,16 +359,23 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieLodTopology topology,
         TieTriangleStrip strip,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
-        TieGltfRawSourceNormalLayout layout)
+        TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource)
     {
-        return
-        [
-            BuildTargetModeScore(TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst),
-            BuildTargetModeScore(TieGltfSourceNormalPhaseRemapTargetMode.LogicalVertex),
-            BuildTargetModeScore(TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow)
-        ];
+        var targetModes = new List<TieGltfSourceNormalPhaseRemapTargetMode>();
+        if (remapsByPacketDinkyUpload.Count > 0)
+        {
+            targetModes.Add(TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload);
+        }
+
+        targetModes.Add(TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst);
+        targetModes.Add(TieGltfSourceNormalPhaseRemapTargetMode.LogicalVertex);
+        targetModes.Add(TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow);
+        return targetModes.Select(BuildTargetModeScore).ToArray();
 
         TieGltfSourceNormalPhaseTargetScore BuildTargetModeScore(
             TieGltfSourceNormalPhaseRemapTargetMode targetMode)
@@ -316,10 +385,13 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 topology,
                 strip,
                 positions,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
                 remapsByLogicalVertexIndex,
                 remapsByPacketVertexRow,
                 layout,
-                targetMode);
+                targetMode,
+                usePackedVertexNormalTableSource);
             return new TieGltfSourceNormalPhaseTargetScore(targetMode, score);
         }
     }
@@ -328,6 +400,15 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieTriangleStrip strip,
         IReadOnlyList<TieGltfSourceNormalPhaseTargetScore> scores)
     {
+        var packetDinkyUploadScores = scores
+            .Where(score => score.TargetMode == TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload)
+            .ToArray();
+        if (packetDinkyUploadScores.Length > 0
+            && HasMeaningfulSourceNormalCoverage(strip, packetDinkyUploadScores[0].Score))
+        {
+            return packetDinkyUploadScores[0];
+        }
+
         var logicalFirstScore = scores.First(score =>
             score.TargetMode == TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst);
         if (!strip.UsesPreviousStripReferencePhase)
@@ -337,12 +418,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
 
         var packetRowScore = scores.First(score =>
             score.TargetMode == TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow);
-        return HasMeaningfulPacketRowSourceNormalCoverage(strip, packetRowScore.Score)
+        return HasMeaningfulSourceNormalCoverage(strip, packetRowScore.Score)
             ? packetRowScore
             : logicalFirstScore;
     }
 
-    private static bool HasMeaningfulPacketRowSourceNormalCoverage(
+    private static bool HasMeaningfulSourceNormalCoverage(
         TieTriangleStrip strip,
         TieGltfSourceNormalPhaseLayoutScore score)
     {
@@ -367,30 +448,47 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
 
     private static TieGltfSourceNormalPhaseRemapChunkUsage AnalyzeStripNormalRemapChunks(
         TieTriangleStrip strip,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow)
     {
+        var packetDinkyUploadChunks = new Dictionary<int, int>();
         var logicalChunks = new Dictionary<int, int>();
         var packetRowChunks = new Dictionary<int, int>();
         var usedChunks = new Dictionary<int, int>();
         foreach (var vertex in strip.LogicalVertices)
         {
+            var hasPacketDinkyUploadRemaps = TryGetPacketDinkyUploadRemaps(
+                vertex,
+                packetDinkyUploadBases,
+                remapsByPacketDinkyUpload,
+                out var packetDinkyUploadRemaps);
+            if (hasPacketDinkyUploadRemaps)
+            {
+                CountChunks(packetDinkyUploadChunks, packetDinkyUploadRemaps);
+                CountChunks(usedChunks, packetDinkyUploadRemaps);
+            }
+
             var hasLogicalRemaps = remapsByLogicalVertexIndex.TryGetValue(
                 vertex.LogicalVertexIndex,
                 out var logicalRemaps);
             if (hasLogicalRemaps)
             {
                 CountChunks(logicalChunks, logicalRemaps);
-                CountChunks(usedChunks, logicalRemaps);
+                if (!hasPacketDinkyUploadRemaps)
+                {
+                    CountChunks(usedChunks, logicalRemaps);
+                }
             }
 
             if (vertex.VertexRowIndex.HasValue
                 && remapsByPacketVertexRow.TryGetValue(
                     (vertex.PacketIndex, vertex.VertexRowIndex.Value),
-                    out var rowRemaps))
+                out var rowRemaps))
             {
                 CountChunks(packetRowChunks, rowRemaps);
-                if (!hasLogicalRemaps)
+                if (!hasPacketDinkyUploadRemaps && !hasLogicalRemaps)
                 {
                     CountChunks(usedChunks, rowRemaps);
                 }
@@ -403,6 +501,7 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
             .ThenBy(chunk => chunk.ChunkIndex)
             .FirstOrDefault();
         return new TieGltfSourceNormalPhaseRemapChunkUsage(
+            BuildChunkDiagnostics(packetDinkyUploadChunks),
             BuildChunkDiagnostics(logicalChunks),
             BuildChunkDiagnostics(packetRowChunks),
             usedChunkDiagnostics,
@@ -440,9 +539,12 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         TieClass tie,
         TieLodTopology topology,
         TieTriangle triangle,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
         IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByLogicalVertexIndex,
         IReadOnlyDictionary<(int PacketIndex, int VertexRowIndex), TieVertexNormalRemap[]> remapsByPacketVertexRow,
         TieGltfRawSourceNormalLayout layout,
+        bool usePackedVertexNormalTableSource,
         TieGltfSourceNormalPhaseRemapTargetMode targetMode,
         out Vector3 normal)
     {
@@ -468,17 +570,32 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
             }
 
             var vertex = topology.LogicalVertices[logicalVertexIndex];
+            if (targetMode == TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload
+                && TryGetPacketDinkyUploadRemaps(
+                    vertex,
+                    packetDinkyUploadBases,
+                    remapsByPacketDinkyUpload,
+                    out var packetDinkyUploadRemaps))
+            {
+                AddRemaps(packetDinkyUploadRemaps);
+                return;
+            }
+
             if (targetMode != TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow
                 && remapsByLogicalVertexIndex.TryGetValue(logicalVertexIndex, out var logicalRemaps))
             {
                 AddRemaps(logicalRemaps);
-                if (targetMode == TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst)
+                if (targetMode is TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload
+                    or TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst
+                    or TieGltfSourceNormalPhaseRemapTargetMode.LogicalVertex)
                 {
                     return;
                 }
             }
 
-            if (targetMode != TieGltfSourceNormalPhaseRemapTargetMode.LogicalVertex
+            if ((targetMode is TieGltfSourceNormalPhaseRemapTargetMode.PacketDinkyUpload
+                    or TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst
+                    or TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow)
                 && vertex.VertexRowIndex.HasValue
                 && remapsByPacketVertexRow.TryGetValue((vertex.PacketIndex, vertex.VertexRowIndex.Value), out var rowRemaps))
             {
@@ -495,7 +612,7 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                     continue;
                 }
 
-                var candidate = layout.Apply(tie.VertexNormals[remap.NormalIndex]);
+                var candidate = layout.Apply(tie.VertexNormals[remap.NormalIndex], usePackedVertexNormalTableSource);
                 if (candidate.LengthSquared() <= 1e-12f)
                 {
                     continue;
@@ -505,6 +622,26 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 count++;
             }
         }
+    }
+
+    private static bool TryGetPacketDinkyUploadRemaps(
+        TieLogicalVertex vertex,
+        IReadOnlyDictionary<int, int> packetDinkyUploadBases,
+        IReadOnlyDictionary<int, TieVertexNormalRemap[]> remapsByPacketDinkyUpload,
+        out TieVertexNormalRemap[] remaps)
+    {
+        if (TieGltfNormalRemapTargetResolver.TryGetPacketDinkyUploadTarget(
+                vertex,
+                packetDinkyUploadBases,
+                out var target)
+            && remapsByPacketDinkyUpload.TryGetValue(target, out var targetRemaps))
+        {
+            remaps = targetRemaps;
+            return true;
+        }
+
+        remaps = [];
+        return false;
     }
 
     private static bool TryFaceNormal(Vector3 a, Vector3 b, Vector3 c, out Vector3 faceNormal)
@@ -548,242 +685,15 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
         return count == 0 ? 0f : sum / count;
     }
 
+    private static int DecodeNormalRemapTargetIndex(ushort rawIndex)
+    {
+        return (rawIndex & VertexNormalRemapTargetIndexMask) / 4;
+    }
+
+    public static IReadOnlyList<TieGltfRawSourceNormalLayout> RawNormalLayouts { get; } = BuildRawNormalLayouts();
+
     private static TieGltfRawSourceNormalLayout[] BuildRawNormalLayouts()
     {
-        var axes = new[] { 0, 1, 2, 3 };
-        var layouts = new List<TieGltfRawSourceNormalLayout>();
-        foreach (var x in axes)
-        foreach (var y in axes.Where(axis => axis != x))
-        foreach (var z in axes.Where(axis => axis != x && axis != y))
-        foreach (var signX in new[] { -1, 1 })
-        foreach (var signZ in new[] { -1, 1 })
-        {
-            // Keep the glTF-up component anchored so a full-vector sign flip
-            // cannot make the phase vote tautological.
-            layouts.Add(new TieGltfRawSourceNormalLayout(x, y, z, signX, SignY: 1, signZ));
-        }
-
-        return layouts.ToArray();
-    }
-}
-
-internal sealed record TieGltfSourceNormalPhaseAnalysis(
-    IReadOnlyList<TieGltfSourceNormalPhaseStripDiagnostic> Strips)
-{
-    public static TieGltfSourceNormalPhaseAnalysis Empty { get; } = new([]);
-
-    public int ScoredStripCount => Strips.Count;
-    public int CurrentVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Current);
-    public int InvertedVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Inverted);
-    public int AmbiguousVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Ambiguous);
-    public int InsufficientVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Insufficient);
-    public IReadOnlySet<int> RepairStripIndices => Strips
-        .Where(strip => strip.ShouldApplyWindingRepair)
-        .Where(strip => strip.WindingRepairTriangleCount > 0)
-        .Select(strip => strip.StripIndex)
-        .ToHashSet();
-    public IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey> RepairTriangles => Strips
-        .Where(strip => strip.ShouldApplyWindingRepair)
-        .SelectMany(strip => strip.WindingRepairTriangleIndices.Select(triangleIndex =>
-            new TieGltfSourceNormalPhaseTriangleKey(strip.StripIndex, triangleIndex)))
-        .ToHashSet();
-    public int RepairTriangleCount => RepairTriangles.Count;
-}
-
-internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
-    int LodIndex,
-    int StripIndex,
-    int PacketIndex,
-    int PacketStripIndex,
-    int? ShaderIndex,
-    int TriangleCount,
-    string? FirstToken,
-    int LogicalRemappedVertexCount,
-    int PacketRowRemappedVertexCount,
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> LogicalNormalRemapChunks,
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> PacketRowNormalRemapChunks,
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> UsedNormalRemapChunks,
-    int? DominantUsedNormalRemapChunkIndex,
-    int DominantUsedNormalRemapChunkRemapCount,
-    bool UsesPreviousStripReferencePhase,
-    string SelectedTargetMode,
-    IReadOnlyList<TieGltfSourceNormalPhaseTargetDiagnostic> TargetModeVotes,
-    IReadOnlyList<TieGltfSourceNormalPhaseTriangleDiagnostic> TriangleVotes,
-    int ScoredTriangleCount,
-    string BestCurrentLayout,
-    int BestCurrentStrongTriangleCount,
-    float BestCurrentAverageDot,
-    string BestInvertedLayout,
-    int BestInvertedStrongTriangleCount,
-    float BestInvertedAverageDot,
-    TieGltfSourceNormalPhaseVote PhaseVote)
-{
-    private const float WindingRepairAverageDot = 0.72f;
-
-    public bool ShouldApplyWindingRepair =>
-        !UsesPreviousStripReferencePhase
-        && (
-            PhaseVote == TieGltfSourceNormalPhaseVote.Inverted
-                && (UsesDenseSourceNormalRepair || UsesSmallStripSourceNormalRepair)
-            || UsesMixedTriangleSourceNormalRepair);
-
-    public bool UsesDenseSourceNormalRepair =>
-        ScoredTriangleCount >= 8
-        && BestInvertedStrongTriangleCount >= Math.Max(2, ScoredTriangleCount / 2)
-        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + 2
-        && BestInvertedAverageDot >= WindingRepairAverageDot;
-
-    public bool UsesSmallStripSourceNormalRepair =>
-        TriangleCount > 0
-        && ScoredTriangleCount == TriangleCount
-        && ScoredTriangleCount < 8
-        && BestInvertedStrongTriangleCount == ScoredTriangleCount
-        && BestCurrentStrongTriangleCount == 0
-        && BestCurrentAverageDot <= -0.5f
-        && BestInvertedAverageDot >= WindingRepairAverageDot;
-
-    public bool UsesMixedTriangleSourceNormalRepair =>
-        PhaseVote == TieGltfSourceNormalPhaseVote.Ambiguous
-        && TriangleCount > 0
-        && ScoredTriangleCount == TriangleCount
-        && BestInvertedStrongTriangleCount >= 2
-        && BestCurrentStrongTriangleCount >= 2
-        && TriangleVotes.Any(vote => vote.PrefersInvertedWinding);
-
-    public IReadOnlyList<int> WindingRepairTriangleIndices
-    {
-        get
-        {
-            if (!ShouldApplyWindingRepair)
-            {
-                return [];
-            }
-
-            if (UsesMixedTriangleSourceNormalRepair)
-            {
-                return TriangleVotes
-                    .Where(vote => vote.PrefersInvertedWinding)
-                    .Select(vote => vote.TriangleIndexInStrip)
-                    .ToArray();
-            }
-
-            return Enumerable.Range(0, TriangleCount).ToArray();
-        }
-    }
-
-    public int WindingRepairTriangleCount => WindingRepairTriangleIndices.Count;
-}
-
-internal readonly record struct TieGltfSourceNormalPhaseTriangleKey(
-    int StripIndex,
-    int TriangleIndexInStrip);
-
-internal readonly record struct TieGltfSourceNormalPhaseTargetScore(
-    TieGltfSourceNormalPhaseRemapTargetMode TargetMode,
-    TieGltfSourceNormalPhaseLayoutScore Score);
-
-internal sealed record TieGltfSourceNormalPhaseTriangleDiagnostic(
-    int TriangleIndexInStrip,
-    float CurrentAverageDot,
-    float InvertedAverageDot)
-{
-    public bool PrefersInvertedWinding =>
-        InvertedAverageDot >= 0.5f
-        && InvertedAverageDot > CurrentAverageDot;
-}
-
-internal sealed record TieGltfSourceNormalPhaseTargetDiagnostic(
-    string TargetMode,
-    int ScoredTriangleCount,
-    int CurrentStrongTriangleCount,
-    float CurrentAverageDot,
-    int InvertedStrongTriangleCount,
-    float InvertedAverageDot,
-    string PhaseVote);
-
-internal sealed record TieGltfSourceNormalPhaseRemapChunkDiagnostic(
-    int ChunkIndex,
-    int RemapCount);
-
-internal sealed record TieGltfSourceNormalPhaseRemapChunkUsage(
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> LogicalNormalRemapChunks,
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> PacketRowNormalRemapChunks,
-    IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> UsedNormalRemapChunks,
-    int? DominantUsedNormalRemapChunkIndex,
-    int DominantUsedNormalRemapChunkRemapCount);
-
-internal enum TieGltfSourceNormalPhaseVote
-{
-    Insufficient,
-    Current,
-    Inverted,
-    Ambiguous
-}
-
-internal enum TieGltfSourceNormalPhaseRemapTargetMode
-{
-    LogicalFirst,
-    LogicalVertex,
-    PacketVertexRow
-}
-
-internal readonly record struct TieGltfSourceNormalPhaseLayoutScore(
-    TieGltfRawSourceNormalLayout Layout,
-    int ScoredTriangleCount,
-    int CurrentStrongTriangleCount,
-    int InvertedStrongTriangleCount,
-    float CurrentDotSum,
-    float InvertedDotSum);
-
-internal readonly record struct TieGltfSourceNormalPhaseTopologyLayoutScore(
-    TieGltfRawSourceNormalLayout Layout,
-    int ScoredTriangleCount,
-    int StrongAbsoluteTriangleCount,
-    float AbsoluteDotSum);
-
-internal readonly record struct TieGltfRawSourceNormalLayout(
-    int X,
-    int Y,
-    int Z,
-    int SignX,
-    int SignY,
-    int SignZ)
-{
-    public Vector3 Apply(TieVertexNormal normal)
-    {
-        return new Vector3(
-            SignX * Get(normal, X),
-            SignY * Get(normal, Y),
-            SignZ * Get(normal, Z));
-    }
-
-    public override string ToString()
-    {
-        return $"{Format(SignX, X)}{Format(SignY, Y)}{Format(SignZ, Z)}";
-    }
-
-    private static short Get(TieVertexNormal normal, int index)
-    {
-        return index switch
-        {
-            0 => normal.X,
-            1 => normal.Y,
-            2 => normal.Z,
-            3 => normal.W,
-            _ => 0
-        };
-    }
-
-    private static string Format(int sign, int index)
-    {
-        var name = index switch
-        {
-            0 => "x",
-            1 => "y",
-            2 => "z",
-            3 => "w",
-            _ => "?"
-        };
-        return sign < 0 ? "-" + name : name;
+        return [TieGltfRawSourceNormalLayout.Default];
     }
 }

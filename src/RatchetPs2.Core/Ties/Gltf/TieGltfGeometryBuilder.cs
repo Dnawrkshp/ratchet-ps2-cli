@@ -12,10 +12,15 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<Vector3> normals,
         IReadOnlyList<Vector3> indexNormals,
         IReadOnlyList<int> sourceNormalVertexIndices,
+        IReadOnlyList<int> sourceNormalIndexOffsets,
+        IReadOnlyList<TieGltfSourceNormalState> sourceNormalVertexStates,
+        IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
         bool suppressGeneratedNormalFallback,
         bool useGeometryWindingRepair,
         IReadOnlyList<Vector2> texCoords,
         IReadOnlyList<Vector4> glowColors,
+        IReadOnlyList<float> ambientIndices,
+        IReadOnlyList<float> indexAmbientIndices,
         IReadOnlyList<PacketIndexGroup> packetIndexGroups,
         IReadOnlyDictionary<int, TextureSize>? textureSizes)
     {
@@ -23,20 +28,37 @@ internal static class TieGltfGeometryBuilder
         ArgumentNullException.ThrowIfNull(positions);
         ArgumentNullException.ThrowIfNull(normals);
         ArgumentNullException.ThrowIfNull(indexNormals);
+        ArgumentNullException.ThrowIfNull(sourceNormalIndexOffsets);
+        ArgumentNullException.ThrowIfNull(sourceNormalVertexStates);
+        ArgumentNullException.ThrowIfNull(sourceNormalIndexStates);
         ArgumentNullException.ThrowIfNull(texCoords);
         ArgumentNullException.ThrowIfNull(glowColors);
+        ArgumentNullException.ThrowIfNull(ambientIndices);
+        ArgumentNullException.ThrowIfNull(indexAmbientIndices);
         ArgumentNullException.ThrowIfNull(packetIndexGroups);
 
         var includeGlowColors = glowColors.Count == positions.Count;
+        var sourceIndexCount = packetIndexGroups.Sum(group => group.Indices.Count);
+        var includeSourceAmbientIndices = ambientIndices.Count == positions.Count
+            && ambientIndices.Any(index => index >= 0f);
+        var includeIndexAmbientIndices = indexAmbientIndices.Count == sourceIndexCount
+            && indexAmbientIndices.Any(index => index >= 0f);
+        var includeAmbientIndices = includeSourceAmbientIndices || includeIndexAmbientIndices;
         var enableFlatProfileNormalFallbacks = useGeometryWindingRepair && !suppressGeneratedNormalFallback;
         var restoreFlatProfileFaceNormals = enableFlatProfileNormalFallbacks
             && TieGltfFlatProfileNormalRepairer.ShouldRestore(positions);
         var expandedPositions = positions.ToList();
         var expandedNormals = normals.ToList();
         var sourceNormalVertexIndexSet = sourceNormalVertexIndices.ToHashSet();
+        var sourceNormalIndexOffsetSet = sourceNormalIndexOffsets.ToHashSet();
         var expandedSourceOnlyNormals = BuildSourceOnlyNormals();
+        var expandedSourceNormalMask = BuildSourceNormalMask();
+        var expandedSourceNormalStates = BuildSourceNormalStates();
         var expandedTexCoords = texCoords.ToList();
         var expandedGlowColors = includeGlowColors ? glowColors.ToList() : new List<Vector4>();
+        var expandedAmbientIndices = includeAmbientIndices
+            ? BuildInitialAmbientIndices()
+            : new List<float>();
         var expandedVertexIndexByKey = new Dictionary<ExpandedVertexKey, uint>();
         var expandedGroups = new List<PacketIndexGroup>(packetIndexGroups.Count);
         var sourceIndexOffset = 0;
@@ -69,21 +91,33 @@ internal static class TieGltfGeometryBuilder
 
                 expandedIndices.Add(GetExpandedVertexIndex(
                     aIndex,
+                    sourceIndexOffset,
+                    HasSourceNormal(sourceIndexOffset),
+                    GetSourceNormalState(sourceIndexOffset, aIndex),
                     adjustedTexCoords[0],
                     GetIndexNormal(sourceIndexOffset, aIndex),
-                    GetGlowColor(aIndex)));
+                    GetGlowColor(aIndex),
+                    GetAmbientIndex(sourceIndexOffset, aIndex)));
                 sourceIndexOffset++;
                 expandedIndices.Add(GetExpandedVertexIndex(
                     bIndex,
+                    sourceIndexOffset,
+                    HasSourceNormal(sourceIndexOffset),
+                    GetSourceNormalState(sourceIndexOffset, bIndex),
                     adjustedTexCoords[1],
                     GetIndexNormal(sourceIndexOffset, bIndex),
-                    GetGlowColor(bIndex)));
+                    GetGlowColor(bIndex),
+                    GetAmbientIndex(sourceIndexOffset, bIndex)));
                 sourceIndexOffset++;
                 expandedIndices.Add(GetExpandedVertexIndex(
                     cIndex,
+                    sourceIndexOffset,
+                    HasSourceNormal(sourceIndexOffset),
+                    GetSourceNormalState(sourceIndexOffset, cIndex),
                     adjustedTexCoords[2],
                     GetIndexNormal(sourceIndexOffset, cIndex),
-                    GetGlowColor(cIndex)));
+                    GetGlowColor(cIndex),
+                    GetAmbientIndex(sourceIndexOffset, cIndex)));
                 sourceIndexOffset++;
             }
 
@@ -102,9 +136,13 @@ internal static class TieGltfGeometryBuilder
                 expandedPositions,
                 expandedNormals,
                 expandedSourceOnlyNormals,
+                expandedSourceNormalMask,
+                expandedSourceNormalStates,
                 expandedTexCoords,
                 expandedGlowColors,
                 includeGlowColors,
+                expandedAmbientIndices,
+                includeAmbientIndices,
                 expandedGroups,
                 enableFlatProfileLocalInwardRepair: enableFlatProfileNormalFallbacks,
                 enableUpperHorizontalFlatFaceFallback: true)
@@ -116,9 +154,13 @@ internal static class TieGltfGeometryBuilder
                 expandedPositions,
                 expandedNormals,
                 expandedSourceOnlyNormals,
+                expandedSourceNormalMask,
+                expandedSourceNormalStates,
                 expandedTexCoords,
                 expandedGlowColors,
                 includeGlowColors,
+                expandedAmbientIndices,
+                includeAmbientIndices,
                 expandedGroups);
         }
 
@@ -153,8 +195,11 @@ internal static class TieGltfGeometryBuilder
         return new GltfGeometry(
             expandedPositions,
             expandedNormals,
+            expandedSourceNormalMask,
+            expandedSourceNormalStates,
             expandedTexCoords,
             expandedGlowColors,
+            expandedAmbientIndices,
             expandedGroups,
             windingRepairResult,
             suppressedGeneratedNormalFallbackVertexCount);
@@ -173,16 +218,46 @@ internal static class TieGltfGeometryBuilder
                 : TieGltfGlowBuilder.NoGlowColor;
         }
 
-        uint GetExpandedVertexIndex(int sourceIndex, Vector2 adjustedTexCoord, Vector3 normal, Vector4 glowColor)
+        float GetAmbientIndex(int indexOffset, int sourceIndex)
+        {
+            if (includeIndexAmbientIndices && indexOffset >= 0 && indexOffset < indexAmbientIndices.Count)
+            {
+                return indexAmbientIndices[indexOffset];
+            }
+
+            return includeSourceAmbientIndices && sourceIndex >= 0 && sourceIndex < ambientIndices.Count
+                ? ambientIndices[sourceIndex]
+                : -1f;
+        }
+
+        uint GetExpandedVertexIndex(
+            int sourceIndex,
+            int sourceIndexOffset,
+            bool sourceNormalPresent,
+            TieGltfSourceNormalState sourceNormalState,
+            Vector2 adjustedTexCoord,
+            Vector3 normal,
+            Vector4 glowColor,
+            float ambientIndex)
         {
             if (NearlyEqual(adjustedTexCoord, texCoords[sourceIndex])
                 && NearlyEqual(normal, normals[sourceIndex])
-                && (!includeGlowColors || NearlyEqual(glowColor, glowColors[sourceIndex])))
+                && NearlyEqual(sourceNormalPresent ? 1f : 0f, expandedSourceNormalMask[sourceIndex])
+                && NearlyEqual((float)sourceNormalState, expandedSourceNormalStates[sourceIndex])
+                && (!includeGlowColors || NearlyEqual(glowColor, glowColors[sourceIndex]))
+                && (!includeAmbientIndices || NearlyEqual(ambientIndex, ambientIndices[sourceIndex])))
             {
                 return checked((uint)sourceIndex);
             }
 
-            var key = ExpandedVertexKey.From(sourceIndex, adjustedTexCoord, normal, includeGlowColors ? glowColor : TieGltfGlowBuilder.NoGlowColor);
+            var key = ExpandedVertexKey.From(
+                sourceIndex,
+                adjustedTexCoord,
+                normal,
+                sourceNormalPresent,
+                sourceNormalState,
+                includeGlowColors ? glowColor : TieGltfGlowBuilder.NoGlowColor,
+                includeAmbientIndices ? ambientIndex : -1f);
             if (expandedVertexIndexByKey.TryGetValue(key, out var existingIndex))
             {
                 return existingIndex;
@@ -191,9 +266,11 @@ internal static class TieGltfGeometryBuilder
             var expandedIndex = checked((uint)expandedPositions.Count);
             expandedPositions.Add(positions[sourceIndex]);
             expandedNormals.Add(normal);
-            expandedSourceOnlyNormals.Add(sourceNormalVertexIndexSet.Contains(sourceIndex)
+            expandedSourceOnlyNormals.Add(sourceNormalPresent
                 ? normal
                 : Vector3.Zero);
+            expandedSourceNormalMask.Add(sourceNormalPresent ? 1f : 0f);
+            expandedSourceNormalStates.Add((float)sourceNormalState);
             expandedTexCoords.Add(adjustedTexCoord);
 
             if (includeGlowColors)
@@ -201,8 +278,32 @@ internal static class TieGltfGeometryBuilder
                 expandedGlowColors.Add(glowColor);
             }
 
+            if (includeAmbientIndices)
+            {
+                expandedAmbientIndices.Add(ambientIndex);
+            }
+
             expandedVertexIndexByKey.Add(key, expandedIndex);
             return expandedIndex;
+        }
+
+        bool HasSourceNormal(int sourceIndexOffset)
+        {
+            return sourceNormalIndexOffsetSet.Contains(sourceIndexOffset);
+        }
+
+        TieGltfSourceNormalState GetSourceNormalState(int sourceIndexOffset, int sourceIndex)
+        {
+            if (sourceIndexOffset >= 0
+                && sourceIndexOffset < sourceNormalIndexStates.Count
+                && sourceNormalIndexStates[sourceIndexOffset] != TieGltfSourceNormalState.Missing)
+            {
+                return sourceNormalIndexStates[sourceIndexOffset];
+            }
+
+            return sourceIndex >= 0 && sourceIndex < sourceNormalVertexStates.Count
+                ? sourceNormalVertexStates[sourceIndex]
+                : TieGltfSourceNormalState.Missing;
         }
 
         List<Vector3> BuildSourceOnlyNormals()
@@ -216,6 +317,40 @@ internal static class TieGltfGeometryBuilder
             }
 
             return sourceOnlyNormals;
+        }
+
+        List<float> BuildSourceNormalMask()
+        {
+            var sourceNormalMask = new List<float>(normals.Count);
+            for (var i = 0; i < normals.Count; i++)
+            {
+                sourceNormalMask.Add(sourceNormalVertexIndexSet.Contains(i) ? 1f : 0f);
+            }
+
+            return sourceNormalMask;
+        }
+
+        List<float> BuildSourceNormalStates()
+        {
+            var sourceNormalStates = new List<float>(normals.Count);
+            for (var i = 0; i < normals.Count; i++)
+            {
+                sourceNormalStates.Add(i < sourceNormalVertexStates.Count
+                    ? (float)sourceNormalVertexStates[i]
+                    : (float)TieGltfSourceNormalState.Missing);
+            }
+
+            return sourceNormalStates;
+        }
+
+        List<float> BuildInitialAmbientIndices()
+        {
+            if (includeSourceAmbientIndices)
+            {
+                return ambientIndices.ToList();
+            }
+
+            return Enumerable.Repeat(-1f, positions.Count).ToList();
         }
     }
 
@@ -240,6 +375,11 @@ internal static class TieGltfGeometryBuilder
             && MathF.Abs(left.W - right.W) < 0.000001f;
     }
 
+    private static bool NearlyEqual(float left, float right)
+    {
+        return MathF.Abs(left - right) < 0.000001f;
+    }
+
     private readonly record struct ExpandedVertexKey(
         int SourceIndex,
         int U,
@@ -247,12 +387,22 @@ internal static class TieGltfGeometryBuilder
         int NormalX,
         int NormalY,
         int NormalZ,
+        int SourceNormalPresent,
+        int SourceNormalState,
         int GlowR,
         int GlowG,
         int GlowB,
-        int GlowA)
+        int GlowA,
+        int AmbientIndex)
     {
-        public static ExpandedVertexKey From(int sourceIndex, Vector2 texCoord, Vector3 normal, Vector4 glowColor)
+        public static ExpandedVertexKey From(
+            int sourceIndex,
+            Vector2 texCoord,
+            Vector3 normal,
+            bool sourceNormalPresent,
+            TieGltfSourceNormalState sourceNormalState,
+            Vector4 glowColor,
+            float ambientIndex)
         {
             const float scale = 1000000f;
             return new ExpandedVertexKey(
@@ -262,10 +412,13 @@ internal static class TieGltfGeometryBuilder
                 (int)MathF.Round(normal.X * scale),
                 (int)MathF.Round(normal.Y * scale),
                 (int)MathF.Round(normal.Z * scale),
+                sourceNormalPresent ? 1 : 0,
+                (int)sourceNormalState,
                 (int)MathF.Round(glowColor.X * scale),
                 (int)MathF.Round(glowColor.Y * scale),
                 (int)MathF.Round(glowColor.Z * scale),
-                (int)MathF.Round(glowColor.W * scale));
+                (int)MathF.Round(glowColor.W * scale),
+                (int)MathF.Round(ambientIndex));
         }
     }
 }
@@ -273,8 +426,11 @@ internal static class TieGltfGeometryBuilder
 internal sealed record GltfGeometry(
     List<Vector3> Positions,
     List<Vector3> Normals,
+    List<float> SourceNormalMask,
+    List<float> SourceNormalStates,
     List<Vector2> TexCoords,
     List<Vector4> GlowColors,
+    List<float> AmbientIndices,
     List<PacketIndexGroup> PacketIndexGroups,
     TieGltfWindingRepairResult WindingRepairResult,
     int SuppressedGeneratedNormalFallbackVertexCount);

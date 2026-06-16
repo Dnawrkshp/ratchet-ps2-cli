@@ -1,6 +1,7 @@
 using System.Numerics;
 using RatchetPs2.Core.Geometry;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Tfrags;
@@ -11,22 +12,28 @@ public static partial class TfragGltfExporter
     private const float BroadRepeatedTileBoundaryCrossSpan = 0.75f;
     private const float RepeatedTileBoundaryEpsilon = 0.001f;
     private const float MinRepeatedTileBoundaryTriangleArea = 0.5f;
+    private const float OpposedTriangleNormalDotEpsilon = -0.0001f;
 
     private static TfragPrimitiveGroup? BuildPrimitiveGroup(
         TfragResolvedTexture texture,
         TfragTopologyPacket topologyPacket,
         TfragTopologyDecode topologyDecode,
         TfragMaterialRange materialRange,
+        TfragNormalBuildResult normalBuildResult,
         IReadOnlyList<TfragSourcePosition> sourcePositions,
         IReadOnlyList<TfragRgba> sourceColors,
+        IReadOnlyList<float> sourceLightSelectors,
+        IReadOnlyList<Vector4> sourceLightBaseColors,
+        IReadOnlyList<Vector3> sourceLightNormals,
+        IReadOnlyList<float> sourceLightPostScales,
         IReadOnlyList<Vector2?> packetReferenceTexCoords,
         IReadOnlyList<Vector2?> referenceTexCoords,
         IReadOnlyList<Vector3> positions,
         TextureSize? textureSize)
     {
-        var remap = new Dictionary<(uint SourceIndex, int ReferenceAddress), uint>();
+        var remap = new Dictionary<TfragPrimitiveVertexKey, uint>();
         var materialKey = new TfragMaterialKey(texture.TextureId, texture.ClampU, texture.ClampV);
-        var group = new TfragPrimitiveGroup(materialKey, topologyPacket, topologyDecode, materialRange);
+        var group = new TfragPrimitiveGroup(materialKey, topologyPacket, topologyDecode, materialRange, normalBuildResult);
         var startIndex = Math.Clamp(materialRange.StartIndex, 0, topologyDecode.Indices.Count);
         var endIndex = Math.Clamp(materialRange.StartIndex + materialRange.IndexCount, startIndex, topologyDecode.Indices.Count);
 
@@ -41,18 +48,24 @@ public static partial class TfragGltfExporter
             var referenceAddress = i < topologyDecode.ReferenceAddresses.Count
                 ? topologyDecode.ReferenceAddresses[i]
                 : -1;
-            var key = (sourceIndex, referenceAddress);
+            var normal = ResolveTopologyIndexNormal(normalBuildResult, i, sourceIndex);
+            var key = TfragPrimitiveVertexKey.From(sourceIndex, referenceAddress, normal);
             if (!remap.TryGetValue(key, out var localIndex))
             {
                 localIndex = checked((uint)group.Positions.Count);
                 remap[key] = localIndex;
                 group.Positions.Add(positions[(int)sourceIndex]);
+                group.Normals.Add(normal);
                 var texCoord = ResolveReferenceTexCoord(referenceAddress, packetReferenceTexCoords, referenceTexCoords);
                 var fallbackTexCoord = sourceIndex < (uint)sourcePositions.Count
                     ? BuildPreviewTexCoord(sourcePositions[(int)sourceIndex])
                     : Vector2.Zero;
                 group.TexCoords.Add(texCoord ?? fallbackTexCoord);
                 group.Colors.Add(BuildVertexColor(sourceColors, sourceIndex));
+                group.LightSelectors.Add(BuildLightSelector(sourceLightSelectors, sourceIndex));
+                group.LightBaseColors.Add(BuildLightBaseColor(sourceLightBaseColors, sourceIndex));
+                group.LightNormals.Add(BuildLightNormal(sourceLightNormals, sourceIndex, normal));
+                group.LightPostScales.Add(BuildLightPostScale(sourceLightPostScales, sourceIndex));
             }
 
             group.Indices.Add(localIndex);
@@ -64,7 +77,12 @@ public static partial class TfragGltfExporter
         }
 
         AdjustPrimitiveGroupTextureSeams(group, textureSize);
-        ComputeNormals(group);
+        if (group.Normals.Count != group.Positions.Count)
+        {
+            ComputeNormals(group);
+        }
+        OrientPrimitiveGroupTriangleWindingToNormals(group);
+
         return group;
     }
 
@@ -94,17 +112,32 @@ public static partial class TfragGltfExporter
         if (textureSize is not { } resolvedTextureSize
             || group.Indices.Count < 3
             || group.Positions.Count != group.TexCoords.Count
-            || group.Positions.Count != group.Colors.Count)
+            || group.Positions.Count != group.Normals.Count
+            || group.Positions.Count != group.Colors.Count
+            || group.Positions.Count != group.LightSelectors.Count
+            || group.Positions.Count != group.LightBaseColors.Count
+            || group.Positions.Count != group.LightNormals.Count
+            || group.Positions.Count != group.LightPostScales.Count)
         {
             return;
         }
 
         var sourcePositions = group.Positions.ToArray();
+        var sourceNormals = group.Normals.ToArray();
         var sourceTexCoords = group.TexCoords.ToArray();
         var sourceColors = group.Colors.ToArray();
+        var sourceLightSelectors = group.LightSelectors.ToArray();
+        var sourceLightBaseColors = group.LightBaseColors.ToArray();
+        var sourceLightNormals = group.LightNormals.ToArray();
+        var sourceLightPostScales = group.LightPostScales.ToArray();
         var expandedPositions = new List<Vector3>(group.Indices.Count);
+        var expandedNormals = new List<Vector3>(group.Indices.Count);
         var expandedTexCoords = new List<Vector2>(group.Indices.Count);
         var expandedColors = new List<Vector4>(group.Indices.Count);
+        var expandedLightSelectors = new List<float>(group.Indices.Count);
+        var expandedLightBaseColors = new List<Vector4>(group.Indices.Count);
+        var expandedLightNormals = new List<Vector3>(group.Indices.Count);
+        var expandedLightPostScales = new List<float>(group.Indices.Count);
         var expandedIndices = new List<uint>(group.Indices.Count);
         var expandedVertexIndexByKey = new Dictionary<TfragExpandedVertexKey, uint>();
 
@@ -151,16 +184,27 @@ public static partial class TfragGltfExporter
 
         group.Positions.Clear();
         group.Positions.AddRange(expandedPositions);
+        group.Normals.Clear();
+        group.Normals.AddRange(expandedNormals);
         group.TexCoords.Clear();
         group.TexCoords.AddRange(expandedTexCoords);
         group.Colors.Clear();
         group.Colors.AddRange(expandedColors);
+        group.LightSelectors.Clear();
+        group.LightSelectors.AddRange(expandedLightSelectors);
+        group.LightBaseColors.Clear();
+        group.LightBaseColors.AddRange(expandedLightBaseColors);
+        group.LightNormals.Clear();
+        group.LightNormals.AddRange(expandedLightNormals);
+        group.LightPostScales.Clear();
+        group.LightPostScales.AddRange(expandedLightPostScales);
         group.Indices.Clear();
         group.Indices.AddRange(expandedIndices);
 
         uint GetExpandedVertexIndex(int sourceIndex, Vector2 texCoord)
         {
-            var key = new TfragExpandedVertexKey(sourceIndex, texCoord);
+            var normal = sourceNormals[sourceIndex];
+            var key = TfragExpandedVertexKey.From(sourceIndex, texCoord, normal);
             if (expandedVertexIndexByKey.TryGetValue(key, out var expandedIndex))
             {
                 return expandedIndex;
@@ -169,10 +213,30 @@ public static partial class TfragGltfExporter
             expandedIndex = checked((uint)expandedPositions.Count);
             expandedVertexIndexByKey.Add(key, expandedIndex);
             expandedPositions.Add(sourcePositions[sourceIndex]);
+            expandedNormals.Add(normal);
             expandedTexCoords.Add(texCoord);
             expandedColors.Add(sourceColors[sourceIndex]);
+            expandedLightSelectors.Add(sourceLightSelectors[sourceIndex]);
+            expandedLightBaseColors.Add(sourceLightBaseColors[sourceIndex]);
+            expandedLightNormals.Add(sourceLightNormals[sourceIndex]);
+            expandedLightPostScales.Add(sourceLightPostScales[sourceIndex]);
             return expandedIndex;
         }
+    }
+
+    private static Vector3 ResolveTopologyIndexNormal(
+        TfragNormalBuildResult normalBuildResult,
+        int indexOffset,
+        uint sourceIndex)
+    {
+        if (indexOffset >= 0 && indexOffset < normalBuildResult.IndexNormals.Count)
+        {
+            return normalBuildResult.IndexNormals[indexOffset];
+        }
+
+        return sourceIndex < (uint)normalBuildResult.VertexNormals.Count
+            ? normalBuildResult.VertexNormals[(int)sourceIndex]
+            : Vector3.UnitY;
     }
 
     private static Vector4 BuildVertexColor(IReadOnlyList<TfragRgba> sourceColors, uint sourceIndex)
@@ -183,14 +247,47 @@ public static partial class TfragGltfExporter
         }
 
         var color = sourceColors[(int)sourceIndex];
-        var alpha = color.A < 0x80
-            ? color.A * 2
-            : 255;
-        return new Vector4(
-            color.R / 255f,
-            color.G / 255f,
-            color.B / 255f,
-            alpha / 255f);
+        return Ps2Color.ToGltfVertexColor(color.R, color.G, color.B, color.A);
+    }
+
+    private static float BuildLightSelector(IReadOnlyList<float> sourceLightSelectors, uint sourceIndex)
+    {
+        return sourceIndex < (uint)sourceLightSelectors.Count
+            ? sourceLightSelectors[(int)sourceIndex]
+            : 0x000F;
+    }
+
+    private static Vector4 BuildLightBaseColor(IReadOnlyList<Vector4> sourceLightBaseColors, uint sourceIndex)
+    {
+        return sourceIndex < (uint)sourceLightBaseColors.Count
+            ? sourceLightBaseColors[(int)sourceIndex]
+            : Vector4.One;
+    }
+
+    private static Vector3 BuildLightNormal(
+        IReadOnlyList<Vector3> sourceLightNormals,
+        uint sourceIndex,
+        Vector3 fallbackNormal)
+    {
+        if (sourceIndex < (uint)sourceLightNormals.Count)
+        {
+            var lightNormal = sourceLightNormals[(int)sourceIndex];
+            if (lightNormal.LengthSquared() > 0.00000001f)
+            {
+                return lightNormal;
+            }
+        }
+
+        return fallbackNormal.LengthSquared() > 0.00000001f
+            ? Vector3.Normalize(fallbackNormal)
+            : Vector3.UnitY;
+    }
+
+    private static float BuildLightPostScale(IReadOnlyList<float> sourceLightPostScales, uint sourceIndex)
+    {
+        return sourceIndex < (uint)sourceLightPostScales.Count
+            ? sourceLightPostScales[(int)sourceIndex]
+            : 1f;
     }
 
     private static Vector2[] RepairRepeatedTileBoundaryTexCoords(
@@ -340,6 +437,47 @@ public static partial class TfragGltfExporter
             group.Normals[i] = group.Normals[i].LengthSquared() <= 0.00000001f
                 ? Vector3.UnitY
                 : Vector3.Normalize(group.Normals[i]);
+        }
+    }
+
+    private static void OrientPrimitiveGroupTriangleWindingToNormals(TfragPrimitiveGroup group)
+    {
+        if (group.Positions.Count != group.Normals.Count)
+        {
+            return;
+        }
+
+        for (var i = 0; i + 2 < group.Indices.Count; i += 3)
+        {
+            var a = checked((int)group.Indices[i + 0]);
+            var b = checked((int)group.Indices[i + 1]);
+            var c = checked((int)group.Indices[i + 2]);
+            if ((uint)a >= (uint)group.Positions.Count
+                || (uint)b >= (uint)group.Positions.Count
+                || (uint)c >= (uint)group.Positions.Count)
+            {
+                continue;
+            }
+
+            var faceNormal = Vector3.Cross(
+                group.Positions[b] - group.Positions[a],
+                group.Positions[c] - group.Positions[a]);
+            var averageNormal = group.Normals[a] + group.Normals[b] + group.Normals[c];
+            if (faceNormal.LengthSquared() <= 0.00000001f
+                || averageNormal.LengthSquared() <= 0.00000001f)
+            {
+                continue;
+            }
+
+            var dot = Vector3.Dot(Vector3.Normalize(faceNormal), Vector3.Normalize(averageNormal));
+            if (dot >= OpposedTriangleNormalDotEpsilon)
+            {
+                continue;
+            }
+
+            group.Indices[i + 1] = (uint)c;
+            group.Indices[i + 2] = (uint)b;
+            group.WindingCorrectedTriangleCount++;
         }
     }
 
