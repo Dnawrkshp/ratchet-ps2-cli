@@ -12,6 +12,18 @@ export interface PackedPngBatchResult {
   pngLengths: Int32Array;
 }
 
+export interface PackedFileEntry {
+  path: string;
+  offset: number;
+  length: number;
+  contentType: string;
+}
+
+export interface PackedFilePackageResult {
+  packedBytes: Uint8Array;
+  entries: PackedFileEntry[];
+}
+
 export interface RatchetPs2WasmInitOptions {
   assetBaseUrl?: string;
 }
@@ -33,3 +45,7 @@ export function convertPifListToPngBlobs(pifImages: Array<Uint8Array | ArrayBuff
 export function convertPifListToPngPacked(pifImages: Array<Uint8Array | ArrayBuffer>, options?: ConvertPifToPngOptions): Promise<PackedPngBatchResult>;
 
 export function convertPifListToPngPackedBlobs(pifImages: Array<Uint8Array | ArrayBuffer>, options?: ConvertPifToPngOptions): Promise<Blob[]>;
+
+export function unpackDlLevelWad(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function buildDlLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;

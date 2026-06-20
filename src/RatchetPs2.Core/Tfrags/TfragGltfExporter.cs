@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Text.Json;
 using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures.Png;
@@ -25,6 +26,14 @@ public sealed class TfragGltfExportOptions
     public IReadOnlyDictionary<int, TextureSize>? ExternalTextureSizes { get; init; }
 
     public IReadOnlyDictionary<int, TextureAlphaInfo>? ExternalTextureAlpha { get; init; }
+
+    public bool IncludeDiagnostics { get; init; } = true;
+
+    public bool Minify { get; init; }
+
+    public GltfExportMetadataMode MetadataMode { get; init; } = GltfExportMetadataMode.Full;
+
+    public Action<string, string, double, string?>? TimingSink { get; init; }
 }
 
 public static partial class TfragGltfExporter
@@ -38,7 +47,11 @@ public static partial class TfragGltfExporter
     {
         ArgumentNullException.ThrowIfNull(input);
 
-        return Export(TfragTerrainReader.Read(input), gltfFileName, options);
+        options ??= new TfragGltfExportOptions();
+        var readStart = Stopwatch.GetTimestamp();
+        var terrain = TfragTerrainReader.Read(input);
+        AddTiming(options, "tfrag.read", "Terrain WAD parse", readStart);
+        return Export(terrain, gltfFileName, options);
     }
 
     public static TfragGltfExport Export(
@@ -50,7 +63,14 @@ public static partial class TfragGltfExporter
         options ??= new TfragGltfExportOptions();
         ValidateOptions(options);
 
+        var decodeStart = Stopwatch.GetTimestamp();
         var decoded = BuildDecodedTerrain(terrain, options);
+        AddTiming(
+            options,
+            "tfrag.decode",
+            "Terrain decode",
+            decodeStart,
+            $"{decoded.Meshes.Count} meshes");
         if (decoded.Meshes.Count == 0)
         {
             throw new InvalidDataException("Tfrag terrain has no decoded chunk LOD geometry to export.");
@@ -59,7 +79,14 @@ public static partial class TfragGltfExporter
         var binFileName = string.IsNullOrWhiteSpace(options.BufferFileName)
             ? $"{Path.GetFileNameWithoutExtension(gltfFileName)}.buffer.bin"
             : Path.GetFileName(options.BufferFileName);
+        var materialStart = Stopwatch.GetTimestamp();
         var materialBuild = BuildMaterials(decoded.MaterialKeys, options);
+        AddTiming(
+            options,
+            "tfrag.materials",
+            "Terrain material build",
+            materialStart,
+            $"{materialBuild.Materials.Count} materials");
 
         using var binStream = new MemoryStream();
         using var writer = new BinaryWriter(binStream);
@@ -72,23 +99,32 @@ public static partial class TfragGltfExporter
         nodes.Add(new Dictionary<string, object?>
         {
             ["name"] = "tfrag",
-            ["children"] = rootChildren,
-            ["extras"] = BuildRootNodeExtras(terrain, options)
+            ["children"] = rootChildren
         });
+        if (ShouldWriteFullMetadata(options))
+        {
+            nodes[0]["extras"] = BuildRootNodeExtras(terrain, options);
+        }
 
         for (var lodIndex = 0; lodIndex <= 2; lodIndex++)
         {
             var children = new List<int>();
             lodChildren[lodIndex] = children;
             rootChildren.Add(nodes.Count);
-            nodes.Add(new Dictionary<string, object?>
+            var node = new Dictionary<string, object?>
             {
                 ["name"] = $"lod_{lodIndex}",
-                ["children"] = children,
-                ["extras"] = BuildLodGroupExtras(decoded, lodIndex)
-            });
+                ["children"] = children
+            };
+            if (ShouldWriteFullMetadata(options))
+            {
+                node["extras"] = BuildLodGroupExtras(decoded, lodIndex);
+            }
+
+            nodes.Add(node);
         }
 
+        var geometryWriteStart = Stopwatch.GetTimestamp();
         foreach (var mesh in decoded.Meshes.OrderBy(mesh => mesh.LodIndex).ThenBy(mesh => mesh.Chunk.Index))
         {
             var meshIndex = meshes.Count;
@@ -160,32 +196,53 @@ public static partial class TfragGltfExporter
                     attributes[LightPostScaleAttributeName] = lightPostScaleAccessor.Value;
                 }
 
-                primitiveDefinitions.Add(new Dictionary<string, object>
+                var primitiveDefinition = new Dictionary<string, object>
                 {
                     ["attributes"] = attributes,
                     ["indices"] = indexAccessor,
                     ["mode"] = 4,
-                    ["material"] = materialBuild.MaterialIndexByKey[group.MaterialKey],
-                    ["extras"] = BuildPrimitiveExtras(group)
-                });
+                    ["material"] = materialBuild.MaterialIndexByKey[group.MaterialKey]
+                };
+                if (ShouldWriteFullMetadata(options))
+                {
+                    primitiveDefinition["extras"] = BuildPrimitiveExtras(group);
+                }
+
+                primitiveDefinitions.Add(primitiveDefinition);
             }
 
-            meshes.Add(new Dictionary<string, object?>
+            var meshDefinition = new Dictionary<string, object?>
             {
                 ["name"] = $"chunk_{mesh.Chunk.Index:0000}_lod_{mesh.LodIndex}",
-                ["primitives"] = primitiveDefinitions,
-                ["extras"] = BuildChunkLodMeshExtras(mesh)
-            });
+                ["primitives"] = primitiveDefinitions
+            };
+            if (ShouldWriteFullMetadata(options))
+            {
+                meshDefinition["extras"] = BuildChunkLodMeshExtras(mesh);
+            }
+
+            meshes.Add(meshDefinition);
 
             var nodeIndex = nodes.Count;
             lodChildren[mesh.LodIndex].Add(nodeIndex);
-            nodes.Add(new Dictionary<string, object?>
+            var nodeDefinition = new Dictionary<string, object?>
             {
                 ["name"] = $"chunk_{mesh.Chunk.Index:0000}_lod_{mesh.LodIndex}",
-                ["mesh"] = meshIndex,
-                ["extras"] = BuildChunkNodeExtras(mesh)
-            });
+                ["mesh"] = meshIndex
+            };
+            if (ShouldWriteFullMetadata(options))
+            {
+                nodeDefinition["extras"] = BuildChunkNodeExtras(mesh);
+            }
+
+            nodes.Add(nodeDefinition);
         }
+        AddTiming(
+            options,
+            "tfrag.geometry-write",
+            "Terrain glTF buffer write",
+            geometryWriteStart,
+            $"{meshes.Count} meshes, {gltfBufferWriter.Accessors.Count} accessors");
 
         var binBytes = binStream.ToArray();
         var gltf = new Dictionary<string, object?>
@@ -203,9 +260,12 @@ public static partial class TfragGltfExporter
             ["buffers"] = new[] { new { uri = binFileName, byteLength = binBytes.Length } },
             ["bufferViews"] = gltfBufferWriter.BufferViews,
             ["accessors"] = gltfBufferWriter.Accessors,
-            ["extensionsUsed"] = new[] { UnlitExtensionName },
-            ["extras"] = BuildRootExtras(terrain, decoded, options)
+            ["extensionsUsed"] = new[] { UnlitExtensionName }
         };
+        if (ShouldWriteFullMetadata(options))
+        {
+            gltf["extras"] = BuildRootExtras(terrain, decoded, options);
+        }
 
         if (materialBuild.TextureIds.Count > 0)
         {
@@ -214,11 +274,26 @@ public static partial class TfragGltfExporter
             gltf["textures"] = materialBuild.Textures;
         }
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = !options.Minify };
+        var jsonStart = Stopwatch.GetTimestamp();
+        var gltfBytes = JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions);
+        AddTiming(options, "tfrag.json", "Terrain glTF JSON serialize", jsonStart, $"{gltfBytes.Length} bytes");
+
+        var diagnosticsStart = Stopwatch.GetTimestamp();
+        var diagnosticsBytes = options.IncludeDiagnostics
+            ? BuildDiagnostics(terrain, decoded, options, jsonOptions)
+            : [];
+        AddTiming(
+            options,
+            "tfrag.diagnostics",
+            "Terrain diagnostics serialize",
+            diagnosticsStart,
+            options.IncludeDiagnostics ? $"{diagnosticsBytes.Length} bytes" : "disabled");
+
         return new TfragGltfExport(
-            JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions),
+            gltfBytes,
             binBytes,
-            BuildDiagnostics(terrain, decoded, options, jsonOptions));
+            diagnosticsBytes);
     }
 
     private static void ValidateOptions(TfragGltfExportOptions options)
@@ -242,5 +317,24 @@ public static partial class TfragGltfExporter
         {
             throw new ArgumentOutOfRangeException(nameof(options.MaxTriangleEdgeLength));
         }
+    }
+
+    private static bool ShouldWriteFullMetadata(TfragGltfExportOptions options)
+    {
+        return options.MetadataMode == GltfExportMetadataMode.Full;
+    }
+
+    private static void AddTiming(
+        TfragGltfExportOptions options,
+        string key,
+        string label,
+        long startTimestamp,
+        string? detail = null)
+    {
+        options.TimingSink?.Invoke(
+            key,
+            label,
+            Stopwatch.GetElapsedTime(startTimestamp).TotalMilliseconds,
+            detail);
     }
 }

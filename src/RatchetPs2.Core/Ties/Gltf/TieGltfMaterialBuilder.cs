@@ -1,3 +1,4 @@
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Ties;
@@ -19,6 +20,7 @@ internal sealed class TieGltfMaterialBuilder
     private readonly IReadOnlyDictionary<int, string>? _textureUris;
     private readonly IReadOnlyDictionary<int, TextureAlphaInfo>? _textureAlpha;
     private readonly TieGameProfile _profile;
+    private readonly GltfExportMetadataMode _metadataMode;
     private readonly int? _reflectiveEnvironmentShaderIndex;
     private readonly Dictionary<MaterialVariantKey, int> _materialIndexByKey = [];
     private readonly Dictionary<int, int> _textureIndexByShaderIndex = [];
@@ -28,12 +30,14 @@ internal sealed class TieGltfMaterialBuilder
         IReadOnlyList<TieShader> shaders,
         IReadOnlyDictionary<int, string>? textureUris,
         IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha,
-        TieGameProfile profile)
+        TieGameProfile profile,
+        GltfExportMetadataMode metadataMode)
     {
         _shaders = shaders ?? throw new ArgumentNullException(nameof(shaders));
         _textureUris = textureUris;
         _textureAlpha = textureAlpha;
         _profile = profile ?? throw new ArgumentNullException(nameof(profile));
+        _metadataMode = metadataMode;
         _reflectiveEnvironmentShaderIndex = ResolveReflectiveEnvironmentShaderIndex(textureUris);
 
         Materials.Add(BuildUntexturedPreviewMaterial());
@@ -201,23 +205,29 @@ internal sealed class TieGltfMaterialBuilder
         return TieMaterialAlphaUsage.Opacity;
     }
 
-    private static object BuildUntexturedPreviewMaterial()
+    private object BuildUntexturedPreviewMaterial()
     {
-        return new
+        var material = new Dictionary<string, object?>
         {
-            name = "tie_untextured_preview",
-            doubleSided = true,
-            pbrMetallicRoughness = new
+            ["name"] = "tie_untextured_preview",
+            ["doubleSided"] = true,
+            ["pbrMetallicRoughness"] = new
             {
                 baseColorFactor = new[] { 0.72f, 0.72f, 0.68f, 1f },
                 metallicFactor = 0f,
                 roughnessFactor = 0.85f
-            },
-            extras = new
-            {
-                TieUsesVertexColor0 = false,
             }
         };
+
+        if (_metadataMode != GltfExportMetadataMode.None)
+        {
+            material["extras"] = new
+            {
+                TieUsesVertexColor0 = false,
+            };
+        }
+
+        return material;
     }
 
     private static string BuildMaterialName(int shaderIndex, TieMaterialAlphaUsage alphaUsage)
@@ -253,7 +263,7 @@ internal sealed class TieGltfMaterialBuilder
         return textureIndex;
     }
 
-    private static Dictionary<string, object> BuildTieMaterial(
+    private Dictionary<string, object> BuildTieMaterial(
         string name,
         int? textureIndex,
         TextureAlphaInfo textureAlpha,
@@ -315,41 +325,42 @@ internal sealed class TieGltfMaterialBuilder
             }
         }
 
-        var extras = new Dictionary<string, object>
+        var extras = _metadataMode switch
         {
-            ["TieUsesVertexColor0"] = false,
-            ["TieUsesGlowEmission"] = useGlowEmission,
-            ["TieTextureHasAlpha"] = textureIndex.HasValue && textureAlpha.HasAlpha,
-            ["TieTextureAlphaMode"] = alphaMode.ToString(),
-            ["TieTextureAlphaUsage"] = alphaUsage.ToString(),
-            ["TieTextureGltfAlphaMode"] = emitsOpacity && textureAlpha.GltfAlphaMode is { } tieGltfAlphaMode
-                ? tieGltfAlphaMode
-                : null!,
-            ["TieTextureMinAlpha"] = textureIndex.HasValue ? textureAlpha.MinAlpha : 255,
-            ["TieTextureMaxAlpha"] = textureIndex.HasValue ? textureAlpha.MaxAlpha : 255,
-            ["TieTextureUsesBinaryAlpha"] = !textureIndex.HasValue || textureAlpha.UsesBinaryAlpha,
-            ["TieTextureFullOpacityAlpha"] = profile.FullOpacityAlpha,
-            ["TieMultipassOffset"] = multipassOffset,
-            ["TieMultipassType"] = passFlags,
-            ["TiePassFlags"] = passFlags,
-            ["TiePassFlagsBits"] = TiePassFlags.FormatByteBits(passFlags),
-            ["TieSecondPassMode"] = TiePassFlags.ResolveSecondPassMode(passFlags),
-            ["TieTextureMatrixEnabled"] = TiePassFlags.UsesTextureMatrix(passFlags),
-            ["TieTextureMatrixSelector"] = TiePassFlags.TextureMatrixSelector(passFlags),
-            ["TieEnvironmentPassBits"] = TiePassFlags.EnvironmentPassBits(passFlags),
-            ["TieMultipassUvSize"] = multipassUvSize,
-            ["TieMultipassUvRole"] = TiePassFlags.ResolveMultipassUvRole(passFlags, multipassUvSize),
-            ["TieMultipassTypeBits"] = TiePassFlags.FormatByteBits(passFlags),
-            ["HeaderModeBits"] = FormatModeBits(headerModeBits)
+            GltfExportMetadataMode.None => null,
+            GltfExportMetadataMode.RuntimeOnly => BuildRuntimeMaterialExtras(
+                textureIndex,
+                textureAlpha,
+                alphaMode,
+                alphaUsage,
+                emitsOpacity,
+                profile,
+                multipassOffset,
+                passFlags,
+                multipassUvSize,
+                useGlowEmission),
+            _ => BuildFullMaterialExtras(
+                textureIndex,
+                textureAlpha,
+                alphaMode,
+                alphaUsage,
+                emitsOpacity,
+                profile,
+                multipassOffset,
+                passFlags,
+                multipassUvSize,
+                headerModeBits,
+                useGlowEmission)
         };
-        if (usesReflectiveMask)
+        if (usesReflectiveMask && extras is not null)
         {
             AddReflectiveMaskExtras(
                 extras,
                 envPassBleedColor,
                 reflectiveEnvironmentTextureIndex,
                 reflectiveEnvironmentShaderIndex,
-                reflectiveEnvironmentUri);
+                reflectiveEnvironmentUri,
+                _metadataMode);
         }
 
         if (glowEmission is { } resolvedGlowEmission)
@@ -370,15 +381,93 @@ internal sealed class TieGltfMaterialBuilder
                     emissiveStrength = resolvedGlowEmission.Strength
                 }
             };
-            extras["TieGlowRgba"] = rgba.ToRgbaHex();
-            extras["TieGlowEmissionStrength"] = resolvedGlowEmission.Strength;
-            extras["TieGlowPreviewMode"] = textureIndex.HasValue
-                ? "TextureModulatedEmission"
-                : "UniformEmission";
+            if (extras is not null)
+            {
+                extras["TieGlowRgba"] = rgba.ToRgbaHex();
+                extras["TieGlowEmissionStrength"] = resolvedGlowEmission.Strength;
+                if (_metadataMode == GltfExportMetadataMode.Full)
+                {
+                    extras["TieGlowPreviewMode"] = textureIndex.HasValue
+                        ? "TextureModulatedEmission"
+                        : "UniformEmission";
+                }
+            }
         }
 
-        material["extras"] = extras;
+        if (extras is not null)
+        {
+            material["extras"] = extras;
+        }
+
         return material;
+    }
+
+    private static Dictionary<string, object> BuildRuntimeMaterialExtras(
+        int? textureIndex,
+        TextureAlphaInfo textureAlpha,
+        TextureAlphaMode alphaMode,
+        TieMaterialAlphaUsage alphaUsage,
+        bool emitsOpacity,
+        TieGameProfile profile,
+        int multipassOffset,
+        int passFlags,
+        int multipassUvSize,
+        bool useGlowEmission)
+    {
+        return new Dictionary<string, object>
+        {
+            ["TieUsesGlowEmission"] = useGlowEmission,
+            ["TieTextureHasAlpha"] = textureIndex.HasValue && textureAlpha.HasAlpha,
+            ["TieTextureAlphaMode"] = alphaMode.ToString(),
+            ["TieTextureAlphaUsage"] = alphaUsage.ToString(),
+            ["TieTextureGltfAlphaMode"] = emitsOpacity && textureAlpha.GltfAlphaMode is { } tieGltfAlphaMode
+                ? tieGltfAlphaMode
+                : null!,
+            ["TieTextureFullOpacityAlpha"] = profile.FullOpacityAlpha,
+            ["TieMultipassOffset"] = multipassOffset,
+            ["TieMultipassType"] = passFlags,
+            ["TiePassFlags"] = passFlags,
+            ["TieSecondPassMode"] = TiePassFlags.ResolveSecondPassMode(passFlags),
+            ["TieEnvironmentPassBits"] = TiePassFlags.EnvironmentPassBits(passFlags),
+            ["TieMultipassUvSize"] = multipassUvSize,
+            ["TieMultipassUvRole"] = TiePassFlags.ResolveMultipassUvRole(passFlags, multipassUvSize)
+        };
+    }
+
+    private static Dictionary<string, object> BuildFullMaterialExtras(
+        int? textureIndex,
+        TextureAlphaInfo textureAlpha,
+        TextureAlphaMode alphaMode,
+        TieMaterialAlphaUsage alphaUsage,
+        bool emitsOpacity,
+        TieGameProfile profile,
+        int multipassOffset,
+        int passFlags,
+        int multipassUvSize,
+        short headerModeBits,
+        bool useGlowEmission)
+    {
+        var extras = BuildRuntimeMaterialExtras(
+            textureIndex,
+            textureAlpha,
+            alphaMode,
+            alphaUsage,
+            emitsOpacity,
+            profile,
+            multipassOffset,
+            passFlags,
+            multipassUvSize,
+            useGlowEmission);
+        extras["TieUsesVertexColor0"] = false;
+        extras["TieTextureMinAlpha"] = textureIndex.HasValue ? textureAlpha.MinAlpha : 255;
+        extras["TieTextureMaxAlpha"] = textureIndex.HasValue ? textureAlpha.MaxAlpha : 255;
+        extras["TieTextureUsesBinaryAlpha"] = !textureIndex.HasValue || textureAlpha.UsesBinaryAlpha;
+        extras["TiePassFlagsBits"] = TiePassFlags.FormatByteBits(passFlags);
+        extras["TieTextureMatrixEnabled"] = TiePassFlags.UsesTextureMatrix(passFlags);
+        extras["TieTextureMatrixSelector"] = TiePassFlags.TextureMatrixSelector(passFlags);
+        extras["TieMultipassTypeBits"] = TiePassFlags.FormatByteBits(passFlags);
+        extras["HeaderModeBits"] = FormatModeBits(headerModeBits);
+        return extras;
     }
 
     private static void AddReflectiveMaskExtras(
@@ -386,7 +475,8 @@ internal sealed class TieGltfMaterialBuilder
         TieRgba32? envPassBleedColor,
         int? reflectiveEnvironmentTextureIndex,
         int? reflectiveEnvironmentShaderIndex,
-        string? reflectiveEnvironmentUri)
+        string? reflectiveEnvironmentUri,
+        GltfExportMetadataMode metadataMode)
     {
         extras["TieMaterialRole"] = "ReflectiveOverlay";
         extras["TieTextureRgbUsage"] = "ReflectivePreview";
@@ -411,10 +501,13 @@ internal sealed class TieGltfMaterialBuilder
         extras["TieReflectiveMaxBlend"] = ReflectiveMaskMaxBlend;
         if (envPassBleedColor is { } rgba)
         {
-            extras["TieReflectiveBleedColor"] = rgba.ToRgbaHex();
             extras["TieReflectiveBleedColorFactor"] = ToPs2ColorFactor(rgba);
             extras["TieReflectiveBleedAlpha"] = rgba.A / 128f;
-            extras["TieReflectiveBleedColorSource"] = "PacketMultipassQword1";
+            if (metadataMode == GltfExportMetadataMode.Full)
+            {
+                extras["TieReflectiveBleedColor"] = rgba.ToRgbaHex();
+                extras["TieReflectiveBleedColorSource"] = "PacketMultipassQword1";
+            }
         }
     }
 

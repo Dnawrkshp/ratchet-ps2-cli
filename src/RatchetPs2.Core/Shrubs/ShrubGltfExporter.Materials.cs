@@ -1,3 +1,4 @@
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Shrubs;
@@ -65,7 +66,12 @@ public static partial class ShrubGltfExporter
             }
 
             material["pbrMetallicRoughness"] = pbr;
-            material["extras"] = BuildMaterialExtras(textureId, options);
+            var extras = BuildMaterialExtras(textureId, options);
+            if (extras is not null)
+            {
+                material["extras"] = extras;
+            }
+
             materials.Add(material);
         }
 
@@ -75,8 +81,13 @@ public static partial class ShrubGltfExporter
             exportedTextureIds);
     }
 
-    private static object BuildMaterialExtras(int textureId, ShrubGltfExportOptions options)
+    private static object? BuildMaterialExtras(int textureId, ShrubGltfExportOptions options)
     {
+        if (options.MetadataMode == GltfExportMetadataMode.None)
+        {
+            return null;
+        }
+
         var alpha = options.ExternalTextureAlpha is not null && options.ExternalTextureAlpha.TryGetValue(textureId, out var alphaInfo)
             ? alphaInfo
             : TextureAlphaInfo.Opaque;
@@ -84,6 +95,18 @@ public static partial class ShrubGltfExporter
         var size = options.ExternalTextureSizes is not null && options.ExternalTextureSizes.TryGetValue(textureId, out var resolvedSize)
             ? resolvedSize
             : new TextureSize(0, 0);
+
+        if (options.MetadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                ShrubTextureHasAlpha = shrubAlpha.HasAlpha,
+                ShrubTextureAlphaMode = shrubAlpha.AlphaMode.ToString(),
+                ShrubTextureAlphaUsage = shrubAlpha.HasAlpha ? "Opacity" : "Opaque",
+                ShrubTextureGltfAlphaMode = shrubAlpha.HasAlpha ? shrubAlpha.GltfAlphaMode : null,
+                ShrubTextureFullOpacityAlpha = ShrubTextureAlpha.FullOpacityAlpha
+            };
+        }
 
         return new
         {

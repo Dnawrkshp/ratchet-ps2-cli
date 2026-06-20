@@ -39,6 +39,7 @@ internal static class TfragExportGltfBatchCommand
         {
             Description = "Optional maximum number of tfrag terrain files to export."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf-batch",
@@ -48,7 +49,8 @@ internal static class TfragExportGltfBatchCommand
             outputRootOption,
             tfragFileNameOption,
             manifestNameOption,
-            limitOption);
+            limitOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -58,6 +60,7 @@ internal static class TfragExportGltfBatchCommand
             var tfragFileName = parseResult.GetValue(tfragFileNameOption);
             var manifestName = parseResult.GetValue(manifestNameOption);
             var limit = parseResult.GetValue(limitOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -157,12 +160,18 @@ internal static class TfragExportGltfBatchCommand
                             GameLabel = gameId.ToString(),
                             ExternalTextureUris = textureResources?.Uris,
                             ExternalTextureSizes = textureResources?.Sizes,
-                            ExternalTextureAlpha = textureResources?.Alpha
+                            ExternalTextureAlpha = textureResources?.Alpha,
+                            IncludeDiagnostics = !minify,
+                            Minify = minify,
+                            MetadataMode = minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full
                         });
 
                     File.WriteAllBytes(gltfFile.FullName, export.GltfBytes);
                     File.WriteAllBytes(bufferFile.FullName, export.BinBytes);
-                    File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+                    if (export.DiagnosticsBytes.Length > 0)
+                    {
+                        File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+                    }
                     itemStopwatch.Stop();
 
                     succeeded++;
@@ -181,7 +190,8 @@ internal static class TfragExportGltfBatchCommand
                         gameId,
                         textureResources,
                         itemStopwatch.Elapsed.TotalMilliseconds,
-                        export));
+                        export,
+                        minify));
                 }
                 catch (Exception ex)
                 {
@@ -253,7 +263,8 @@ internal static class TfragExportGltfBatchCommand
         GameId gameId,
         TextureResources? textureResources,
         double conversionMs,
-        TfragGltfExport export)
+        TfragGltfExport export,
+        bool minify)
     {
         using var gltfInput = new MemoryStream(export.GltfBytes);
         var modelInfo = GltfModelInspector.Inspect(gltfInput);
@@ -276,7 +287,7 @@ internal static class TfragExportGltfBatchCommand
             SourceTfrag = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, tfragFile.FullName)),
             Gltf = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, gltfFile.FullName)),
             Buffer = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, bufferFile.FullName)),
-            Diagnostics = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, diagnosticsFile.FullName)),
+            Diagnostics = minify ? null : CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, diagnosticsFile.FullName)),
             ConversionMs = conversionMs,
             InputBytes = tfragFile.Length,
             OutputBytes = export.GltfBytes.Length + export.BinBytes.Length + export.DiagnosticsBytes.Length,
@@ -313,6 +324,13 @@ internal static class TfragExportGltfBatchCommand
 
     private static TfragBatchGeometrySummary ReadGeometrySummary(byte[] diagnosticsBytes)
     {
+        if (diagnosticsBytes.Length == 0)
+        {
+            return new TfragBatchGeometrySummary(
+                new SortedDictionary<string, int>(StringComparer.Ordinal),
+                new SortedDictionary<string, int>(StringComparer.Ordinal));
+        }
+
         using var document = JsonDocument.Parse(diagnosticsBytes);
         var geometry = document.RootElement.GetProperty("Geometry");
         return new TfragBatchGeometrySummary(

@@ -11,19 +11,22 @@ internal static class SkyboxExportGltfCommand
         var gameOption = CommonOptions.Game();
         var inputOption = CommonOptions.InputFile("Path to the sky.bin binary.");
         var outputOption = CommonOptions.OutputFile("Path to write the exported .gltf file.");
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
             "Export skybox geometry to a glTF model.",
             gameOption,
             inputOption,
-            outputOption);
+            outputOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
             var gameValue = parseResult.GetValue(gameOption);
             var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -59,7 +62,7 @@ internal static class SkyboxExportGltfCommand
             }
 
             var levelNumber = SkyboxGameFormats.InferLevelNumber(inputFile.FullName);
-            var fileExport = SkyboxExportWriter.Export(inputFile, outputFile, gameId, levelNumber);
+            var fileExport = SkyboxExportWriter.Export(inputFile, outputFile, gameId, levelNumber, minify);
 
             Console.WriteLine(
                 $"Exported {gameId} skybox glTF '{inputFile.FullName}' to '{outputFile.FullName}' with {fileExport.Export.Textures.Count} texture(s).");

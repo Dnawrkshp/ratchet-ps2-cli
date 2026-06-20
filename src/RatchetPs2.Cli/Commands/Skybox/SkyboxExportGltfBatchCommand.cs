@@ -35,6 +35,7 @@ internal static class SkyboxExportGltfBatchCommand
         {
             Description = "Optional maximum number of skyboxes to export."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf-batch",
@@ -44,7 +45,8 @@ internal static class SkyboxExportGltfBatchCommand
             outputRootOption,
             skyFileNameOption,
             manifestNameOption,
-            limitOption);
+            limitOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -54,6 +56,7 @@ internal static class SkyboxExportGltfBatchCommand
             var skyFileName = parseResult.GetValue(skyFileNameOption);
             var manifestName = parseResult.GetValue(manifestNameOption);
             var limit = parseResult.GetValue(limitOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -138,7 +141,7 @@ internal static class SkyboxExportGltfBatchCommand
                 try
                 {
                     var levelNumber = SkyboxGameFormats.InferLevelNumber(relativeSourceDirectory);
-                    var fileExport = SkyboxExportWriter.Export(skyFile, gltfFile, gameId, levelNumber);
+                    var fileExport = SkyboxExportWriter.Export(skyFile, gltfFile, gameId, levelNumber, minify);
 
                     itemStopwatch.Stop();
                     succeeded++;

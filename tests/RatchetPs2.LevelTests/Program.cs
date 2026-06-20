@@ -7,6 +7,10 @@ using RatchetPs2.Games.DL.Level;
 
 ValidateLevelInfoLookup();
 ValidateLevelWadParsing();
+ValidateLooseLevelWadExtraction();
+ValidateLooseLevelWadUnpacking();
+ValidateLooseLevelWadRenderPackageWhenAvailable();
+ValidateLooseLevelWadFailures();
 ValidateMissionPlaceholderDetection();
 ValidateLevelSceneWadEmptyDetection();
 ValidateCoreLevelSegments();
@@ -108,6 +112,143 @@ static void ValidateLevelWadParsing()
     var relativeByteBlock = DlLevelInfoReader.ReadByteLengthSectorRelativeBlock(isoStream, 4, new DlFileBlock(3, 17));
     Expect(relativeByteBlock.Length == 17, "relative byte-length fileblock should not sector-scale length");
     Expect(relativeByteBlock[0] == 0xdd, "relative byte-length fileblock should add the WAD base sector");
+}
+
+static void ValidateLooseLevelWadExtraction()
+{
+    const int levelIndex = 3;
+    const int headerSector = 20;
+    const int payloadBaseSector = 60;
+    var looseWadBytes = CreateSyntheticLooseLevelWad(payloadBaseSector);
+    var iso = CreateSyntheticIso(levelIndex, headerSector, payloadBaseSector, looseWadBytes);
+
+    using var stream = new MemoryStream(iso, writable: false);
+    var extracted = DlLooseLevelWadExtractor.ExtractPrimary(stream, levelIndex);
+
+    Expect(extracted.LevelIndex == levelIndex, "loose WAD extraction should preserve requested level index");
+    Expect(extracted.HeaderSector == headerSector, "loose WAD extraction should report the header sector");
+    Expect(extracted.PayloadBaseSector == payloadBaseSector, "loose WAD extraction should report the payload base sector");
+    Expect(extracted.SectorCount == looseWadBytes.Length / DlLevelConstants.SectorSize, "loose WAD extraction should copy through the last referenced sector");
+    Expect(extracted.Bytes.SequenceEqual(looseWadBytes), "loose WAD extraction should preserve referenced WAD bytes in a self-contained layout");
+}
+
+static void ValidateLooseLevelWadUnpacking()
+{
+    var looseWadBytes = CreateSyntheticLooseLevelWad(payloadBaseSector: 20);
+    var package = DlLevelWadUnpacker.Unpack(looseWadBytes);
+    var files = package.Files.ToDictionary(file => file.Path);
+
+    Expect(files.ContainsKey("level_wad/header.bin"), "loose WAD unpack should include the level WAD header");
+    Expect(files["level_wad/core_sound.bnk"].Bytes[0] == 0x41, "loose WAD unpack should include core sound bank bytes");
+    Expect(files["level_wad/chunks/chunk0.wad"].Bytes[0] == 0x51, "loose WAD unpack should include chunk bytes");
+    Expect(files["missions/0000/mission.wad"].Bytes[0x40] == 0xA1, "loose WAD unpack should include mission WAD bytes");
+    Expect(files["missions/0000/gameplay.bin"].Bytes.SequenceEqual(new byte[] { 0xA1, 0xA2, 0xA3, 0xA4 }), "loose WAD unpack should slice mission gameplay bytes");
+    Expect(files["missions/0000/classes.bin"].Bytes.SequenceEqual(new byte[] { 0xB1, 0xB2, 0xB3, 0xB4 }), "loose WAD unpack should slice mission classes bytes");
+    Expect(files["missions/0000/gameplay_instances.bin"].Bytes[0] == 0x81, "loose WAD unpack should include mission instance bytes");
+    Expect(!files.ContainsKey("missions/0001/mission.wad"), "loose WAD unpack should skip placeholder missions");
+    Expect(files["assets/asset_header.bin"].Bytes.SequenceEqual(new byte[] { 1, 2, 3, 4 }), "loose WAD unpack should expose core asset header payload");
+    Expect(files["world/lighting/directional_lights.bin"].Bytes[0] == 0xD1, "loose WAD unpack should expose parsed world slot payloads");
+
+    var packed = package.ToPackedPackage();
+    Expect(packed.Entries.Count == package.Files.Count, "packed package entry count should match loose file count");
+    var packedMissionEntry = packed.Entries.Single(entry => entry.Path == "missions/0000/mission.wad");
+    var packedMissionBytes = packed.PackedBytes.AsSpan(packedMissionEntry.Offset, packedMissionEntry.Length).ToArray();
+    Expect(packedMissionBytes.SequenceEqual(files["missions/0000/mission.wad"].Bytes), "packed package offsets should round-trip entry bytes");
+}
+
+static void ValidateLooseLevelWadRenderPackageWhenAvailable()
+{
+    var wadPath = Environment.GetEnvironmentVariable("RATCHET_PS2_DL_LEVEL_WAD")
+        ?? "/tmp/ratchet-dl-wad-realdata-44-v2/level44.wad";
+    if (!File.Exists(wadPath))
+    {
+        return;
+    }
+
+    var renderPackage = DlLevelWadRenderPackageBuilder.BuildPacked(
+        File.ReadAllBytes(wadPath),
+        DlLevelWadRenderPackageBuildOptions.Browser);
+    var entries = renderPackage.Entries.ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+
+    Expect(entries.ContainsKey("manifest.json"), "render package should include the root viewer manifest");
+    Expect(entries.ContainsKey("assets/manifest.json"), "render package should include the asset viewer manifest");
+    Expect(entries.ContainsKey("world/manifest.json"), "render package should include the world viewer manifest");
+    Expect(entries.ContainsKey("assets/tfrag/tfrag.gltf"), "render package should include the terrain glTF");
+    Expect(entries.ContainsKey("assets/tfrag/tfrag.buffer.bin"), "render package should include the terrain glTF buffer");
+    Expect(entries.ContainsKey("world/lighting/directional_lights.bin"), "render package should include directional light sidecars");
+    Expect(!entries.ContainsKey("assets/tfrag/tfrag.bin"), "browser render package should omit source terrain bytes");
+    Expect(
+        entries.Keys.All(path => !path.EndsWith(".diagnostics.json", StringComparison.Ordinal)),
+        "browser render package should omit glTF diagnostics");
+    Expect(
+        entries.Keys.All(path =>
+            !path.EndsWith("/tie.bin", StringComparison.Ordinal)
+            && !path.EndsWith("/shrub.bin", StringComparison.Ordinal)
+            && !path.EndsWith("/tie.json", StringComparison.Ordinal)
+            && !path.EndsWith("/shrub.json", StringComparison.Ordinal)),
+        "browser render package should omit source tie and shrub sidecars");
+
+    using var rootManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["manifest.json"]));
+    var performanceTimings = rootManifest.RootElement.GetProperty("PerformanceTimings").EnumerateArray().ToArray();
+    Expect(
+        performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.assets.tfrag"),
+        "render package manifest should include top-level terrain timing");
+    Expect(
+        performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.tfrag.decode"),
+        "render package manifest should include terrain exporter subphase timing");
+
+    using var assetManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["assets/manifest.json"]));
+    var gltfExports = assetManifest.RootElement.GetProperty("GltfExports").EnumerateArray().ToArray();
+    Expect(
+        gltfExports.Any(entry =>
+            entry.GetProperty("Family").GetString() == "tfrag"
+            && entry.GetProperty("Status").GetString() == "written"),
+        "render package asset manifest should contain a written tfrag export");
+
+    if (gltfExports.Any(entry =>
+        entry.GetProperty("Family").GetString() == "tie"
+        && entry.GetProperty("Status").GetString() == "written"))
+    {
+        Expect(
+            performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.tie.document"),
+            "render package manifest should include aggregated tie document timing when ties are written");
+    }
+}
+
+static void ValidateLooseLevelWadFailures()
+{
+    const int levelIndex = 4;
+    const int headerSector = 20;
+    const int payloadBaseSector = 60;
+
+    var negativeBlockWad = CreateSyntheticLooseLevelWad(payloadBaseSector, negativeBlock: true);
+    var negativeBlockIso = CreateSyntheticIso(levelIndex, headerSector, payloadBaseSector, negativeBlockWad);
+    using (var stream = new MemoryStream(negativeBlockIso, writable: false))
+    {
+        ExpectThrows<InvalidDataException>(() => DlLooseLevelWadExtractor.ExtractPrimary(stream, levelIndex));
+    }
+
+    var outOfRangePayloadBaseSector = 2000;
+    var outOfRangeWad = CreateSyntheticLooseLevelWad(outOfRangePayloadBaseSector);
+    var outOfRangeIso = CreateSyntheticIso(
+        levelIndex,
+        headerSector,
+        outOfRangePayloadBaseSector,
+        outOfRangeWad,
+        includePayloads: false);
+    using (var stream = new MemoryStream(outOfRangeIso, writable: false))
+    {
+        ExpectThrows<InvalidDataException>(() => DlLooseLevelWadExtractor.ExtractPrimary(stream, levelIndex));
+    }
+
+    var badHeader = CreateSyntheticLooseLevelWad(payloadBaseSector);
+    WriteInt32(badHeader, 0x00, DlLevelConstants.LevelWadHeaderSize - 1);
+    ExpectThrows<InvalidDataException>(() => DlLevelWadUnpacker.Unpack(badHeader));
+}
+
+static byte[] ReadPackedEntryBytes(PackedFilePackage package, PackedFileEntry entry)
+{
+    return package.PackedBytes.AsSpan(entry.Offset, entry.Length).ToArray();
 }
 
 static void ValidateMissionPlaceholderDetection()
@@ -508,6 +649,100 @@ static void ValidateNormalizedTextureArtifacts()
     {
         Directory.Delete(outputDirectory, recursive: true);
     }
+}
+
+static byte[] CreateSyntheticIso(
+    int levelIndex,
+    int headerSector,
+    int payloadBaseSector,
+    byte[] looseWadBytes,
+    bool includePayloads = true)
+{
+    var iso = new byte[Math.Max(
+        DlLevelConstants.RetailLevelInfoTableOffset + (DlLevelConstants.LevelInfoCount * DlLevelConstants.LevelInfoSize),
+        ((includePayloads ? payloadBaseSector : headerSector) * DlLevelConstants.SectorSize)
+            + (includePayloads ? looseWadBytes.Length : DlLevelConstants.LevelWadHeaderSectorCount * DlLevelConstants.SectorSize))];
+
+    WriteLevelInfoEntry(
+        iso,
+        levelIndex,
+        audio: new DlFileBlock(0, 0),
+        level: new DlFileBlock(headerSector, 1),
+        scene: new DlFileBlock(0, 0));
+
+    var headerLength = DlLevelConstants.LevelWadHeaderSectorCount * DlLevelConstants.SectorSize;
+    looseWadBytes.AsSpan(0, headerLength).CopyTo(iso.AsSpan(headerSector * DlLevelConstants.SectorSize));
+    if (includePayloads)
+    {
+        looseWadBytes.CopyTo(iso.AsSpan(payloadBaseSector * DlLevelConstants.SectorSize));
+    }
+
+    return iso;
+}
+
+static byte[] CreateSyntheticLooseLevelWad(int payloadBaseSector, bool negativeBlock = false)
+{
+    var data = new byte[DlLevelConstants.SectorSize * 11];
+    WriteInt32(data, 0x00, DlLevelConstants.LevelWadHeaderSize);
+    WriteInt32(data, 0x04, payloadBaseSector);
+    WriteInt32(data, 0x08, 7);
+    WriteInt32(data, 0x0c, 2);
+    WriteInt32(data, 0x10, 0x1111);
+    WriteInt32(data, 0x14, 0x2222);
+    WriteFileBlock(data, 0x18, negativeBlock ? new DlFileBlock(-1, 1) : new DlFileBlock(2, 2));
+    WriteFileBlock(data, 0x20, new DlFileBlock(4, 1));
+    WriteFileBlock(data, 0x28, new DlFileBlock(5, 1));
+    WriteFileBlock(data, 0x40, new DlFileBlock(6, 1));
+    WriteFileBlock(data, 0x460, new DlFileBlock(7, 1));
+    WriteFileBlock(data, 0x60, new DlFileBlock(8, 1));
+    WriteFileBlock(data, 0x468, new DlFileBlock(10, 1));
+    WriteFileBlock(data, 0xc60, new DlFileBlock(9, 1));
+
+    var coreLevelBytes = CreateSyntheticCoreLevel();
+    coreLevelBytes.CopyTo(data.AsSpan(2 * DlLevelConstants.SectorSize));
+
+    data[4 * DlLevelConstants.SectorSize] = 0x41;
+    data[5 * DlLevelConstants.SectorSize] = 0x51;
+    data[6 * DlLevelConstants.SectorSize] = 0x61;
+
+    var mission = data.AsSpan(7 * DlLevelConstants.SectorSize, DlLevelConstants.SectorSize);
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x00, 0x40);
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x04, 4);
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x08, 0x44);
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x0c, 4);
+    mission[0x40] = 0xA1;
+    mission[0x41] = 0xA2;
+    mission[0x42] = 0xA3;
+    mission[0x43] = 0xA4;
+    mission[0x44] = 0xB1;
+    mission[0x45] = 0xB2;
+    mission[0x46] = 0xB3;
+    mission[0x47] = 0xB4;
+
+    data[8 * DlLevelConstants.SectorSize] = 0x81;
+    data[9 * DlLevelConstants.SectorSize] = 0x91;
+
+    var placeholderOffset = 10 * DlLevelConstants.SectorSize;
+    WriteInt32(data, placeholderOffset + 0x00, -1);
+    WriteInt32(data, placeholderOffset + 0x04, 0);
+    WriteInt32(data, placeholderOffset + 0x08, -1);
+    WriteInt32(data, placeholderOffset + 0x0c, 0);
+
+    return data;
+}
+
+static byte[] CreateSyntheticCoreLevel()
+{
+    var world = BuildWorldInstanceData((0x00, new byte[] { 0xD1, 0xD2, 0xD3, 0xD4 }));
+    var data = new byte[DlLevelConstants.SectorSize * 2];
+    WriteFileBlock(data, 0x10, new DlFileBlock(0x100, 4));
+    WriteFileBlock(data, 0x58, new DlFileBlock(0x180, world.Length));
+    data[0x100] = 1;
+    data[0x101] = 2;
+    data[0x102] = 3;
+    data[0x103] = 4;
+    world.CopyTo(data.AsSpan(0x180));
+    return data;
 }
 
 static byte[] CreatePalette()

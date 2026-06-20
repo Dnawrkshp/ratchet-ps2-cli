@@ -21,4 +21,9 @@ internal static class CommonOptions
         Description = description,
         Required = true
     };
+
+    public static Option<bool> MinifyGltf() => new("--minify")
+    {
+        Description = "Write minified runtime glTF JSON and omit exporter-only metadata/diagnostics."
+    };
 }

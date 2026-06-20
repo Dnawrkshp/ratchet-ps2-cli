@@ -10,6 +10,8 @@ internal static class MapCommand
         return CliCommandBuilder.Create(
             "map",
             "Work with full map extraction packages.",
-            MapExtractCommand.Build());
+            MapExtractCommand.Build(),
+            MapExtractWadCommand.Build(),
+            MapUnpackWadCommand.Build());
     }
 }

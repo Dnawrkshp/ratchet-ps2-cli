@@ -56,30 +56,39 @@ internal static class SkyboxBatchManifestBuilder
         var clusterCount = skybox.Shells.Sum(shell => shell.Clusters.Count);
         var sourceVertexCount = skybox.Shells.SelectMany(shell => shell.Clusters).Sum(cluster => cluster.Vertices.Count);
         var triangleCount = skybox.Shells.SelectMany(shell => shell.Clusters).Sum(cluster => cluster.Triangles.Count);
-        using var diagnosticsDocument = JsonDocument.Parse(export.DiagnosticsBytes);
-        var diagnostics = diagnosticsDocument.RootElement;
-        var exportedVertexCount = diagnostics.TryGetProperty("PositionCount", out var positionCountElement)
-            ? positionCountElement.GetInt32()
-            : triangleCount * 3;
-        var colorCount = diagnostics.TryGetProperty("ColorCount", out var colorCountElement)
-            ? colorCountElement.GetInt32()
-            : 0;
-        var primitiveCount = diagnostics.TryGetProperty("PrimitiveCount", out var primitiveCountElement)
-            ? primitiveCountElement.GetInt32()
-            : 0;
-        var textureTriangleCounts = diagnostics.TryGetProperty("TextureTriangleCounts", out var textureCountsElement)
-            ? textureCountsElement
-                .EnumerateObject()
-                .ToDictionary(property => property.Name, property => property.Value.GetInt32(), StringComparer.Ordinal)
-            : skybox.Shells
-                .SelectMany(shell => shell.Clusters)
-                .SelectMany(cluster => cluster.Triangles)
-                .GroupBy(triangle => triangle.TextureId)
-                .OrderBy(group => group.Key == 0xFF ? int.MaxValue : group.Key)
-                .ToDictionary(
-                    group => group.Key == 0xFF ? "untextured" : group.Key.ToString(),
-                    group => group.Count(),
-                    StringComparer.Ordinal);
+        using var diagnosticsDocument = export.DiagnosticsBytes.Length == 0
+            ? null
+            : JsonDocument.Parse(export.DiagnosticsBytes);
+        var exportedVertexCount = triangleCount * 3;
+        var colorCount = 0;
+        var primitiveCount = 0;
+        var textureTriangleCounts = skybox.Shells
+            .SelectMany(shell => shell.Clusters)
+            .SelectMany(cluster => cluster.Triangles)
+            .GroupBy(triangle => triangle.TextureId)
+            .OrderBy(group => group.Key == 0xFF ? int.MaxValue : group.Key)
+            .ToDictionary(
+                group => group.Key == 0xFF ? "untextured" : group.Key.ToString(),
+                group => group.Count(),
+                StringComparer.Ordinal);
+        if (diagnosticsDocument is not null)
+        {
+            var diagnostics = diagnosticsDocument.RootElement;
+            exportedVertexCount = diagnostics.TryGetProperty("PositionCount", out var positionCountElement)
+                ? positionCountElement.GetInt32()
+                : exportedVertexCount;
+            colorCount = diagnostics.TryGetProperty("ColorCount", out var colorCountElement)
+                ? colorCountElement.GetInt32()
+                : colorCount;
+            primitiveCount = diagnostics.TryGetProperty("PrimitiveCount", out var primitiveCountElement)
+                ? primitiveCountElement.GetInt32()
+                : primitiveCount;
+            textureTriangleCounts = diagnostics.TryGetProperty("TextureTriangleCounts", out var textureCountsElement)
+                ? textureCountsElement
+                    .EnumerateObject()
+                    .ToDictionary(property => property.Name, property => property.Value.GetInt32(), StringComparer.Ordinal)
+                : textureTriangleCounts;
+        }
 
         return new
         {
@@ -91,7 +100,7 @@ internal static class SkyboxBatchManifestBuilder
             SourceSky = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, skyFile.FullName)),
             Gltf = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.GltfFile.FullName)),
             Buffer = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.BufferFile.FullName)),
-            Diagnostics = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.DiagnosticsFile.FullName)),
+            Diagnostics = ToRelativeUri(manifestDirectory, fileExport.DiagnosticsFile),
             ConversionMs = conversionMs,
             InputBytes = skyFile.Length,
             OutputBytes = fileExport.OutputBytes,
@@ -172,6 +181,13 @@ internal static class SkyboxBatchManifestBuilder
     private static string FormatOffset(long offset)
     {
         return $"0x{offset:X}";
+    }
+
+    private static string? ToRelativeUri(DirectoryInfo manifestDirectory, FileInfo? file)
+    {
+        return file is null
+            ? null
+            : CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, file.FullName));
     }
 
     private static double Median(IReadOnlyList<double> values)

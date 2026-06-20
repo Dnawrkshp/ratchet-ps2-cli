@@ -57,7 +57,7 @@ internal static partial class DlMapExtractionWriter
             string sourcePath,
             string gltfPath,
             string bufferPath,
-            string diagnosticsPath)
+            string? diagnosticsPath)
         {
             return new GltfExportRoute(family, modelId, sourcePath, gltfPath, bufferPath, diagnosticsPath, "written", null);
         }

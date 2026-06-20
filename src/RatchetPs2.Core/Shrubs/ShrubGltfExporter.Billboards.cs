@@ -59,23 +59,10 @@ public static partial class ShrubGltfExporter
             ["indices"] = gltfBufferWriter.WriteUInt32IndexAccessor(indices),
             ["mode"] = 4,
             ["material"] = materialIndex,
-            ["extras"] = new
-            {
-                ShrubBillboard = true,
-                Texture = options.ExternalBillboardTextureUri,
-                TextureIndex = string.IsNullOrWhiteSpace(options.ExternalBillboardTextureUri) ? null : (int?)textureIndex,
-                billboard.FadeDistance,
-                billboard.Width,
-                billboard.Height,
-                billboard.ZOffset,
-                PreviewWidth = previewWidth,
-                PreviewHeight = previewHeight,
-                PreviewCenterY = preview.CenterY,
-                preview.SizingMode
-            }
+            ["extras"] = BuildBillboardExtras(billboard, options, preview, textureIndex)
         };
 
-        var extras = BuildBillboardExtras(billboard, options, preview);
+        var extras = BuildBillboardExtras(billboard, options, preview, textureIndex);
         return new ShrubBillboardMeshBuild(
             new
             {
@@ -130,15 +117,38 @@ public static partial class ShrubGltfExporter
         }
 
         material["pbrMetallicRoughness"] = pbr;
-        material["extras"] = BuildBillboardMaterialExtras(options);
+        var extras = BuildBillboardMaterialExtras(options);
+        if (extras is not null)
+        {
+            material["extras"] = extras;
+        }
+
         return material;
     }
 
-    private static object BuildBillboardMaterialExtras(ShrubGltfExportOptions options)
+    private static object? BuildBillboardMaterialExtras(ShrubGltfExportOptions options)
     {
+        if (options.MetadataMode == GltfExportMetadataMode.None)
+        {
+            return null;
+        }
+
         var alpha = options.ExternalBillboardTextureAlpha ?? TextureAlphaInfo.Opaque;
         var shrubAlpha = ShrubTextureAlpha.Interpret(alpha);
         var size = options.ExternalBillboardTextureSize ?? new TextureSize(0, 0);
+
+        if (options.MetadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                ShrubBillboardMaterial = true,
+                ShrubTextureHasAlpha = shrubAlpha.HasAlpha,
+                ShrubTextureAlphaMode = shrubAlpha.AlphaMode.ToString(),
+                ShrubTextureAlphaUsage = shrubAlpha.HasAlpha ? "Opacity" : "Opaque",
+                ShrubTextureGltfAlphaMode = shrubAlpha.HasAlpha ? shrubAlpha.GltfAlphaMode : null,
+                ShrubTextureFullOpacityAlpha = ShrubTextureAlpha.FullOpacityAlpha
+            };
+        }
 
         return new
         {
@@ -168,12 +178,22 @@ public static partial class ShrubGltfExporter
     private static object BuildBillboardExtras(
         ShrubBillboard billboard,
         ShrubGltfExportOptions options,
-        ShrubBillboardPreview preview)
+        ShrubBillboardPreview preview,
+        int textureIndex)
     {
+        if (options.MetadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                ShrubBillboard = true
+            };
+        }
+
         return new
         {
             ShrubBillboard = true,
             Texture = options.ExternalBillboardTextureUri,
+            TextureIndex = string.IsNullOrWhiteSpace(options.ExternalBillboardTextureUri) ? null : (int?)textureIndex,
             billboard.FadeDistance,
             billboard.Width,
             billboard.Height,

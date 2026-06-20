@@ -25,7 +25,10 @@ internal static class TieGltfDocumentBuilder
         TieGameProfile profile,
         IReadOnlyDictionary<int, string>? externalTextureUris,
         IReadOnlyDictionary<int, TextureSize>? externalTextureSizes,
-        IReadOnlyDictionary<int, TextureAlphaInfo>? externalTextureAlpha)
+        IReadOnlyDictionary<int, TextureAlphaInfo>? externalTextureAlpha,
+        bool includeDiagnostics,
+        bool minify,
+        GltfExportMetadataMode metadataMode)
     {
         ArgumentNullException.ThrowIfNull(tie);
         ArgumentNullException.ThrowIfNull(topology);
@@ -41,7 +44,8 @@ internal static class TieGltfDocumentBuilder
             tie.Shaders,
             externalTextureUris,
             externalTextureAlpha,
-            profile);
+            profile,
+            metadataMode);
         var glowEmission = TieGltfGlowBuilder.BuildEmissionMaterial(glowColorResult.Rgba);
         using var binStream = new MemoryStream();
         using var writer = new BinaryWriter(binStream);
@@ -136,13 +140,16 @@ internal static class TieGltfDocumentBuilder
                 tie.Header.ModeBits,
                 group.UseGlowEmission ? glowEmission : null);
             var glowRgbaIndexCount = TieGltfGlowBuilder.CountActiveIndices(group.Indices, geometry.GlowColors);
-            primitives.Add(new Dictionary<string, object>
+            var primitiveDefinition = new Dictionary<string, object>
             {
                 ["attributes"] = attributes,
                 ["indices"] = indexAccessor,
                 ["mode"] = 4,
-                ["material"] = materialIndex,
-                ["extras"] = new
+                ["material"] = materialIndex
+            };
+            if (ShouldWriteFullMetadata(metadataMode))
+            {
+                primitiveDefinition["extras"] = new
                 {
                     group.PacketIndex,
                     group.ShaderIndex,
@@ -167,8 +174,10 @@ internal static class TieGltfDocumentBuilder
                     GlowRgbaUsesEmission = group.UseGlowEmission,
                     GlowRgbaEmissionStrength = group.UseGlowEmission ? glowEmission.Strength : 0f,
                     TriangleCount = group.Indices.Count / 3
-                }
-            });
+                };
+            }
+
+            primitives.Add(primitiveDefinition);
         }
 
         var binBytes = binStream.ToArray();
@@ -185,7 +194,7 @@ internal static class TieGltfDocumentBuilder
                 {
                     name = meshName,
                     mesh = 0,
-                    extras = BuildNodeExtras(tie, topology, gameLabel)
+                    extras = BuildNodeExtras(tie, topology, gameLabel, metadataMode)
                 }
             },
             ["meshes"] = new[]
@@ -210,7 +219,8 @@ internal static class TieGltfDocumentBuilder
                         sourceNormalMaskAccessor.HasValue ? geometry.SourceNormalMask.Count : 0,
                         sourceNormalStateAccessor.HasValue ? geometry.SourceNormalStates.Count : 0,
                         geometry.PacketIndexGroups.Any(group => group.UseGlowEmission),
-                        gameLabel)
+                        gameLabel,
+                        metadataMode)
                 }
             },
             ["materials"] = materialBuilder.Materials,
@@ -234,9 +244,10 @@ internal static class TieGltfDocumentBuilder
             gltf["textures"] = materialBuilder.Textures;
         }
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = !minify };
         var gltfBytes = JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions);
-        var diagnosticsBytes = JsonSerializer.SerializeToUtf8Bytes(new
+        var diagnosticsBytes = includeDiagnostics
+            ? JsonSerializer.SerializeToUtf8Bytes(new
         {
             ExportType = $"{gameLabel} tie LOD geometry",
             Note = "Preview geometry reconstructed from tie packet strip controls, decoded logical vertex VU address mapping, packet shader references, packet shader switch VU addresses, and ST texture coordinates.",
@@ -458,7 +469,8 @@ internal static class TieGltfDocumentBuilder
                     Rgba = BuildRgbaDiagnostic(vertex.Rgba)
                 })
                 .ToArray()
-        }, jsonOptions);
+        }, jsonOptions)
+            : [];
 
         return new TieGltfExport(gltfBytes, binBytes, diagnosticsBytes);
     }
@@ -1381,8 +1393,25 @@ internal static class TieGltfDocumentBuilder
                     && row.Words[item.index].Raw == item.address);
     }
 
-    private static object BuildNodeExtras(TieClass tie, TieLodTopology topology, string gameLabel)
+    private static object? BuildNodeExtras(
+        TieClass tie,
+        TieLodTopology topology,
+        string gameLabel,
+        GltfExportMetadataMode metadataMode)
     {
+        if (metadataMode == GltfExportMetadataMode.None)
+        {
+            return null;
+        }
+
+        if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                topology.LodIndex
+            };
+        }
+
         return new
         {
             source = "tie.bin",
@@ -1409,8 +1438,25 @@ internal static class TieGltfDocumentBuilder
         int sourceNormalMaskAttributeCount,
         int sourceNormalStateAttributeCount,
         bool usesGlowEmission,
-        string gameLabel)
+        string gameLabel,
+        GltfExportMetadataMode metadataMode)
     {
+        if (metadataMode == GltfExportMetadataMode.None)
+        {
+            return null!;
+        }
+
+        if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                topology.LodIndex,
+                AmbientWordCount = ambientIndexResult.AmbientWordCount,
+                AmbientSlotCount = ambientIndexResult.AmbientSlotCount,
+                AmbientColorRecipes = ambientIndexResult.ColorRecipes
+            };
+        }
+
         return new
         {
             game = gameLabel,
@@ -1528,5 +1574,10 @@ internal static class TieGltfDocumentBuilder
             GlowRgbaEmissionStrength = TieGltfGlowBuilder.GetEmissionStrength(glowColorResult.Rgba),
             tie.Header.Scale
         };
+    }
+
+    private static bool ShouldWriteFullMetadata(GltfExportMetadataMode metadataMode)
+    {
+        return metadataMode == GltfExportMetadataMode.Full;
     }
 }

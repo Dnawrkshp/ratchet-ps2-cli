@@ -63,7 +63,7 @@ internal static class ShrubBatchManifestBuilder
             Source = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, sourceFile.FullName)),
             Gltf = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.GltfFile.FullName)),
             Buffer = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.BufferFile.FullName)),
-            Diagnostics = CliPathUtils.ToUriPath(Path.GetRelativePath(manifestDirectory.FullName, fileExport.DiagnosticsFile.FullName)),
+            Diagnostics = ToRelativeUri(manifestDirectory, fileExport.DiagnosticsFile),
             ConversionMs = conversionMs,
             InputBytes = fileExport.InputBytes,
             OutputBytes = fileExport.OutputBytes,

@@ -113,7 +113,11 @@ public static partial class TfragGltfExporter
             }
 
             material["pbrMetallicRoughness"] = pbr;
-            material["extras"] = BuildMaterialExtras(key, options);
+            if (ShouldWriteFullMetadata(options))
+            {
+                material["extras"] = BuildMaterialExtras(key, options);
+            }
+
             materials.Add(material);
         }
 

@@ -37,6 +37,12 @@ public sealed class SkyboxGltfExportOptions
 
     public IReadOnlyDictionary<int, SkyboxShellRotationOverride> ShellRotationOverrides { get; init; }
         = new Dictionary<int, SkyboxShellRotationOverride>();
+
+    public bool IncludeDiagnostics { get; init; } = true;
+
+    public bool Minify { get; init; }
+
+    public GltfExportMetadataMode MetadataMode { get; init; } = GltfExportMetadataMode.Full;
 }
 
 public sealed record SkyboxShellRotationOverride(
@@ -90,7 +96,8 @@ public static partial class SkyboxGltfExporter
             textureResources,
             mesh.VertexAlphaByTextureId,
             skybox.Header.Color,
-            mesh.UsesUntexturedGouraudColors);
+            mesh.UsesUntexturedGouraudColors,
+            options.MetadataMode);
 
         using var binStream = new MemoryStream();
         using var writer = new BinaryWriter(binStream);
@@ -136,14 +143,19 @@ public static partial class SkyboxGltfExporter
             {
                 var primitive = primitiveGeometry.Primitive;
                 var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(primitiveGeometry.Indices);
-                primitives.Add(new Dictionary<string, object>
+                var primitiveDefinition = new Dictionary<string, object>
                 {
                     ["attributes"] = attributes,
                     ["indices"] = indexAccessor,
                     ["mode"] = 4,
-                    ["material"] = materialResult.MaterialIndexByKey[SkyboxMaterialKey.ForPrimitive(primitive)],
-                    ["extras"] = BuildPrimitiveExtras(primitive, shell, options.RuntimeFrameRate, shellRotationOverrides)
-                });
+                    ["material"] = materialResult.MaterialIndexByKey[SkyboxMaterialKey.ForPrimitive(primitive)]
+                };
+                if (options.MetadataMode != GltfExportMetadataMode.None)
+                {
+                    primitiveDefinition["extras"] = BuildPrimitiveExtras(primitive, shell, options.RuntimeFrameRate, shellRotationOverrides);
+                }
+
+                primitives.Add(primitiveDefinition);
             }
 
             var shellName = BuildShellName(meshName, shell.Index);
@@ -151,15 +163,22 @@ public static partial class SkyboxGltfExporter
             shellMeshes.Add(new Dictionary<string, object>
             {
                 ["name"] = shellName,
-                ["primitives"] = primitives,
-                ["extras"] = BuildShellMeshExtras(shell, shellGeometry, shellPrimitives, options.RuntimeFrameRate, shellRotationOverrides)
+                ["primitives"] = primitives
             });
+            if (options.MetadataMode != GltfExportMetadataMode.None)
+            {
+                shellMeshes[^1]["extras"] = BuildShellMeshExtras(shell, shellGeometry, shellPrimitives, options.RuntimeFrameRate, shellRotationOverrides);
+            }
+
             shellNodes.Add(new Dictionary<string, object>
             {
                 ["name"] = shellName,
-                ["mesh"] = meshIndex,
-                ["extras"] = BuildShellNodeExtras(shell, options.RuntimeFrameRate, shellRotationOverrides)
+                ["mesh"] = meshIndex
             });
+            if (options.MetadataMode != GltfExportMetadataMode.None)
+            {
+                shellNodes[^1]["extras"] = BuildShellNodeExtras(shell, options.RuntimeFrameRate, shellRotationOverrides);
+            }
         }
 
         var nodes = new List<Dictionary<string, object>>
@@ -167,10 +186,14 @@ public static partial class SkyboxGltfExporter
             new()
             {
                 ["name"] = meshName,
-                ["children"] = Enumerable.Range(1, shellNodes.Count).ToArray(),
-                ["extras"] = BuildNodeExtras(skybox, gameLabel, options.PositionScale, options.RuntimeFrameRate, shellRotationOverrides)
+                ["children"] = Enumerable.Range(1, shellNodes.Count).ToArray()
             }
         };
+        if (options.MetadataMode == GltfExportMetadataMode.Full)
+        {
+            nodes[0]["extras"] = BuildNodeExtras(skybox, gameLabel, options.PositionScale, options.RuntimeFrameRate, shellRotationOverrides);
+        }
+
         nodes.AddRange(shellNodes);
         var binBytes = binStream.ToArray();
         var gltf = new Dictionary<string, object>
@@ -180,13 +203,16 @@ public static partial class SkyboxGltfExporter
             ["scenes"] = new[] { new { nodes = new[] { 0 } } },
             ["nodes"] = nodes,
             ["meshes"] = shellMeshes,
-            ["extras"] = BuildMeshExtras(skybox, mesh, options.RuntimeFrameRate, shellRotationOverrides),
             ["materials"] = materialResult.Materials,
             ["buffers"] = new[] { new { uri = binFileName, byteLength = binBytes.Length } },
             ["bufferViews"] = gltfBufferWriter.BufferViews,
             ["accessors"] = gltfBufferWriter.Accessors,
             ["extensionsUsed"] = BuildExtensionsUsed(materialResult.UsesBloomEmission)
         };
+        if (options.MetadataMode == GltfExportMetadataMode.Full)
+        {
+            gltf["extras"] = BuildMeshExtras(skybox, mesh, options.RuntimeFrameRate, shellRotationOverrides);
+        }
 
         if (textureResources.Count > 0)
         {
@@ -212,16 +238,18 @@ public static partial class SkyboxGltfExporter
             }).ToArray();
         }
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = !options.Minify };
         var gltfBytes = JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions);
-        var diagnosticsBytes = BuildDiagnosticsBytes(
-            skybox,
-            mesh,
-            textureResources,
-            gameLabel,
-            options.RuntimeFrameRate,
-            shellRotationOverrides,
-            jsonOptions);
+        var diagnosticsBytes = options.IncludeDiagnostics
+            ? BuildDiagnosticsBytes(
+                skybox,
+                mesh,
+                textureResources,
+                gameLabel,
+                options.RuntimeFrameRate,
+                shellRotationOverrides,
+                jsonOptions)
+            : [];
 
         return new SkyboxGltfExport(gltfBytes, binBytes, diagnosticsBytes, textureResources);
     }

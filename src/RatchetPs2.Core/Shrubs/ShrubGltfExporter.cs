@@ -29,6 +29,12 @@ public sealed class ShrubGltfExportOptions
     public TextureSize? ExternalBillboardTextureSize { get; init; }
 
     public TextureAlphaInfo? ExternalBillboardTextureAlpha { get; init; }
+
+    public bool IncludeDiagnostics { get; init; } = true;
+
+    public bool Minify { get; init; }
+
+    public GltfExportMetadataMode MetadataMode { get; init; } = GltfExportMetadataMode.Full;
 }
 
 public static partial class ShrubGltfExporter
@@ -88,7 +94,7 @@ public static partial class ShrubGltfExporter
                 target: GltfBufferWriter.ArrayBufferTarget);
             var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
 
-            primitives.Add(new Dictionary<string, object>
+            var primitive = new Dictionary<string, object>
             {
                 ["attributes"] = new Dictionary<string, int>
                 {
@@ -98,8 +104,11 @@ public static partial class ShrubGltfExporter
                 },
                 ["indices"] = indexAccessor,
                 ["mode"] = 4,
-                ["material"] = materialBuild.MaterialIndexByTextureId[group.TextureId],
-                ["extras"] = new
+                ["material"] = materialBuild.MaterialIndexByTextureId[group.TextureId]
+            };
+            if (ShouldWriteFullMetadata(options))
+            {
+                primitive["extras"] = new
                 {
                     ShrubTextureId = group.TextureId,
                     group.PacketIndex,
@@ -108,8 +117,10 @@ public static partial class ShrubGltfExporter
                     group.SourceVertexCount,
                     group.TriangleCount,
                     group.WindingCorrectedTriangleCount
-                }
-            });
+                };
+            }
+
+            primitives.Add(primitive);
         }
 
         var gameLabel = NormalizeLabel(options.GameLabel);
@@ -119,7 +130,7 @@ public static partial class ShrubGltfExporter
             {
                 name = "shrub",
                 primitives,
-                extras = BuildMeshExtras(shrub, mesh)
+                extras = ShouldWriteFullMetadata(options) ? BuildMeshExtras(shrub, mesh) : null
             }
         };
         var nodes = new List<object>
@@ -128,7 +139,7 @@ public static partial class ShrubGltfExporter
             {
                 name = "shrub",
                 mesh = 0,
-                extras = BuildNodeExtras(shrub, gameLabel, options.PositionScale)
+                extras = ShouldWriteFullMetadata(options) ? BuildNodeExtras(shrub, gameLabel, options.PositionScale) : null
             }
         };
         var gltfTextureCount = materialBuild.TextureIds.Count;
@@ -153,9 +164,12 @@ public static partial class ShrubGltfExporter
             ["buffers"] = new[] { new { uri = binFileName, byteLength = binBytes.Length } },
             ["bufferViews"] = gltfBufferWriter.BufferViews,
             ["accessors"] = gltfBufferWriter.Accessors,
-            ["extensionsUsed"] = new[] { UnlitExtensionName },
-            ["extras"] = BuildRootExtras(shrub, mesh, gameLabel)
+            ["extensionsUsed"] = new[] { UnlitExtensionName }
         };
+        if (ShouldWriteFullMetadata(options))
+        {
+            gltf["extras"] = BuildRootExtras(shrub, mesh, gameLabel);
+        }
 
         var images = materialBuild.TextureIds.Select(textureId => new
         {
@@ -191,11 +205,18 @@ public static partial class ShrubGltfExporter
             }).ToArray();
         }
 
-        var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
+        var jsonOptions = new JsonSerializerOptions { WriteIndented = !options.Minify };
         var gltfBytes = JsonSerializer.SerializeToUtf8Bytes(gltf, jsonOptions);
-        var diagnosticsBytes = BuildDiagnostics(shrub, mesh, gameLabel, options, jsonOptions);
+        var diagnosticsBytes = options.IncludeDiagnostics
+            ? BuildDiagnostics(shrub, mesh, gameLabel, options, jsonOptions)
+            : [];
 
         return new ShrubGltfExport(gltfBytes, binBytes, diagnosticsBytes);
+    }
+
+    private static bool ShouldWriteFullMetadata(ShrubGltfExportOptions options)
+    {
+        return options.MetadataMode == GltfExportMetadataMode.Full;
     }
 
 }

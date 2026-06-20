@@ -101,3 +101,59 @@ public sealed record DlCoreLevelSegment(
     byte[] PayloadBytes,
     bool WasCompressedWad,
     string OutputExtension);
+
+public sealed record DlLooseLevelWad(
+    int LevelIndex,
+    int HeaderSector,
+    int PayloadBaseSector,
+    int SectorCount,
+    DlLevelInfoSet LevelInfo,
+    DlLevelWad LevelWad,
+    byte[] Bytes)
+{
+    public int BaseSector => HeaderSector;
+
+    public int ByteLength => Bytes.Length;
+}
+
+public sealed record DlLevelWadPackage(
+    DlLevelWad LevelWad,
+    IReadOnlyList<DlLevelWadFile> Files)
+{
+    public PackedFilePackage ToPackedPackage()
+    {
+        var entries = new PackedFileEntry[Files.Count];
+        var totalLength = 0;
+
+        for (var i = 0; i < Files.Count; i++)
+        {
+            var file = Files[i];
+            entries[i] = new PackedFileEntry(file.Path, totalLength, file.Bytes.Length, file.ContentType);
+            totalLength = checked(totalLength + file.Bytes.Length);
+        }
+
+        var packedBytes = new byte[totalLength];
+        for (var i = 0; i < Files.Count; i++)
+        {
+            var file = Files[i];
+            file.Bytes.AsSpan().CopyTo(packedBytes.AsSpan(entries[i].Offset, file.Bytes.Length));
+        }
+
+        return new PackedFilePackage(packedBytes, entries);
+    }
+}
+
+public sealed record DlLevelWadFile(
+    string Path,
+    byte[] Bytes,
+    string ContentType);
+
+public sealed record PackedFilePackage(
+    byte[] PackedBytes,
+    IReadOnlyList<PackedFileEntry> Entries);
+
+public sealed record PackedFileEntry(
+    string Path,
+    int Offset,
+    int Length,
+    string ContentType);

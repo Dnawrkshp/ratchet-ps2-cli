@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Skyboxes;
 
 namespace RatchetPs2.Cli.Abstractions;
@@ -8,7 +9,7 @@ internal sealed record SkyboxFileExport(
     SkyboxGltfExport Export,
     FileInfo GltfFile,
     FileInfo BufferFile,
-    FileInfo DiagnosticsFile)
+    FileInfo? DiagnosticsFile)
 {
     public long OutputBytes => Export.GltfBytes.Length
         + Export.BinBytes.Length
@@ -22,7 +23,8 @@ internal static class SkyboxExportWriter
         FileInfo inputFile,
         FileInfo gltfFile,
         GameId gameId,
-        int? levelNumber)
+        int? levelNumber,
+        bool minify = false)
     {
         ArgumentNullException.ThrowIfNull(inputFile);
         ArgumentNullException.ThrowIfNull(gltfFile);
@@ -40,14 +42,28 @@ internal static class SkyboxExportWriter
         var export = SkyboxGltfExporter.Export(
             skybox,
             gltfFile.Name,
-            profile.CreateExportOptions(bufferFile.Name, levelNumber, skybox.Shells.Count));
+            profile.CreateExportOptions(
+                bufferFile.Name,
+                levelNumber,
+                skybox.Shells.Count,
+                includeDiagnostics: !minify,
+                minify: minify,
+                metadataMode: minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full));
 
         File.WriteAllBytes(gltfFile.FullName, export.GltfBytes);
         File.WriteAllBytes(bufferFile.FullName, export.BinBytes);
-        File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+        if (export.DiagnosticsBytes.Length > 0)
+        {
+            File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+        }
         WriteTextures(outputDirectory, export);
 
-        return new SkyboxFileExport(skybox, export, gltfFile, bufferFile, diagnosticsFile);
+        return new SkyboxFileExport(
+            skybox,
+            export,
+            gltfFile,
+            bufferFile,
+            export.DiagnosticsBytes.Length > 0 ? diagnosticsFile : null);
     }
 
     private static void WriteTextures(DirectoryInfo outputDirectory, SkyboxGltfExport export)

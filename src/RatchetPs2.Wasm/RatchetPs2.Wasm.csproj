@@ -9,6 +9,13 @@
     <EnableDefaultContentItems>false</EnableDefaultContentItems>
   </PropertyGroup>
 
+  <PropertyGroup Condition="'$(Configuration)' == 'Release'">
+    <RunAOTCompilation>true</RunAOTCompilation>
+    <WasmInitialHeapSize>268435456</WasmInitialHeapSize>
+    <WasmBitcodeCompileOptimizationFlag>-O3</WasmBitcodeCompileOptimizationFlag>
+    <EmccLinkOptimizationFlag>-O3</EmccLinkOptimizationFlag>
+  </PropertyGroup>
+
   <ItemGroup>
     <Content Include="wwwroot/**" />
     <Content Include="package.json" CopyToPublishDirectory="PreserveNewest" />
@@ -18,7 +25,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\RatchetPs2.Core\RatchetPs2.Core.csproj" SetTargetFramework="TargetFramework=net9.0-browser" />
+    <ProjectReference Include="..\RatchetPs2.Core\RatchetPs2.Core.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
+    <ProjectReference Include="..\RatchetPs2.Games.DL\RatchetPs2.Games.DL.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
   </ItemGroup>
 
   <ItemGroup>
@@ -48,14 +56,17 @@
           SkipUnchangedFiles="true" />
   </Target>
 
-  <Target Name="GenerateWasmInterop" BeforeTargets="BeforeBuild">
+  <Target Name="GenerateWasmInterop" BeforeTargets="BeforeBuild" Condition="'$(_IsPublishing)' != 'true' and '$(WasmBuildingForNestedPublish)' != 'true'">
     <PropertyGroup>
       <WasmExportManifest>$(MSBuildProjectDirectory)/wasm-exports.json</WasmExportManifest>
       <GeneratedJsPath>$(MSBuildProjectDirectory)/ratchetps2-wasm.js</GeneratedJsPath>
       <GeneratedDtsPath>$(MSBuildProjectDirectory)/ratchetps2-wasm.d.ts</GeneratedDtsPath>
+      <WasmInteropGeneratorProject>$(MSBuildProjectDirectory)/../RatchetPs2.Wasm.Generator/RatchetPs2.Wasm.Generator.csproj</WasmInteropGeneratorProject>
+      <WasmInteropGeneratorDll>$(MSBuildProjectDirectory)/../RatchetPs2.Wasm.Generator/bin/$(Configuration)/net9.0/RatchetPs2.Wasm.Generator.dll</WasmInteropGeneratorDll>
     </PropertyGroup>
 
-    <Exec Command="dotnet run --project &quot;$(MSBuildProjectDirectory)/../RatchetPs2.Wasm.Generator/RatchetPs2.Wasm.Generator.csproj&quot; -- &quot;$(WasmExportManifest)&quot; &quot;$(GeneratedJsPath)&quot; &quot;$(GeneratedDtsPath)&quot;" />
+    <MSBuild Projects="$(WasmInteropGeneratorProject)" Targets="Build" Properties="Configuration=$(Configuration);TargetFramework=net9.0" />
+    <Exec Command="dotnet &quot;$(WasmInteropGeneratorDll)&quot; &quot;$(WasmExportManifest)&quot; &quot;$(GeneratedJsPath)&quot; &quot;$(GeneratedDtsPath)&quot;" />
   </Target>
 
 </Project>

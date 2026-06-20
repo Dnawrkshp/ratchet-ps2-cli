@@ -10,7 +10,8 @@ internal sealed record ShrubBatchExportOptions(
     DirectoryInfo ManifestDirectory,
     ShrubSourceKind SourceKind,
     string CoreFileName,
-    int? Limit);
+    int? Limit,
+    bool Minify = false);
 
 internal sealed record ShrubBatchExportResult(
     string Game,
@@ -96,7 +97,7 @@ internal static class ShrubBatchExporter
                     $"Could not infer shrub game from '{sourceFile.FullName}'. Add a GC, UYA, or DL label to the sibling .fbx.meta file or pass --game explicitly.");
             }
 
-            var fileExport = ShrubExportWriter.Export(sourceFile, gltfFile, gameId.Value);
+            var fileExport = ShrubExportWriter.Export(sourceFile, gltfFile, gameId.Value, minify: options.Minify);
             itemStopwatch.Stop();
             totals.AddSuccess(fileExport, gameId.Value, itemStopwatch.Elapsed);
             entries.Add(ShrubBatchManifestBuilder.BuildSuccessEntry(

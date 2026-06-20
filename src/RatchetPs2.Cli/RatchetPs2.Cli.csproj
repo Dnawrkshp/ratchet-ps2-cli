@@ -5,7 +5,7 @@
     <ProjectReference Include="..\RatchetPs2.Games.RC1\RatchetPs2.Games.RC1.csproj" />
     <ProjectReference Include="..\RatchetPs2.Games.GC\RatchetPs2.Games.GC.csproj" />
     <ProjectReference Include="..\RatchetPs2.Games.UYA\RatchetPs2.Games.UYA.csproj" />
-    <ProjectReference Include="..\RatchetPs2.Games.DL\RatchetPs2.Games.DL.csproj" />
+    <ProjectReference Include="..\RatchetPs2.Games.DL\RatchetPs2.Games.DL.csproj" SetTargetFramework="TargetFramework=net9.0" />
   </ItemGroup>
   <ItemGroup>
     <PackageReference Include="System.CommandLine" Version="2.0.5" />

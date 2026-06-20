@@ -1,6 +1,7 @@
 using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Ties;
 using System.CommandLine;
 
@@ -21,6 +22,7 @@ internal static class TieExportGltfCommand
         {
             Description = "Directory containing external tie PNG textures to reference from the exported glTF. Supports Wrench numeric PNG names and tex.####.0.png names. Defaults to the input tie's directory when matching PNGs are present."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
@@ -29,7 +31,8 @@ internal static class TieExportGltfCommand
             inputOption,
             outputOption,
             lodOption,
-            textureDirectoryOption);
+            textureDirectoryOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -38,6 +41,7 @@ internal static class TieExportGltfCommand
             var outputFile = parseResult.GetValue(outputOption);
             var lodIndex = parseResult.GetValue(lodOption);
             var textureDirectory = parseResult.GetValue(textureDirectoryOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -102,12 +106,18 @@ internal static class TieExportGltfCommand
                     GameProfile = TieGameProfile.ForGame(gameId),
                     ExternalTextureUris = textureResources?.Uris,
                     ExternalTextureSizes = textureResources?.Sizes,
-                    ExternalTextureAlpha = textureResources?.Alpha
+                    ExternalTextureAlpha = textureResources?.Alpha,
+                    IncludeDiagnostics = !minify,
+                    Minify = minify,
+                    MetadataMode = minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full
                 });
 
             File.WriteAllBytes(outputFile.FullName, export.GltfBytes);
             File.WriteAllBytes(binFile, export.BinBytes);
-            File.WriteAllBytes(diagnosticsFile, export.DiagnosticsBytes);
+            if (export.DiagnosticsBytes.Length > 0)
+            {
+                File.WriteAllBytes(diagnosticsFile, export.DiagnosticsBytes);
+            }
 
             Console.WriteLine(
                 $"Exported {gameId} tie LOD {lodIndex} glTF '{inputFile.FullName}' to '{outputFile.FullName}'.");

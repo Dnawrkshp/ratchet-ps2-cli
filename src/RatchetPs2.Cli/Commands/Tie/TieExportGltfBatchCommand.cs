@@ -1,6 +1,7 @@
 using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Ties;
 using System.Diagnostics;
 using System.Text.Json;
@@ -41,6 +42,7 @@ internal static class TieExportGltfBatchCommand
         {
             Description = "Optional maximum number of ties to export."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf-batch",
@@ -51,7 +53,8 @@ internal static class TieExportGltfBatchCommand
             coreFileNameOption,
             manifestNameOption,
             lodOption,
-            limitOption);
+            limitOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -62,6 +65,7 @@ internal static class TieExportGltfBatchCommand
             var manifestName = parseResult.GetValue(manifestNameOption);
             var lodIndex = parseResult.GetValue(lodOption);
             var limit = parseResult.GetValue(limitOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -167,12 +171,18 @@ internal static class TieExportGltfBatchCommand
                             GameProfile = gameProfile,
                             ExternalTextureUris = textureResources?.Uris,
                             ExternalTextureSizes = textureResources?.Sizes,
-                            ExternalTextureAlpha = textureResources?.Alpha
+                            ExternalTextureAlpha = textureResources?.Alpha,
+                            IncludeDiagnostics = !minify,
+                            Minify = minify,
+                            MetadataMode = minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full
                         });
 
                     File.WriteAllBytes(gltfFile.FullName, export.GltfBytes);
                     File.WriteAllBytes(bufferFile.FullName, export.BinBytes);
-                    File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+                    if (export.DiagnosticsBytes.Length > 0)
+                    {
+                        File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+                    }
                     itemStopwatch.Stop();
 
                     succeeded++;
@@ -192,7 +202,8 @@ internal static class TieExportGltfBatchCommand
                         gameId,
                         textureResources,
                         itemStopwatch.Elapsed.TotalMilliseconds,
-                        export));
+                        export,
+                        minify));
                 }
                 catch (Exception ex)
                 {
@@ -267,7 +278,8 @@ internal static class TieExportGltfBatchCommand
         GameId gameId,
         TieTextureResources? textureResources,
         double conversionMs,
-        TieGltfExport export)
+        TieGltfExport export,
+        bool minify)
     {
         var packetTable = tie.PacketTables.FirstOrDefault(table => table.LodIndex == lodIndex);
         var topology = tie.LodTopologies.FirstOrDefault(topology => topology.LodIndex == lodIndex);
@@ -305,7 +317,7 @@ internal static class TieExportGltfBatchCommand
                 SourceCore = TieTextureResourcePreparer.ToGltfUri(Path.GetRelativePath(manifestDirectory.FullName, coreFile.FullName)),
                 Gltf = TieTextureResourcePreparer.ToGltfUri(Path.GetRelativePath(manifestDirectory.FullName, gltfFile.FullName)),
                 Buffer = TieTextureResourcePreparer.ToGltfUri(Path.GetRelativePath(manifestDirectory.FullName, bufferFile.FullName)),
-                Diagnostics = TieTextureResourcePreparer.ToGltfUri(Path.GetRelativePath(manifestDirectory.FullName, diagnosticsFile.FullName)),
+                Diagnostics = minify ? null : TieTextureResourcePreparer.ToGltfUri(Path.GetRelativePath(manifestDirectory.FullName, diagnosticsFile.FullName)),
                 ConversionMs = conversionMs,
                 InputBytes = coreFile.Length,
                 OutputBytes = export.GltfBytes.Length + export.BinBytes.Length + export.DiagnosticsBytes.Length,

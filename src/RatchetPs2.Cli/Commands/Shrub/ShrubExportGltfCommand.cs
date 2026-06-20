@@ -15,6 +15,7 @@ internal static class ShrubExportGltfCommand
         {
             Description = "Directory containing external packed-shrub PNG textures. Defaults to the input shrub's directory."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
@@ -22,7 +23,8 @@ internal static class ShrubExportGltfCommand
             gameOption,
             inputOption,
             outputOption,
-            textureDirectoryOption);
+            textureDirectoryOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -30,6 +32,7 @@ internal static class ShrubExportGltfCommand
             var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
             var textureDirectory = parseResult.GetValue(textureDirectoryOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -64,7 +67,7 @@ internal static class ShrubExportGltfCommand
                 return;
             }
 
-            var fileExport = ShrubExportWriter.Export(inputFile, outputFile, gameId, textureDirectory);
+            var fileExport = ShrubExportWriter.Export(inputFile, outputFile, gameId, textureDirectory, minify);
             Console.WriteLine(
                 $"Exported {gameId} shrub glTF '{inputFile.FullName}' to '{outputFile.FullName}' ({fileExport.ModelInfo.TriangleCount} triangle(s), {fileExport.Textures.Count} texture(s)).");
         });

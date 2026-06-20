@@ -45,7 +45,9 @@ internal static partial class DlMapExtractionWriter
                 SkyboxSourcePath,
                 SkyboxGltfPath,
                 ToRelativeAssetPath(outputDirectory, export.BufferFile.FullName),
-                ToRelativeAssetPath(outputDirectory, export.DiagnosticsFile.FullName));
+                export.DiagnosticsFile is null
+                    ? null
+                    : ToRelativeAssetPath(outputDirectory, export.DiagnosticsFile.FullName));
         }
         catch (Exception ex) when (IsGltfExportFailure(ex))
         {
@@ -260,7 +262,9 @@ internal static partial class DlMapExtractionWriter
                     inputPath,
                     gltfPath,
                     ToRelativeAssetPath(outputDirectory, export.BufferFile.FullName),
-                    ToRelativeAssetPath(outputDirectory, export.DiagnosticsFile.FullName)));
+                    export.DiagnosticsFile is null
+                        ? null
+                        : ToRelativeAssetPath(outputDirectory, export.DiagnosticsFile.FullName)));
             }
             catch (Exception ex) when (IsGltfExportFailure(ex))
             {

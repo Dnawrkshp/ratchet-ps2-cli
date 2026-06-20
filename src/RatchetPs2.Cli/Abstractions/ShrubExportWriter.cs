@@ -12,7 +12,7 @@ internal sealed record ShrubFileExport(
     GltfModelInfo ModelInfo,
     FileInfo GltfFile,
     FileInfo BufferFile,
-    FileInfo DiagnosticsFile,
+    FileInfo? DiagnosticsFile,
     IReadOnlyList<TextureResourceEntry> Textures,
     ShrubExportBillboard? Billboard,
     string? BillboardTextureUri,
@@ -37,7 +37,8 @@ internal static class ShrubExportWriter
         FileInfo inputFile,
         FileInfo gltfFile,
         GameId gameId,
-        DirectoryInfo? textureDirectory = null)
+        DirectoryInfo? textureDirectory = null,
+        bool minify = false)
     {
         ArgumentNullException.ThrowIfNull(inputFile);
         ArgumentNullException.ThrowIfNull(gltfFile);
@@ -53,14 +54,15 @@ internal static class ShrubExportWriter
             throw new NotSupportedException("Shrub glTF export now expects packed shrub class binaries such as core.bin.");
         }
 
-        return ExportPackedBinary(inputFile, gltfFile, gameId, textureDirectory);
+        return ExportPackedBinary(inputFile, gltfFile, gameId, textureDirectory, minify);
     }
 
     private static ShrubFileExport ExportPackedBinary(
         FileInfo inputFile,
         FileInfo gltfFile,
         GameId gameId,
-        DirectoryInfo? textureDirectory)
+        DirectoryInfo? textureDirectory,
+        bool minify)
     {
         var outputDirectory = PrepareOutputDirectory(gltfFile);
         var outputBaseName = Path.GetFileNameWithoutExtension(gltfFile.Name);
@@ -87,12 +89,18 @@ internal static class ShrubExportWriter
                 ExternalTextureAlpha = textureResources?.Alpha,
                 ExternalBillboardTextureUri = billboardTexture?.Uri,
                 ExternalBillboardTextureSize = billboardTexture?.Size,
-                ExternalBillboardTextureAlpha = billboardTexture?.Alpha
+                ExternalBillboardTextureAlpha = billboardTexture?.Alpha,
+                IncludeDiagnostics = !minify,
+                Minify = minify,
+                MetadataMode = minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full
             });
 
         File.WriteAllBytes(gltfFile.FullName, export.GltfBytes);
         File.WriteAllBytes(bufferFile.FullName, export.BinBytes);
-        File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+        if (export.DiagnosticsBytes.Length > 0)
+        {
+            File.WriteAllBytes(diagnosticsFile.FullName, export.DiagnosticsBytes);
+        }
         using var gltfInput = new MemoryStream(export.GltfBytes);
         var modelInfo = GltfModelInspector.Inspect(gltfInput);
         var textureEntries = InterpretShrubTextureEntries(textureResources?.Entries ?? []).ToList();
@@ -108,7 +116,7 @@ internal static class ShrubExportWriter
             modelInfo,
             gltfFile,
             bufferFile,
-            diagnosticsFile,
+            export.DiagnosticsBytes.Length > 0 ? diagnosticsFile : null,
             textureEntries,
             ToExportBillboard(shrub.Billboard),
             billboardTexture?.Uri,

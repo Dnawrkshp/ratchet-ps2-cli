@@ -1,3 +1,4 @@
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Skyboxes;
@@ -9,7 +10,8 @@ public static partial class SkyboxGltfExporter
         IReadOnlyList<SkyboxGltfTextureResource> textureResources,
         IReadOnlyDictionary<byte, SkyboxVertexAlphaInfo> vertexAlphaByTextureId,
         SkyboxColor skyColor,
-        bool usesUntexturedGouraudColors)
+        bool usesUntexturedGouraudColors,
+        GltfExportMetadataMode metadataMode)
     {
         var textureIndexByTextureId = textureResources
             .Select((texture, gltfTextureIndex) => new { TextureId = (byte)texture.Index, GltfTextureIndex = gltfTextureIndex })
@@ -98,14 +100,20 @@ public static partial class SkyboxGltfExporter
             }
 
             material["pbrMetallicRoughness"] = pbr;
-            material["extras"] = BuildMaterialExtras(
+            var extras = BuildMaterialExtras(
                 textureId,
                 alphaByTextureId,
                 vertexAlphaByTextureId,
                 materialAlpha,
                 skyColor,
                 usesUntexturedGouraudColors,
-                key.DrawBlendMode);
+                key.DrawBlendMode,
+                metadataMode);
+            if (extras is not null)
+            {
+                material["extras"] = extras;
+            }
+
             materials.Add(material);
         }
 
@@ -115,21 +123,46 @@ public static partial class SkyboxGltfExporter
             materialIndexByKey.Keys.Any(key => key.DrawBlendMode == SkyboxDrawBlendMode.Bloom));
     }
 
-    private static object BuildMaterialExtras(
+    private static object? BuildMaterialExtras(
         byte textureId,
         IReadOnlyDictionary<byte, TextureAlphaInfo> alphaByTextureId,
         IReadOnlyDictionary<byte, SkyboxVertexAlphaInfo> vertexAlphaByTextureId,
         SkyboxMaterialAlphaInfo materialAlpha,
         SkyboxColor skyColor,
         bool usesUntexturedGouraudColors,
-        string drawBlendMode)
+        string drawBlendMode,
+        GltfExportMetadataMode metadataMode)
     {
+        if (metadataMode == GltfExportMetadataMode.None)
+        {
+            return null;
+        }
+
         var alpha = textureId != UntexturedTextureId && alphaByTextureId.TryGetValue(textureId, out var resolvedAlpha)
             ? resolvedAlpha
             : TextureAlphaInfo.Opaque;
         var vertexAlpha = vertexAlphaByTextureId.TryGetValue(textureId, out var resolvedVertexAlpha)
             ? resolvedVertexAlpha
             : SkyboxVertexAlphaInfo.Opaque;
+        if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                SkyboxTextureAlphaMode = alpha.AlphaMode.ToString(),
+                SkyboxTextureGltfAlphaMode = alpha.GltfAlphaMode,
+                SkyboxTextureMaxAlpha = alpha.MaxAlpha,
+                SkyboxBaseColorAlpha = textureId == UntexturedTextureId && !usesUntexturedGouraudColors
+                    ? skyColor.A
+                    : byte.MaxValue,
+                SkyboxUsesVertexColor0 = true,
+                SkyboxVertexAlphaMin = vertexAlpha.MinAlpha,
+                SkyboxVertexAlphaMax = vertexAlpha.MaxAlpha,
+                SkyboxMaterialAlphaMode = materialAlpha.AlphaMode.ToString(),
+                SkyboxTextureAlphaUsage = materialAlpha.HasAlpha ? "Opacity" : "Opaque",
+                SkyboxDrawBlendMode = drawBlendMode
+            };
+        }
+
         return new
         {
             SkyboxTextureId = textureId,

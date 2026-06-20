@@ -91,12 +91,12 @@ async function ensureBlazorScriptLoaded() {
 }
 
 async function waitForRuntimeReady() {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
+  for (let attempt = 0; attempt < 250; attempt += 1) {
     if (globalThis.Blazor && globalThis.DotNet) {
       return;
     }
 
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await new Promise((resolve) => setTimeout(resolve, 20));
   }
 
   throw new Error("Blazor runtime loaded, but global Blazor/DotNet objects were not initialized.");
@@ -113,11 +113,39 @@ async function ensureStarted() {
       await Blazor.start({
         loadBootResource: (_type, _name, defaultUri) => resolveBootResource(defaultUri),
       });
+      await waitForRatchetPs2Assembly();
       started = true;
-    })();
+    })().catch((error) => {
+      startPromise = null;
+      throw error;
+    });
   }
 
   await startPromise;
+}
+
+async function waitForRatchetPs2Assembly() {
+  let lastError = null;
+  for (let attempt = 0; attempt < 250; attempt += 1) {
+    try {
+      await DotNet.invokeMethodAsync("RatchetPs2.Wasm", "GetApiVersion");
+      return;
+    } catch (error) {
+      lastError = error;
+      if (!isRatchetPs2AssemblyNotReadyError(error)) {
+        throw error;
+      }
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+
+  throw new Error("RatchetPs2.Wasm assembly did not become callable after Blazor startup.", { cause: lastError });
+}
+
+function isRatchetPs2AssemblyNotReadyError(error) {
+  const text = error instanceof Error ? `${error.message}\n${error.stack ?? ""}` : String(error);
+  return text.includes("There is no loaded assembly with the name 'RatchetPs2.Wasm'");
 }
 
 function toUint8Array(value) {
@@ -222,4 +250,44 @@ export async function convertPifListToPngPackedBlobs(pifImages, options = {}) {
     blobs[i] = new Blob([slice.buffer], { type: "image/png" });
   }
   return blobs;
+}
+
+export async function unpackDlLevelWad(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "UnpackDlLevelWad",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
+export async function buildDlLevelWadRenderPackage(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "BuildDlLevelWadRenderPackage",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
 }

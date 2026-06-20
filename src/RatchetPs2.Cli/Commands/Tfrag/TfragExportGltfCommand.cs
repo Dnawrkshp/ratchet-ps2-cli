@@ -1,5 +1,6 @@
 using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Tfrags;
 using System.CommandLine;
 
@@ -16,6 +17,7 @@ internal static class TfragExportGltfCommand
         {
             Description = "Directory containing external tfrag PNG textures to reference from the exported glTF. Supports tex.####.0.png names. Defaults to the input tfrag directory when matching PNGs are present."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
@@ -23,7 +25,8 @@ internal static class TfragExportGltfCommand
             gameOption,
             inputOption,
             outputOption,
-            textureDirectoryOption);
+            textureDirectoryOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -31,6 +34,7 @@ internal static class TfragExportGltfCommand
             var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
             var textureDirectory = parseResult.GetValue(textureDirectoryOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -88,12 +92,18 @@ internal static class TfragExportGltfCommand
                     GameLabel = gameId.ToString(),
                     ExternalTextureUris = textureResources?.Uris,
                     ExternalTextureSizes = textureResources?.Sizes,
-                    ExternalTextureAlpha = textureResources?.Alpha
+                    ExternalTextureAlpha = textureResources?.Alpha,
+                    IncludeDiagnostics = !minify,
+                    Minify = minify,
+                    MetadataMode = minify ? GltfExportMetadataMode.RuntimeOnly : GltfExportMetadataMode.Full
                 });
 
             File.WriteAllBytes(outputFile.FullName, export.GltfBytes);
             File.WriteAllBytes(binFile, export.BinBytes);
-            File.WriteAllBytes(diagnosticsFile, export.DiagnosticsBytes);
+            if (export.DiagnosticsBytes.Length > 0)
+            {
+                File.WriteAllBytes(diagnosticsFile, export.DiagnosticsBytes);
+            }
 
             Console.WriteLine(
                 $"Exported {gameId} tfrag glTF '{inputFile.FullName}' to '{outputFile.FullName}'.");

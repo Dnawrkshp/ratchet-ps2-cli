@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures;
 
 namespace RatchetPs2.Core.Skyboxes;
@@ -42,14 +43,20 @@ public sealed record SkyboxGameProfile
     public SkyboxGltfExportOptions CreateExportOptions(
         string? bufferFileName,
         int? levelNumber,
-        int shellCount)
+        int shellCount,
+        bool includeDiagnostics = true,
+        bool minify = false,
+        GltfExportMetadataMode metadataMode = GltfExportMetadataMode.Full)
     {
         return new SkyboxGltfExportOptions
         {
             BufferFileName = bufferFileName,
             GameLabel = GameLabel,
             TextureConversionOptions = CreateTextureConversionOptions(),
-            ShellRotationOverrides = ShellRotationOverridesFor(levelNumber, shellCount)
+            ShellRotationOverrides = ShellRotationOverridesFor(levelNumber, shellCount),
+            IncludeDiagnostics = includeDiagnostics,
+            Minify = minify,
+            MetadataMode = metadataMode
         };
     }
 

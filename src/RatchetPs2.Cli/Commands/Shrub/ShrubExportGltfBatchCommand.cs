@@ -43,6 +43,7 @@ internal static class ShrubExportGltfBatchCommand
         {
             Description = "Optional maximum number of shrubs to export."
         };
+        var minifyOption = CommonOptions.MinifyGltf();
 
         var command = CliCommandBuilder.Create(
             "export-gltf-batch",
@@ -53,7 +54,8 @@ internal static class ShrubExportGltfBatchCommand
             sourceKindOption,
             coreFileNameOption,
             manifestNameOption,
-            limitOption);
+            limitOption,
+            minifyOption);
 
         command.SetAction(parseResult =>
         {
@@ -64,6 +66,7 @@ internal static class ShrubExportGltfBatchCommand
             var coreFileName = parseResult.GetValue(coreFileNameOption);
             var manifestName = parseResult.GetValue(manifestNameOption);
             var limit = parseResult.GetValue(limitOption);
+            var minify = parseResult.GetValue(minifyOption);
 
             var inferGame = string.Equals(gameValue, "auto", StringComparison.OrdinalIgnoreCase);
             RatchetPs2.Core.Games.GameId? gameId = null;
@@ -140,7 +143,8 @@ internal static class ShrubExportGltfBatchCommand
                     manifestDirectory,
                     sourceKind,
                     coreFileName!,
-                    limit),
+                    limit,
+                    minify),
                 Console.WriteLine);
             var manifest = ShrubBatchManifestBuilder.BuildManifest(
                 inputRoot,

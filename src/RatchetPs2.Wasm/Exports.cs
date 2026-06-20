@@ -1,9 +1,12 @@
 using Microsoft.JSInterop;
 using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Pif;
+using RatchetPs2.Games.DL.Level;
+using System.Runtime.Versioning;
 
 namespace RatchetPs2.Wasm;
 
+[SupportedOSPlatform("browser")]
 public static partial class Exports
 {
     [JSInvokable("ConvertPifToPng")]
@@ -52,6 +55,24 @@ public static partial class Exports
         };
 
         return PifAssetExporter.ExportManyPacked(pifImages, format, options);
+    }
+
+    [JSInvokable("UnpackDlLevelWad")]
+    public static PackedFilePackage UnpackDlLevelWad(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        return DlLevelWadUnpacker.UnpackPacked(levelWadBytes);
+    }
+
+    [JSInvokable("BuildDlLevelWadRenderPackage")]
+    public static PackedFilePackage BuildDlLevelWadRenderPackage(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        return DlLevelWadRenderPackageBuilder.BuildPacked(
+            levelWadBytes,
+            DlLevelWadRenderPackageBuildOptions.Browser);
     }
 
     [JSInvokable("GetApiVersion")]
