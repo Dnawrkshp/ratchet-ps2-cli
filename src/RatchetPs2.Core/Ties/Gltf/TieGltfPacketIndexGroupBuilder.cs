@@ -51,6 +51,9 @@ internal static class TieGltfPacketIndexGroupBuilder
             .FirstOrDefault(table => table.LodIndex == topology.LodIndex)?
             .Packets
             .ToDictionary(packet => packet.PacketIndex) ?? [];
+        var packetDataBlocksByIndex = tie.PacketDataBlocks
+            .Where(block => block.LodIndex == topology.LodIndex)
+            .ToDictionary(block => block.PacketIndex);
         var groups = new List<PacketIndexGroup>();
         PacketIndexGroup? currentGroup = null;
 
@@ -69,18 +72,25 @@ internal static class TieGltfPacketIndexGroupBuilder
             var strip = topology.Strips[triangle.StripIndex];
             packetsByIndex.TryGetValue(strip.PacketIndex, out var packet);
             var shaderIndex = SelectShaderIndex(packet, strip);
-            var multipassType = packet?.MultipassType ?? 0;
+            var multipassOffset = packet?.MultipassOffset ?? 0;
+            var passFlags = packet?.PassFlags ?? 0;
+            var multipassUvSize = packet?.MultipassUvSize ?? 0;
+            var envPassBleedColor = ResolveEnvPassBleedColor(packet, packetDataBlocksByIndex);
             var packetShaderIndices = GetPacketShaderIndices(packet);
             var packetShaderSwitchVuAddresses = packet?.ShaderSwitchVuAddresses ?? [];
 
             if (currentGroup is null
                 || currentGroup.Value.PacketIndex != strip.PacketIndex
-                || currentGroup.Value.ShaderIndex != shaderIndex)
+                || currentGroup.Value.ShaderIndex != shaderIndex
+                || currentGroup.Value.EnvPassBleedColor != envPassBleedColor)
             {
                 currentGroup = new PacketIndexGroup(
                     strip.PacketIndex,
                     shaderIndex,
-                    multipassType,
+                    multipassOffset,
+                    passFlags,
+                    multipassUvSize,
+                    envPassBleedColor,
                     packetShaderIndices,
                     packetShaderSwitchVuAddresses,
                     UseGlowEmission: false,
@@ -102,6 +112,41 @@ internal static class TieGltfPacketIndexGroupBuilder
         }
 
         return groups;
+    }
+
+    private static TieRgba32? ResolveEnvPassBleedColor(
+        TiePacket? packet,
+        IReadOnlyDictionary<int, TiePacketDataBlock> packetDataBlocksByIndex)
+    {
+        if (packet is null
+            || packet.MultipassOffset == 0
+            || !TiePassFlags.UsesEnvironmentPass(packet.PassFlags))
+        {
+            return null;
+        }
+
+        if (!packetDataBlocksByIndex.TryGetValue(packet.PacketIndex, out var block))
+        {
+            return null;
+        }
+
+        var offset = checked(
+            (packet.MultipassOffset + TiePassFlags.GeneratedEnvPassBleedColorQwordOffset)
+            * TiePassFlags.QwordSize);
+        if (offset < 0 || offset + TiePassFlags.QwordSize > block.Bytes.Length)
+        {
+            return null;
+        }
+
+        // FUN_00595168 enters the generated envpass path at 0x00595934-0x00595954,
+        // copies tie_dma_2nd_bleedcolor_template at 0x0059599c, then starts the
+        // generated envpass input at multipass+0x30 (0x005959ac-0x005959c0).
+        // Therefore multipass+0x10 is the second-pass RGBA bleed color qword.
+        return new TieRgba32(
+            block.Bytes[offset],
+            block.Bytes[offset + 4],
+            block.Bytes[offset + 8],
+            block.Bytes[offset + 12]);
     }
 
     private static int CountSourceNormalPhaseRepairTriangles(
@@ -148,7 +193,10 @@ internal static class TieGltfPacketIndexGroupBuilder
                     currentGroup = new PacketIndexGroup(
                         group.PacketIndex,
                         group.ShaderIndex,
-                        group.MultipassType,
+                        group.MultipassOffset,
+                        group.PassFlags,
+                        group.MultipassUvSize,
+                        group.EnvPassBleedColor,
                         group.PacketShaderIndices,
                         group.PacketShaderSwitchVuAddresses,
                         useGlowEmission,

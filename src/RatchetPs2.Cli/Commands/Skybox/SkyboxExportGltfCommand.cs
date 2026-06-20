@@ -11,25 +11,19 @@ internal static class SkyboxExportGltfCommand
         var gameOption = CommonOptions.Game();
         var inputOption = CommonOptions.InputFile("Path to the sky.bin binary.");
         var outputOption = CommonOptions.OutputFile("Path to write the exported .gltf file.");
-        var preserveAlphaOption = new Option<bool>("--preserve-alpha")
-        {
-            Description = "Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup."
-        };
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
             "Export skybox geometry to a glTF model.",
             gameOption,
             inputOption,
-            outputOption,
-            preserveAlphaOption);
+            outputOption);
 
         command.SetAction(parseResult =>
         {
             var gameValue = parseResult.GetValue(gameOption);
             var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
-            var preserveAlpha = parseResult.GetValue(preserveAlphaOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
@@ -65,7 +59,7 @@ internal static class SkyboxExportGltfCommand
             }
 
             var levelNumber = SkyboxGameFormats.InferLevelNumber(inputFile.FullName);
-            var fileExport = SkyboxExportWriter.Export(inputFile, outputFile, gameId, preserveAlpha, levelNumber);
+            var fileExport = SkyboxExportWriter.Export(inputFile, outputFile, gameId, levelNumber);
 
             Console.WriteLine(
                 $"Exported {gameId} skybox glTF '{inputFile.FullName}' to '{outputFile.FullName}' with {fileExport.Export.Textures.Count} texture(s).");

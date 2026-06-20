@@ -49,7 +49,9 @@ internal static class TiePacketTableReader
                         MultipassOffset = reader.ReadByte(),
                         ScissorOffset = reader.ReadByte(),
                         ScissorSize = reader.ReadByte(),
-                        MultipassType = reader.ReadByte(),
+                        // DL retail treats packet byte +0x0e as pass flags. See TiePassFlags for the
+                        // FUN_00593d90/FUN_00595168 assembly branch citations.
+                        PassFlags = reader.ReadByte(),
                         MultipassUvSize = reader.ReadByte(),
                         ShaderSwitchVuAddresses = ReadPacketShaderSwitchVuAddresses(
                             bytes,

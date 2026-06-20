@@ -44,8 +44,7 @@ using (var input = File.OpenRead(skyboxPath))
             GameLabel = "DL",
             TextureConversionOptions = new TextureConversionOptions
             {
-                IsSwizzled = true,
-                DoubleAlpha = true
+                IsSwizzled = true
             }
         });
     Expect(export.GltfBytes.Length > 0, "expected skybox glTF export to write glTF JSON bytes");
@@ -136,18 +135,15 @@ if (File.Exists(level1SkyboxPath))
             GameLabel = "DL",
             TextureConversionOptions = new TextureConversionOptions
             {
-                IsSwizzled = true,
-                DoubleAlpha = true
+                IsSwizzled = true
             }
         });
     using var diagnosticsDocument = JsonDocument.Parse(export.DiagnosticsBytes);
     var diagnostics = diagnosticsDocument.RootElement;
     Expect(diagnostics.GetProperty("PrimitiveCount").GetInt32() == 4, "expected level1 diagnostics primitive count 4");
     Expect(diagnostics.GetProperty("ColorCount").GetInt32() == 5736, "expected level1 diagnostics color count 5736");
-    Expect(!diagnostics.GetProperty("Textures")[2].GetProperty("StraightenedPremultipliedAlpha").GetBoolean(), "expected level1 sky texture export to preserve source RGB instead of unpremultiplying it");
-    Expect(diagnostics.GetProperty("Textures")[2].GetProperty("AlphaCutoff").GetInt32() == 0, "expected level1 sky texture export to keep source alpha values by default");
-    Expect(diagnostics.GetProperty("Textures")[2].GetProperty("AlphaCutoffPixelCount").GetInt32() == 0, "expected level1 sky texture export not to discard low alpha nebula texels");
-    Expect(diagnostics.GetProperty("Textures")[2].GetProperty("DilatedTransparentRgb").GetBoolean(), "expected level1 sky texture export to report transparent RGB dilation");
+    Expect(!diagnostics.GetProperty("Textures")[2].GetProperty("UsesBinaryAlpha").GetBoolean(), "expected level1 sky texture export to keep non-binary low-alpha nebula texels");
+    Expect(diagnostics.GetProperty("Textures")[2].GetProperty("MaxAlpha").GetInt32() <= 128, "expected level1 sky texture export to preserve PS2 full-opacity alpha");
 
     using var gltfDocument = JsonDocument.Parse(export.GltfBytes);
     var root = gltfDocument.RootElement;
@@ -220,10 +216,7 @@ if (File.Exists(uyaLevel4SkyboxPath))
         {
             BufferFileName = "sky.buffer.bin",
             GameLabel = "UYA",
-            TextureConversionOptions = new TextureConversionOptions
-            {
-                DoubleAlpha = true
-            }
+            TextureConversionOptions = new TextureConversionOptions()
         });
     Expect(export.Textures.Count == 6, $"expected UYA level4 to export 6 texture PNG resources, got {export.Textures.Count}");
 
@@ -260,10 +253,7 @@ if (File.Exists(uyaLevel41SkyboxPath))
         {
             BufferFileName = "sky.buffer.bin",
             GameLabel = "UYA",
-            TextureConversionOptions = new TextureConversionOptions
-            {
-                DoubleAlpha = true
-            }
+            TextureConversionOptions = new TextureConversionOptions()
         });
 
     using var gltfDocument = JsonDocument.Parse(export.GltfBytes);

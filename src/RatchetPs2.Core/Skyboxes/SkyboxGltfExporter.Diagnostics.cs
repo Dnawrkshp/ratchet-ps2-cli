@@ -78,11 +78,7 @@ public static partial class SkyboxGltfExporter
                 texture.Alpha.MinAlpha,
                 texture.Alpha.MaxAlpha,
                 texture.Alpha.UsesBinaryAlpha,
-                AlphaMode = texture.Alpha.AlphaMode.ToString(),
-                texture.StraightenedPremultipliedAlpha,
-                texture.AlphaCutoff,
-                texture.AlphaCutoffPixelCount,
-                texture.DilatedTransparentRgb
+                AlphaMode = texture.Alpha.AlphaMode.ToString()
             }).ToArray(),
             Shells = skybox.Shells.Select(shell => new
             {

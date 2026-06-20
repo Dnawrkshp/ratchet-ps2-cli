@@ -64,6 +64,7 @@ public static class TieGltfExporter
 
         var positions = TieGltfPositionBuilder.BuildPositions(tie, topology);
         var texCoords = TieGltfTexCoordBuilder.BuildTexCoords(tie, topology);
+        var multipassTexCoords = TieGltfTexCoordBuilder.BuildMultipassTexCoords(tie, topology, texCoords);
         var glowColorResult = TieGltfGlowBuilder.BuildColors(tie, topology, positions.Count);
         var sourceNormalPhaseAnalysis = TieGltfSourceNormalPhaseAnalyzer.Analyze(tie, topology, positions, profile);
         var sourceNormalPhaseRepairTriangles = profile.UseSourceNormalPhaseWindingRepair
@@ -102,6 +103,7 @@ public static class TieGltfExporter
             profile.SuppressGeneratedNormalFallback,
             profile.UseGeometryWindingRepair,
             texCoords,
+            multipassTexCoords,
             glowColorResult.Colors,
             ambientIndexResult.Indices,
             ambientIndexResult.IndexIndices,

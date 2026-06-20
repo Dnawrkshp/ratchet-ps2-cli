@@ -13,7 +13,7 @@ public sealed record TieGameProfile
     public string SourceNormalAttributeName { get; init; } = "_TIE_SOURCE_NORMAL_PRESENT";
     public string SourceNormalStateAttributeName { get; init; } = "_TIE_SOURCE_NORMAL_STATE";
     public int ReflectiveMaskModeBit { get; init; } = 0x20;
-    public int ReflectiveMaskMultipassType { get; init; } = 10;
+    public int ReflectiveMaskPassFlags { get; init; } = TiePassFlags.ReflectiveMaskPassFlags;
     public float ReflectiveMaskMetallicFactor { get; init; } = 0.37f;
     public float ReflectiveMaskRoughnessFactor { get; init; } = 0.24f;
     public byte FullOpacityAlpha { get; init; } = Ps2Color.FullOpacityAlpha;

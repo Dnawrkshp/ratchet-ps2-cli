@@ -12,14 +12,14 @@ internal static class SkyboxGameFormats
         return gameId is GameId.UYA or GameId.DL;
     }
 
-    public static SkyboxGameProfile ProfileFor(GameId gameId, bool preserveSourceAlpha)
+    public static SkyboxGameProfile ProfileFor(GameId gameId)
     {
         if (!IsSupported(gameId))
         {
             throw new InvalidOperationException($"Skybox export currently supports only {SupportedSkyboxGames}. Received {gameId}.");
         }
 
-        return SkyboxGameProfile.ForGame(gameId, preserveSourceAlpha);
+        return SkyboxGameProfile.ForGame(gameId);
     }
 
     public static int? InferLevelNumber(string pathOrLabel)
@@ -33,7 +33,14 @@ internal static class SkyboxGameFormats
                 continue;
             }
 
-            if (int.TryParse(segment[5..], out var levelNumber))
+            var levelSuffix = segment[5..];
+            var digitCount = 0;
+            while (digitCount < levelSuffix.Length && char.IsDigit(levelSuffix[digitCount]))
+            {
+                digitCount++;
+            }
+
+            if (digitCount > 0 && int.TryParse(levelSuffix[..digitCount], out var levelNumber))
             {
                 return levelNumber;
             }

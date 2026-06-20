@@ -67,7 +67,7 @@ public static class TieClassDescriber
                     ? string.Empty
                     : $", shaderSwitchVu=[{string.Join(", ", packet.ShaderSwitchVuAddresses)}]";
                 builder.AppendLine(
-                    $"    [{packet.PacketIndex}] data={FormatOffset(packet.AbsoluteDataOffset)} (relative {FormatOffset(packet.DataOffset)}), shaders={shaderText}{shaderSwitchText}, controls={packet.ControlCount} rows/{packet.ControlSize} qw, vertex={packet.VertexOffset}+{packet.VertexSize}, rgba={packet.RgbaCount}, scissor={packet.ScissorOffset}+{packet.ScissorSize}, multipass={packet.MultipassOffset}/{packet.MultipassType}/{packet.MultipassUvSize}");
+                    $"    [{packet.PacketIndex}] data={FormatOffset(packet.AbsoluteDataOffset)} (relative {FormatOffset(packet.DataOffset)}), shaders={shaderText}{shaderSwitchText}, controls={packet.ControlCount} rows/{packet.ControlSize} qw, vertex={packet.VertexOffset}+{packet.VertexSize}, rgba={packet.RgbaCount}, scissor={packet.ScissorOffset}+{packet.ScissorSize}, multipass={packet.MultipassOffset}/flags={TiePassFlags.FormatByteBits(packet.PassFlags)}/uv={packet.MultipassUvSize}");
             }
         }
         builder.AppendLine();

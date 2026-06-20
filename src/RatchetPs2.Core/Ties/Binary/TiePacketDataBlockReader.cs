@@ -79,12 +79,14 @@ internal static class TiePacketDataBlockReader
 
         if (packet.MultipassOffset > 0 && packet.MultipassUvSize > 0)
         {
-            Consider(packet.MultipassOffset, packet.MultipassUvSize);
+            Consider(
+                packet.MultipassOffset,
+                TiePassFlags.GeneratedEnvPassHeaderQwords + packet.MultipassUvSize);
         }
 
         return qwords;
 
-        void Consider(byte offset, byte count)
+        void Consider(byte offset, int count)
         {
             if (count == 0)
             {
@@ -108,7 +110,10 @@ internal static class TiePacketDataBlockReader
 
         if (packet.MultipassOffset > 0 && packet.MultipassUvSize > 0)
         {
-            AddRegion("multipass-uv", packet.MultipassOffset, packet.MultipassUvSize);
+            AddRegion(
+                "multipass-uv",
+                packet.MultipassOffset,
+                TiePassFlags.GeneratedEnvPassHeaderQwords + packet.MultipassUvSize);
         }
 
         return regions

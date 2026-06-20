@@ -22,7 +22,6 @@ internal static class SkyboxExportWriter
         FileInfo inputFile,
         FileInfo gltfFile,
         GameId gameId,
-        bool preserveSourceAlpha,
         int? levelNumber)
     {
         ArgumentNullException.ThrowIfNull(inputFile);
@@ -37,7 +36,7 @@ internal static class SkyboxExportWriter
 
         using var input = inputFile.OpenRead();
         var skybox = SkyboxReader.Read(input);
-        var profile = SkyboxGameFormats.ProfileFor(gameId, preserveSourceAlpha);
+        var profile = SkyboxGameFormats.ProfileFor(gameId);
         var export = SkyboxGltfExporter.Export(
             skybox,
             gltfFile.Name,

@@ -31,10 +31,6 @@ internal static class SkyboxExportGltfBatchCommand
             Description = "Viewer manifest file name. Defaults to manifest.json.",
             DefaultValueFactory = _ => "manifest.json"
         };
-        var preserveAlphaOption = new Option<bool>("--preserve-alpha")
-        {
-            Description = "Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup."
-        };
         var limitOption = new Option<int?>("--limit")
         {
             Description = "Optional maximum number of skyboxes to export."
@@ -48,7 +44,6 @@ internal static class SkyboxExportGltfBatchCommand
             outputRootOption,
             skyFileNameOption,
             manifestNameOption,
-            preserveAlphaOption,
             limitOption);
 
         command.SetAction(parseResult =>
@@ -58,7 +53,6 @@ internal static class SkyboxExportGltfBatchCommand
             var outputRoot = parseResult.GetValue(outputRootOption);
             var skyFileName = parseResult.GetValue(skyFileNameOption);
             var manifestName = parseResult.GetValue(manifestNameOption);
-            var preserveAlpha = parseResult.GetValue(preserveAlphaOption);
             var limit = parseResult.GetValue(limitOption);
 
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
@@ -144,7 +138,7 @@ internal static class SkyboxExportGltfBatchCommand
                 try
                 {
                     var levelNumber = SkyboxGameFormats.InferLevelNumber(relativeSourceDirectory);
-                    var fileExport = SkyboxExportWriter.Export(skyFile, gltfFile, gameId, preserveAlpha, levelNumber);
+                    var fileExport = SkyboxExportWriter.Export(skyFile, gltfFile, gameId, levelNumber);
 
                     itemStopwatch.Stop();
                     succeeded++;

@@ -24,6 +24,8 @@ internal static class TieGltfFlatProfileNormalRepairer
         List<float>? sourceNormalMask,
         List<float>? sourceNormalStates,
         List<Vector2> texCoords,
+        List<Vector2> multipassTexCoords,
+        bool includeMultipassTexCoords,
         List<Vector4> glowColors,
         bool includeGlowColors,
         List<float> ambientIndices,
@@ -107,6 +109,10 @@ internal static class TieGltfFlatProfileNormalRepairer
                     sourceNormalMask?.Add(sourceNormalMask[vertexIndex]);
                     sourceNormalStates?.Add(sourceNormalStates[vertexIndex]);
                     texCoords.Add(texCoords[vertexIndex]);
+                    if (includeMultipassTexCoords)
+                    {
+                        multipassTexCoords.Add(multipassTexCoords[vertexIndex]);
+                    }
                     if (includeGlowColors)
                     {
                         glowColors.Add(glowColors[vertexIndex]);

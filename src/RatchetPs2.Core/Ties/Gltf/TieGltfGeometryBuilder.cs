@@ -6,6 +6,10 @@ namespace RatchetPs2.Core.Ties;
 
 internal static class TieGltfGeometryBuilder
 {
+    private const float PoorlyAlignedSourceTriangleMinimumAverageDot = 0.6f;
+    private const float PoorlyAlignedSourceTriangleMinimumCornerDot = 0.2f;
+    private const int PoorlyAlignedSourceTriangleMinimumBadCornerCount = 2;
+
     public static GltfGeometry Build(
         IReadOnlyList<TieShader> shaders,
         IReadOnlyList<Vector3> positions,
@@ -18,6 +22,7 @@ internal static class TieGltfGeometryBuilder
         bool suppressGeneratedNormalFallback,
         bool useGeometryWindingRepair,
         IReadOnlyList<Vector2> texCoords,
+        IReadOnlyList<Vector2> multipassTexCoords,
         IReadOnlyList<Vector4> glowColors,
         IReadOnlyList<float> ambientIndices,
         IReadOnlyList<float> indexAmbientIndices,
@@ -32,12 +37,14 @@ internal static class TieGltfGeometryBuilder
         ArgumentNullException.ThrowIfNull(sourceNormalVertexStates);
         ArgumentNullException.ThrowIfNull(sourceNormalIndexStates);
         ArgumentNullException.ThrowIfNull(texCoords);
+        ArgumentNullException.ThrowIfNull(multipassTexCoords);
         ArgumentNullException.ThrowIfNull(glowColors);
         ArgumentNullException.ThrowIfNull(ambientIndices);
         ArgumentNullException.ThrowIfNull(indexAmbientIndices);
         ArgumentNullException.ThrowIfNull(packetIndexGroups);
 
         var includeGlowColors = glowColors.Count == positions.Count;
+        var includeMultipassTexCoords = multipassTexCoords.Count == positions.Count;
         var sourceIndexCount = packetIndexGroups.Sum(group => group.Indices.Count);
         var includeSourceAmbientIndices = ambientIndices.Count == positions.Count
             && ambientIndices.Any(index => index >= 0f);
@@ -55,6 +62,9 @@ internal static class TieGltfGeometryBuilder
         var expandedSourceNormalMask = BuildSourceNormalMask();
         var expandedSourceNormalStates = BuildSourceNormalStates();
         var expandedTexCoords = texCoords.ToList();
+        var expandedMultipassTexCoords = includeMultipassTexCoords
+            ? multipassTexCoords.ToList()
+            : new List<Vector2>();
         var expandedGlowColors = includeGlowColors ? glowColors.ToList() : new List<Vector4>();
         var expandedAmbientIndices = includeAmbientIndices
             ? BuildInitialAmbientIndices()
@@ -88,6 +98,12 @@ internal static class TieGltfGeometryBuilder
                     textureSize,
                     repeatU,
                     repeatV);
+                var adjustedMultipassTexCoords = includeMultipassTexCoords
+                    ? AdjustMultipassTriangleTexCoords(
+                        GetMultipassTexCoord(aIndex),
+                        GetMultipassTexCoord(bIndex),
+                        GetMultipassTexCoord(cIndex))
+                    : null;
 
                 expandedIndices.Add(GetExpandedVertexIndex(
                     aIndex,
@@ -95,6 +111,7 @@ internal static class TieGltfGeometryBuilder
                     HasSourceNormal(sourceIndexOffset),
                     GetSourceNormalState(sourceIndexOffset, aIndex),
                     adjustedTexCoords[0],
+                    GetAdjustedMultipassTexCoord(0),
                     GetIndexNormal(sourceIndexOffset, aIndex),
                     GetGlowColor(aIndex),
                     GetAmbientIndex(sourceIndexOffset, aIndex)));
@@ -105,6 +122,7 @@ internal static class TieGltfGeometryBuilder
                     HasSourceNormal(sourceIndexOffset),
                     GetSourceNormalState(sourceIndexOffset, bIndex),
                     adjustedTexCoords[1],
+                    GetAdjustedMultipassTexCoord(1),
                     GetIndexNormal(sourceIndexOffset, bIndex),
                     GetGlowColor(bIndex),
                     GetAmbientIndex(sourceIndexOffset, bIndex)));
@@ -115,16 +133,27 @@ internal static class TieGltfGeometryBuilder
                     HasSourceNormal(sourceIndexOffset),
                     GetSourceNormalState(sourceIndexOffset, cIndex),
                     adjustedTexCoords[2],
+                    GetAdjustedMultipassTexCoord(2),
                     GetIndexNormal(sourceIndexOffset, cIndex),
                     GetGlowColor(cIndex),
                     GetAmbientIndex(sourceIndexOffset, cIndex)));
                 sourceIndexOffset++;
+
+                Vector2 GetAdjustedMultipassTexCoord(int vertexOffset)
+                {
+                    return adjustedMultipassTexCoords is not null
+                        ? adjustedMultipassTexCoords[vertexOffset]
+                        : Vector2.Zero;
+                }
             }
 
             expandedGroups.Add(new PacketIndexGroup(
                 group.PacketIndex,
                 group.ShaderIndex,
-                group.MultipassType,
+                group.MultipassOffset,
+                group.PassFlags,
+                group.MultipassUvSize,
+                group.EnvPassBleedColor,
                 group.PacketShaderIndices,
                 group.PacketShaderSwitchVuAddresses,
                 group.UseGlowEmission,
@@ -139,6 +168,8 @@ internal static class TieGltfGeometryBuilder
                 expandedSourceNormalMask,
                 expandedSourceNormalStates,
                 expandedTexCoords,
+                expandedMultipassTexCoords,
+                includeMultipassTexCoords,
                 expandedGlowColors,
                 includeGlowColors,
                 expandedAmbientIndices,
@@ -157,6 +188,8 @@ internal static class TieGltfGeometryBuilder
                 expandedSourceNormalMask,
                 expandedSourceNormalStates,
                 expandedTexCoords,
+                expandedMultipassTexCoords,
+                includeMultipassTexCoords,
                 expandedGlowColors,
                 includeGlowColors,
                 expandedAmbientIndices,
@@ -172,6 +205,8 @@ internal static class TieGltfGeometryBuilder
                     expandedNormals,
                     expandedGroups));
         }
+
+        RestorePoorlyAlignedSourceExpandedNormals();
 
         var suppressedGeneratedNormalFallbackVertexCount = 0;
         if (suppressGeneratedNormalFallback)
@@ -198,6 +233,7 @@ internal static class TieGltfGeometryBuilder
             expandedSourceNormalMask,
             expandedSourceNormalStates,
             expandedTexCoords,
+            expandedMultipassTexCoords,
             expandedGlowColors,
             expandedAmbientIndices,
             expandedGroups,
@@ -230,17 +266,27 @@ internal static class TieGltfGeometryBuilder
                 : -1f;
         }
 
+        Vector2 GetMultipassTexCoord(int sourceIndex)
+        {
+            return includeMultipassTexCoords && sourceIndex >= 0 && sourceIndex < multipassTexCoords.Count
+                ? multipassTexCoords[sourceIndex]
+                : Vector2.Zero;
+        }
+
         uint GetExpandedVertexIndex(
             int sourceIndex,
             int sourceIndexOffset,
             bool sourceNormalPresent,
             TieGltfSourceNormalState sourceNormalState,
             Vector2 adjustedTexCoord,
+            Vector2 multipassTexCoord,
             Vector3 normal,
             Vector4 glowColor,
             float ambientIndex)
         {
             if (NearlyEqual(adjustedTexCoord, texCoords[sourceIndex])
+                && (!includeMultipassTexCoords
+                    || NearlyEqual(multipassTexCoord, expandedMultipassTexCoords[sourceIndex]))
                 && NearlyEqual(normal, normals[sourceIndex])
                 && NearlyEqual(sourceNormalPresent ? 1f : 0f, expandedSourceNormalMask[sourceIndex])
                 && NearlyEqual((float)sourceNormalState, expandedSourceNormalStates[sourceIndex])
@@ -253,6 +299,7 @@ internal static class TieGltfGeometryBuilder
             var key = ExpandedVertexKey.From(
                 sourceIndex,
                 adjustedTexCoord,
+                includeMultipassTexCoords ? multipassTexCoord : Vector2.Zero,
                 normal,
                 sourceNormalPresent,
                 sourceNormalState,
@@ -272,6 +319,10 @@ internal static class TieGltfGeometryBuilder
             expandedSourceNormalMask.Add(sourceNormalPresent ? 1f : 0f);
             expandedSourceNormalStates.Add((float)sourceNormalState);
             expandedTexCoords.Add(adjustedTexCoord);
+            if (includeMultipassTexCoords)
+            {
+                expandedMultipassTexCoords.Add(multipassTexCoord);
+            }
 
             if (includeGlowColors)
             {
@@ -352,12 +403,198 @@ internal static class TieGltfGeometryBuilder
 
             return Enumerable.Repeat(-1f, positions.Count).ToList();
         }
+
+        void RestorePoorlyAlignedSourceExpandedNormals()
+        {
+            var vertexUseCounts = BuildExpandedVertexUseCounts();
+            foreach (var group in expandedGroups)
+            {
+                for (var i = 0; i + 2 < group.Indices.Count; i += 3)
+                {
+                    var aIndex = checked((int)group.Indices[i]);
+                    var bIndex = checked((int)group.Indices[i + 1]);
+                    var cIndex = checked((int)group.Indices[i + 2]);
+                    var normal = Vector3.Cross(
+                        expandedPositions[bIndex] - expandedPositions[aIndex],
+                        expandedPositions[cIndex] - expandedPositions[aIndex]);
+                    if (normal.LengthSquared() <= 1e-12f)
+                    {
+                        continue;
+                    }
+
+                    var faceNormal = Vector3.Normalize(normal);
+                    var averageNormal = expandedNormals[aIndex] + expandedNormals[bIndex] + expandedNormals[cIndex];
+                    if (averageNormal.LengthSquared() <= 1e-12f
+                        || Vector3.Dot(faceNormal, Vector3.Normalize(averageNormal))
+                            >= PoorlyAlignedSourceTriangleMinimumAverageDot)
+                    {
+                        continue;
+                    }
+
+                    var badOffsets = new List<int>(3);
+                    AddBadSourceOffset(i, aIndex);
+                    AddBadSourceOffset(i + 1, bIndex);
+                    AddBadSourceOffset(i + 2, cIndex);
+                    if (badOffsets.Count < PoorlyAlignedSourceTriangleMinimumBadCornerCount)
+                    {
+                        continue;
+                    }
+
+                    foreach (var indexOffset in badOffsets)
+                    {
+                        var vertexIndex = checked((int)group.Indices[indexOffset]);
+                        var repairedIndex = EnsureSingleUseExpandedVertex(group, indexOffset, vertexIndex, vertexUseCounts);
+                        expandedNormals[repairedIndex] = faceNormal;
+                        if (repairedIndex < expandedSourceOnlyNormals.Count)
+                        {
+                            expandedSourceOnlyNormals[repairedIndex] = faceNormal;
+                        }
+                    }
+
+                    void AddBadSourceOffset(int indexOffset, int vertexIndex)
+                    {
+                        if (IsSourceNormalVertex(vertexIndex)
+                            && Vector3.Dot(faceNormal, expandedNormals[vertexIndex])
+                                < PoorlyAlignedSourceTriangleMinimumCornerDot)
+                        {
+                            badOffsets.Add(indexOffset);
+                        }
+                    }
+                }
+            }
+        }
+
+        List<int> BuildExpandedVertexUseCounts()
+        {
+            var vertexUseCounts = Enumerable.Repeat(0, expandedPositions.Count).ToList();
+            foreach (var group in expandedGroups)
+            {
+                foreach (var index in group.Indices)
+                {
+                    var vertexIndex = checked((int)index);
+                    if (vertexIndex >= 0 && vertexIndex < vertexUseCounts.Count)
+                    {
+                        vertexUseCounts[vertexIndex]++;
+                    }
+                }
+            }
+
+            return vertexUseCounts;
+        }
+
+        bool IsSourceNormalVertex(int vertexIndex)
+        {
+            return vertexIndex >= 0
+                && vertexIndex < expandedSourceNormalMask.Count
+                && expandedSourceNormalMask[vertexIndex] > 0.5f;
+        }
+
+        int EnsureSingleUseExpandedVertex(
+            PacketIndexGroup group,
+            int indexOffset,
+            int vertexIndex,
+            List<int> vertexUseCounts)
+        {
+            if (vertexIndex >= 0
+                && vertexIndex < vertexUseCounts.Count
+                && vertexUseCounts[vertexIndex] <= 1)
+            {
+                return vertexIndex;
+            }
+
+            var expandedIndex = expandedPositions.Count;
+            expandedPositions.Add(expandedPositions[vertexIndex]);
+            expandedNormals.Add(expandedNormals[vertexIndex]);
+            expandedSourceOnlyNormals.Add(expandedSourceOnlyNormals[vertexIndex]);
+            expandedSourceNormalMask.Add(expandedSourceNormalMask[vertexIndex]);
+            expandedSourceNormalStates.Add(expandedSourceNormalStates[vertexIndex]);
+            expandedTexCoords.Add(expandedTexCoords[vertexIndex]);
+            if (includeMultipassTexCoords)
+            {
+                expandedMultipassTexCoords.Add(expandedMultipassTexCoords[vertexIndex]);
+            }
+            if (includeGlowColors)
+            {
+                expandedGlowColors.Add(expandedGlowColors[vertexIndex]);
+            }
+
+            if (includeAmbientIndices)
+            {
+                expandedAmbientIndices.Add(expandedAmbientIndices[vertexIndex]);
+            }
+
+            if (vertexIndex >= 0 && vertexIndex < vertexUseCounts.Count)
+            {
+                vertexUseCounts[vertexIndex]--;
+            }
+
+            vertexUseCounts.Add(1);
+            group.Indices[indexOffset] = checked((uint)expandedIndex);
+            return expandedIndex;
+        }
     }
 
     private static bool NearlyEqual(Vector2 left, Vector2 right)
     {
         return MathF.Abs(left.X - right.X) < 0.000001f
             && MathF.Abs(left.Y - right.Y) < 0.000001f;
+    }
+
+    private static Vector2[] AdjustMultipassTriangleTexCoords(Vector2 a, Vector2 b, Vector2 c)
+    {
+        var u = UnwrapMultipassTriangleAxis(a.X, b.X, c.X);
+        var v = UnwrapMultipassTriangleAxis(a.Y, b.Y, c.Y);
+        return
+        [
+            new Vector2(u[0], v[0]),
+            new Vector2(u[1], v[1]),
+            new Vector2(u[2], v[2])
+        ];
+    }
+
+    private static float[] UnwrapMultipassTriangleAxis(float a, float b, float c)
+    {
+        const float tolerance = 0.000001f;
+
+        var bestB = b;
+        var bestC = c;
+        var bestRange = Range(a, b, c);
+        var bestMaxEdge = MaxEdgeDelta(a, b, c);
+        var centeredBOffset = -(int)MathF.Round(b - a);
+        var centeredCOffset = -(int)MathF.Round(c - a);
+        for (var bOffset = centeredBOffset - 2; bOffset <= centeredBOffset + 2; bOffset++)
+        {
+            for (var cOffset = centeredCOffset - 2; cOffset <= centeredCOffset + 2; cOffset++)
+            {
+                var candidateB = b + bOffset;
+                var candidateC = c + cOffset;
+                var candidateRange = Range(a, candidateB, candidateC);
+                var candidateMaxEdge = MaxEdgeDelta(a, candidateB, candidateC);
+                if (candidateRange < bestRange - tolerance
+                    || (MathF.Abs(candidateRange - bestRange) <= tolerance
+                        && candidateMaxEdge < bestMaxEdge - tolerance))
+                {
+                    bestRange = candidateRange;
+                    bestMaxEdge = candidateMaxEdge;
+                    bestB = candidateB;
+                    bestC = candidateC;
+                }
+            }
+        }
+
+        return [a, bestB, bestC];
+    }
+
+    private static float MaxEdgeDelta(float a, float b, float c)
+    {
+        return MathF.Max(
+            MathF.Abs(a - b),
+            MathF.Max(MathF.Abs(b - c), MathF.Abs(c - a)));
+    }
+
+    private static float Range(float a, float b, float c)
+    {
+        return MathF.Max(a, MathF.Max(b, c)) - MathF.Min(a, MathF.Min(b, c));
     }
 
     private static bool NearlyEqual(Vector3 left, Vector3 right)
@@ -384,6 +621,8 @@ internal static class TieGltfGeometryBuilder
         int SourceIndex,
         int U,
         int V,
+        int MultipassU,
+        int MultipassV,
         int NormalX,
         int NormalY,
         int NormalZ,
@@ -398,6 +637,7 @@ internal static class TieGltfGeometryBuilder
         public static ExpandedVertexKey From(
             int sourceIndex,
             Vector2 texCoord,
+            Vector2 multipassTexCoord,
             Vector3 normal,
             bool sourceNormalPresent,
             TieGltfSourceNormalState sourceNormalState,
@@ -409,6 +649,8 @@ internal static class TieGltfGeometryBuilder
                 sourceIndex,
                 (int)MathF.Round(texCoord.X * scale),
                 (int)MathF.Round(texCoord.Y * scale),
+                (int)MathF.Round(multipassTexCoord.X * scale),
+                (int)MathF.Round(multipassTexCoord.Y * scale),
                 (int)MathF.Round(normal.X * scale),
                 (int)MathF.Round(normal.Y * scale),
                 (int)MathF.Round(normal.Z * scale),
@@ -429,6 +671,7 @@ internal sealed record GltfGeometry(
     List<float> SourceNormalMask,
     List<float> SourceNormalStates,
     List<Vector2> TexCoords,
+    List<Vector2> MultipassTexCoords,
     List<Vector4> GlowColors,
     List<float> AmbientIndices,
     List<PacketIndexGroup> PacketIndexGroups,

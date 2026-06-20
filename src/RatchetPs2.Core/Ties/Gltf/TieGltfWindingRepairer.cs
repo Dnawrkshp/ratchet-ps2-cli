@@ -29,6 +29,8 @@ internal static class TieGltfWindingRepairer
         List<float>? sourceNormalMask,
         List<float>? sourceNormalStates,
         List<Vector2> texCoords,
+        List<Vector2> multipassTexCoords,
+        bool includeMultipassTexCoords,
         List<Vector4> glowColors,
         bool includeGlowColors,
         List<float> ambientIndices,
@@ -449,6 +451,10 @@ internal static class TieGltfWindingRepairer
             sourceNormalMask?.Add(sourceNormalMask[sourceIndex]);
             sourceNormalStates?.Add(sourceNormalStates[sourceIndex]);
             texCoords.Add(texCoords[sourceIndex]);
+            if (includeMultipassTexCoords)
+            {
+                multipassTexCoords.Add(multipassTexCoords[sourceIndex]);
+            }
             if (includeGlowColors)
             {
                 glowColors.Add(glowColors[sourceIndex]);

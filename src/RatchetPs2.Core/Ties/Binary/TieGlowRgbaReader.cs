@@ -61,7 +61,7 @@ internal static class TieGlowRgbaReader
                 .ToArray();
             var multipassBlocks = lodBlocks
                 .Where(block => packetsByBlockKey.TryGetValue((block.LodIndex, block.PacketIndex), out var packet)
-                    && IsGlowMultipassPacket(packet))
+                    && IsGlowPassFlagsPacket(packet))
                 .ToArray();
             if (multipassBlocks.Length > 0)
             {
@@ -213,7 +213,7 @@ internal static class TieGlowRgbaReader
         }
 
         if (packetsByBlockKey.TryGetValue((block.LodIndex, block.PacketIndex), out var sourcePacket)
-            && IsGlowMultipassPacket(sourcePacket)
+            && IsGlowPassFlagsPacket(sourcePacket)
             && TryResolveGlowRemapMultipassPacketRange(range, block))
         {
             return;
@@ -255,7 +255,7 @@ internal static class TieGlowRgbaReader
             .Where(candidate => candidate.Offset + candidate.Length > range.Offset && candidate.Offset < endOffset)
             .FirstOrDefault(candidate =>
                 packetsByBlockKey.TryGetValue((candidate.LodIndex, candidate.PacketIndex), out var packet)
-                && IsGlowMultipassPacket(packet));
+                && IsGlowPassFlagsPacket(packet));
         if (targetBlock is null || targetBlock.VertexRows.Count == 0)
         {
             return;
@@ -970,9 +970,9 @@ internal static class TieGlowRgbaReader
             .ToArray();
     }
 
-    private static bool IsGlowMultipassPacket(TiePacket packet)
+    private static bool IsGlowPassFlagsPacket(TiePacket packet)
     {
-        return packet.MultipassType == 8;
+        return packet.PassFlags == TiePassFlags.GlowEmissionPassFlags;
     }
 
     private static bool TrySelectShaderIndex(TiePacket packet, int vuAddress, out int shaderIndex)

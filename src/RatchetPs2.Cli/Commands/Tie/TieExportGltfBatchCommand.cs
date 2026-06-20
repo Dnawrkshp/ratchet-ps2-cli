@@ -273,7 +273,7 @@ internal static class TieExportGltfBatchCommand
         var topology = tie.LodTopologies.FirstOrDefault(topology => topology.LodIndex == lodIndex);
         var packets = packetTable?.Packets ?? [];
         var shaderCountDistribution = Distribution(packets.Select(packet => (int)packet.ShaderCount));
-        var multipassTypeDistribution = Distribution(packets.Select(packet => (int)packet.MultipassType));
+        var passFlagsDistribution = Distribution(packets.Select(packet => (int)packet.PassFlags));
         var setupTailWords = packets
             .Select(packet => GetSetupTailWord(tie, lodIndex, packet.PacketIndex))
             .Where(value => value.HasValue)
@@ -340,8 +340,9 @@ internal static class TieExportGltfBatchCommand
                     RgbaPacketCount = packets.Count(packet => packet.RgbaCount > 0),
                     MaxShaderCount = packets.Count == 0 ? 0 : packets.Max(packet => packet.ShaderCount),
                     ShaderCountDistribution = shaderCountDistribution,
-                    MultipassTypeDistribution = multipassTypeDistribution,
-                    MultipassPacketCount = packets.Count(packet => packet.MultipassType != 0),
+                    PassFlagsDistribution = passFlagsDistribution,
+                    MultipassTypeDistribution = passFlagsDistribution,
+                    MultipassPacketCount = packets.Count(packet => packet.PassFlags != 0),
                     SetupTailWords = setupTailWords
                 },
                 Glow = new
@@ -357,14 +358,14 @@ internal static class TieExportGltfBatchCommand
                 Textures = textureResources?.Entries ?? []
             },
             new TieBatchPacketMetadata(
-                multipassTypeDistribution,
+                passFlagsDistribution,
                 shaderCountDistribution,
                 setupTailWords));
     }
 
     private static object BuildAggregatePacketMetadata(IEnumerable<TieBatchManifestEntry> entries)
     {
-        var multipassTypes = new SortedDictionary<string, int>(StringComparer.Ordinal);
+        var passFlags = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var setupTailWords = new SortedDictionary<string, int>(StringComparer.Ordinal);
         var maxShaderCounts = new SortedDictionary<string, int>(StringComparer.Ordinal);
 
@@ -375,7 +376,7 @@ internal static class TieExportGltfBatchCommand
                 continue;
             }
 
-            AddDistribution(multipassTypes, packetMetadata.MultipassTypeDistribution);
+            AddDistribution(passFlags, packetMetadata.PassFlagsDistribution);
             AddDistribution(maxShaderCounts, packetMetadata.ShaderCountDistribution);
             foreach (var word in packetMetadata.SetupTailWords)
             {
@@ -385,7 +386,8 @@ internal static class TieExportGltfBatchCommand
 
         return new
         {
-            MultipassTypes = multipassTypes,
+            PassFlags = passFlags,
+            MultipassTypes = passFlags,
             ShaderCounts = maxShaderCounts,
             SetupTailWords = setupTailWords
         };
@@ -440,7 +442,7 @@ internal static class TieExportGltfBatchCommand
     private sealed record TieBatchManifestEntry(object Entry, TieBatchPacketMetadata? PacketMetadata);
 
     private sealed record TieBatchPacketMetadata(
-        IReadOnlyDictionary<string, int> MultipassTypeDistribution,
+        IReadOnlyDictionary<string, int> PassFlagsDistribution,
         IReadOnlyDictionary<string, int> ShaderCountDistribution,
         IReadOnlyList<string> SetupTailWords);
 }

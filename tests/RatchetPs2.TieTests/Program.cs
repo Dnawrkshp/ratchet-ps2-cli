@@ -714,6 +714,7 @@ ValidateLowCoverageTableNormalFixture();
 ValidateBroadSparseTableNormalFixture();
 ValidateHighInvertedRatioTableNormalFixture();
 ValidateUpperStrongDownTableNormalFixture();
+ValidatePoorlyAlignedSourceNormalRepairFixture();
 ValidateOrganicDuplicatePositionNormalWeldFixture();
 ValidateLogicalNormalRemapMetadataFixture();
 ValidateInvertedComponentWindingFixture();
@@ -870,6 +871,64 @@ void ValidateReflectiveMaskFixture()
             Expect(
                 extras.GetProperty("TieTextureGltfAlphaMode").ValueKind == JsonValueKind.Null,
                 $"{relativePath}: expected reflective-mask material {name} to suppress emitted glTF alpha metadata");
+            Expect(
+                extras.GetProperty("TieMaterialRole").GetString() == "ReflectiveOverlay",
+                $"{relativePath}: expected reflective-mask material {name} to export the reflective overlay role");
+            Expect(
+                extras.GetProperty("TieTextureRgbUsage").GetString() == "ReflectivePreview",
+                $"{relativePath}: expected reflective-mask material {name} to mark texture RGB as reflective preview data");
+            Expect(
+                extras.GetProperty("TieReflectiveMaskChannel").GetString() == "A",
+                $"{relativePath}: expected reflective-mask material {name} to use alpha as the reflective mask channel");
+            Expect(
+                extras.GetProperty("TieReflectiveTintSource").GetString() == "DirectionalLightSelector",
+                $"{relativePath}: expected reflective-mask material {name} to use the tie directional-light selector as tint source");
+            Expect(
+                extras.GetProperty("TieReflectiveEnvironmentSource").GetString() == "TieTexture",
+                $"{relativePath}: expected reflective-mask material {name} to use the tie reflection texture as environment source");
+            Expect(
+                extras.GetProperty("TieReflectiveEnvironmentTextureRole").GetString() == "LastTieTexture",
+                $"{relativePath}: expected reflective-mask material {name} to mark the environment texture as the last tie texture");
+            Expect(
+                extras.GetProperty("TieReflectiveEnvironmentShaderIndex").GetInt32() == textureResources!.Uris.Keys.Max(),
+                $"{relativePath}: expected reflective-mask material {name} to point at the last tie texture shader");
+            Expect(
+                extras.GetProperty("TieReflectiveBlendMode").GetString() == "EnvironmentOverlay",
+                $"{relativePath}: expected reflective-mask material {name} to export environment overlay blend semantics");
+            Expect(
+                extras.GetProperty("TieMultipassOffset").GetInt32() > 0,
+                $"{relativePath}: expected reflective-mask material {name} to export the multipass UV offset");
+            Expect(
+                extras.GetProperty("TieMultipassType").GetInt32() == 10,
+                $"{relativePath}: expected reflective-mask material {name} to export multipass type 10");
+            Expect(
+                extras.GetProperty("TieMultipassUvSize").GetInt32() > 0,
+                $"{relativePath}: expected reflective-mask material {name} to export the multipass UV size");
+            Expect(
+                extras.GetProperty("TieMultipassTypeBits").GetString() == "0x0A",
+                $"{relativePath}: expected reflective-mask material {name} to export multipass type bits 0x0A");
+            var reflectivePreviewBase = extras.GetProperty("TieReflectivePreviewBaseColorFactor")
+                .EnumerateArray()
+                .Select(value => value.GetSingle())
+                .ToArray();
+            Expect(
+                reflectivePreviewBase.Length == 3
+                && MathF.Abs(reflectivePreviewBase[0] - 0.035f) < 0.0001f
+                && MathF.Abs(reflectivePreviewBase[1] - 0.045f) < 0.0001f
+                && MathF.Abs(reflectivePreviewBase[2] - 0.06f) < 0.0001f,
+                $"{relativePath}: expected reflective-mask material {name} preview base color factor");
+            Expect(
+                MathF.Abs(extras.GetProperty("TieReflectivePreviewTextureRgbScale").GetSingle() - 0.2f) < 0.0001f,
+                $"{relativePath}: expected reflective-mask material {name} preview texture RGB scale 0.2");
+            Expect(
+                MathF.Abs(extras.GetProperty("TieReflectiveMaskFocusPower").GetSingle() - 1.2f) < 0.0001f,
+                $"{relativePath}: expected reflective-mask material {name} reflective mask focus power 1.2");
+            Expect(
+                MathF.Abs(extras.GetProperty("TieReflectiveEnvironmentStrength").GetSingle() - 2.2f) < 0.0001f,
+                $"{relativePath}: expected reflective-mask material {name} reflective environment strength 2.2");
+            Expect(
+                MathF.Abs(extras.GetProperty("TieReflectiveMaxBlend").GetSingle() - 0.82f) < 0.0001f,
+                $"{relativePath}: expected reflective-mask material {name} reflective max blend 0.82");
             var pbr = material.GetProperty("pbrMetallicRoughness");
             Expect(
                 MathF.Abs(pbr.GetProperty("metallicFactor").GetSingle() - 0.37f) < 0.0001f,
@@ -2153,6 +2212,90 @@ void ValidateOrganicDuplicatePositionNormalWeldFixture()
     }
 }
 
+void ValidatePoorlyAlignedSourceNormalRepairFixture()
+{
+    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9341", "core.bin");
+    if (!File.Exists(fixturePath))
+    {
+        return;
+    }
+
+    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
+    try
+    {
+        using var input = File.OpenRead(fixturePath);
+        var fixtureTie = TieClassReader.Read(input);
+        var textureResources = BuildFixtureTextureResources(fixturePath);
+        var fixtureExport = TieGltfExporter.Export(
+            fixtureTie,
+            "tie.gltf",
+            new TieGltfExportOptions
+            {
+                BufferFileName = "tie.buffer.bin",
+                GameLabel = "DL",
+                ExternalTextureUris = textureResources?.Uris,
+                ExternalTextureSizes = textureResources?.Sizes,
+                ExternalTextureAlpha = textureResources?.Alpha
+            });
+
+        using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+        var root = gltfDocument.RootElement;
+        var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
+        var positionAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("POSITION").GetInt32();
+        var normalAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("NORMAL").GetInt32();
+        var positions = ReadExportedVec3Accessor(fixtureExport, root, positionAccessorIndex);
+        var normals = ReadExportedVec3Accessor(fixtureExport, root, normalAccessorIndex);
+        var targetTriangleCount = 0;
+        var worstTargetNormalDot = 1f;
+
+        foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+        {
+            var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+            for (var i = 0; i + 2 < indices.Count; i += 3)
+            {
+                var aIndex = indices[i];
+                var bIndex = indices[i + 1];
+                var cIndex = indices[i + 2];
+                if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
+                {
+                    continue;
+                }
+
+                var averageNormal = Normalize((
+                    normals[aIndex].X + normals[bIndex].X + normals[cIndex].X,
+                    normals[aIndex].Y + normals[bIndex].Y + normals[cIndex].Y,
+                    normals[aIndex].Z + normals[bIndex].Z + normals[cIndex].Z));
+                var normalDot = NormalDot(faceNormal, averageNormal);
+
+                var center = (
+                    X: (positions[aIndex].X + positions[bIndex].X + positions[cIndex].X) / 3f,
+                    Y: (positions[aIndex].Y + positions[bIndex].Y + positions[cIndex].Y) / 3f,
+                    Z: (positions[aIndex].Z + positions[bIndex].Z + positions[cIndex].Z) / 3f);
+                if (center.X is > -2.5f and < -2.2f
+                    && center.Y is > -1.05f and < -0.75f
+                    && center.Z is > -4.5f and < -4.1f
+                    && faceNormal.Y > 0.4f)
+                {
+                    targetTriangleCount++;
+                    worstTargetNormalDot = MathF.Min(worstTargetNormalDot, normalDot);
+                }
+            }
+        }
+
+        Expect(targetTriangleCount > 0, $"{relativePath}: expected to find the 9341 sloped panel triangle");
+        Expect(
+            worstTargetNormalDot >= 0.9f,
+            $"{relativePath}: expected 9341 sloped panel normals to align with the final face, got worst dot {worstTargetNormalDot}");
+
+        Console.WriteLine($"PASS DL tie poorly aligned source-normal repair {relativePath}");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"{relativePath}: {ex.Message}");
+        Console.WriteLine($"FAIL DL tie poorly aligned source-normal repair {relativePath}");
+    }
+}
+
 void ValidateLogicalNormalRemapMetadataFixture()
 {
     var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9786", "core.bin");
@@ -2943,10 +3086,11 @@ void ValidateGlowMultipassResolution(TieClass fixtureTie, string relativePath)
         .ToArray();
     foreach (var lodIndex in resolvedGlowLods)
     {
+        const byte glowPassFlags = 8;
         var multipassPacketIndices = fixtureTie.PacketTables
             .FirstOrDefault(table => table.LodIndex == lodIndex)?
             .Packets
-            .Where(packet => packet.MultipassType == 8)
+            .Where(packet => packet.PassFlags == glowPassFlags)
             .Select(packet => packet.PacketIndex)
             .ToHashSet() ?? [];
         if (multipassPacketIndices.Count == 0)

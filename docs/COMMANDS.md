@@ -119,7 +119,7 @@ Skybox support currently accepts `UYA` and `DL`.
 Export skybox geometry to a glTF model.
 
 ```bash
-ratchet-ps2 skybox export-gltf --game <UYA|DL> --input <input> --output <output> [--preserve-alpha]
+ratchet-ps2 skybox export-gltf --game <UYA|DL> --input <input> --output <output>
 ```
 
 Options:
@@ -127,7 +127,6 @@ Options:
 - `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
 - `--input <input>`: Required path to the input `sky.bin` binary.
 - `--output <output>`: Required path to write the output `.gltf` file.
-- `--preserve-alpha`: Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup.
 
 Output behavior:
 
@@ -135,8 +134,7 @@ Output behavior:
 - A sibling `.diagnostics.json` is written with shell, cluster, triangle, and texture counts.
 - Embedded skybox textures are converted to PNGs in a sibling `textures/` folder and referenced by glTF materials.
 - UYA and DL texture payloads are decoded with the palette-index remap used by the PIF texture utilities; DL also uses RAC4 pixel unswizzling.
-- By default, UYA and DL skybox texture alpha is doubled to glTF alpha while source RGB is kept intact; nonzero alpha is preserved for layered shell blending.
-- Fully transparent texture pixels have nearby RGB dilated into them to avoid dark filtered edges around alpha-blended shells.
+- UYA and DL skybox texture alpha and RGB are preserved from the decoded source texture without alpha expansion or transparent RGB dilation.
 - Skybox glTF textures use clamp-to-edge samplers so ST values on `0`/`4096` shell edges do not wrap-filter against the opposite texture edge.
 - UYA/DL shell flag `0x2` exports a separate bloom material variant with emissive texture metadata and `KHR_materials_emissive_strength`.
 - Untextured gouraud sky shells export the packed RGBA values stored in the cluster `st_ofs` table as `COLOR_0`; RGB source bytes are converted from sRGB-style values to glTF linear color.
@@ -154,7 +152,7 @@ Export a directory of skybox binaries to glTF and write a manifest for
 `tools/skybox-viewer`.
 
 ```bash
-ratchet-ps2 skybox export-gltf-batch --game <UYA|DL> --input-root <input-root> --output-root <output-root> [--sky-file-name <name>] [--manifest-name <name>] [--preserve-alpha] [--limit <count>]
+ratchet-ps2 skybox export-gltf-batch --game <UYA|DL> --input-root <input-root> --output-root <output-root> [--sky-file-name <name>] [--manifest-name <name>] [--limit <count>]
 ```
 
 Options:
@@ -164,7 +162,6 @@ Options:
 - `--output-root <output-root>`: Required directory for exported models and the manifest.
 - `--sky-file-name <name>`: Skybox binary file name to scan for. Defaults to `sky.bin`.
 - `--manifest-name <name>`: Viewer manifest file name. Defaults to `manifest.json`.
-- `--preserve-alpha`: Preserve raw PS2 palette alpha and skip skybox RGB edge cleanup.
 - `--limit <count>`: Optional maximum number of skyboxes to export.
 
 Output behavior:

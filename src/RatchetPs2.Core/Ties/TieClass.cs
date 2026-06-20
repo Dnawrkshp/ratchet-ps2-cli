@@ -93,7 +93,7 @@ public sealed class TiePacket
     public byte MultipassOffset { get; init; }
     public byte ScissorOffset { get; init; }
     public byte ScissorSize { get; init; }
-    public byte MultipassType { get; init; }
+    public byte PassFlags { get; init; }
     public byte MultipassUvSize { get; init; }
     public IReadOnlyList<TiePacketShaderReference> ShaderReferences { get; init; } = [];
     public IReadOnlyList<int> ShaderSwitchVuAddresses { get; init; } = [];

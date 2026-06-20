@@ -38,7 +38,7 @@ internal static partial class DlMapExtractionWriter
 
         try
         {
-            var export = SkyboxExportWriter.Export(inputFile, outputFile, GameId.DL, preserveSourceAlpha: false, levelIndex);
+            var export = SkyboxExportWriter.Export(inputFile, outputFile, GameId.DL, levelIndex);
             return GltfExportRoute.Written(
                 "skybox",
                 null,

@@ -17,11 +17,7 @@ public sealed record SkyboxGltfTextureResource(
     string FileName,
     byte[] PngBytes,
     TextureSize Size,
-    TextureAlphaInfo Alpha,
-    bool StraightenedPremultipliedAlpha,
-    byte AlphaCutoff,
-    int AlphaCutoffPixelCount,
-    bool DilatedTransparentRgb);
+    TextureAlphaInfo Alpha);
 
 public sealed class SkyboxGltfExportOptions
 {
@@ -34,12 +30,6 @@ public sealed class SkyboxGltfExportOptions
     public TextureConversionOptions? TextureConversionOptions { get; init; }
 
     public float PositionScale { get; init; } = 1f / 1024f;
-
-    public bool StraightenPremultipliedAlpha { get; init; }
-
-    public byte TextureAlphaCutoff { get; init; }
-
-    public bool DilateTransparentRgb { get; init; } = true;
 
     public bool DecodeUntexturedGouraudColors { get; init; } = true;
 

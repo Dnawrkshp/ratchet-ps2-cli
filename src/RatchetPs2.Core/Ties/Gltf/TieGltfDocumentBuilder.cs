@@ -74,6 +74,12 @@ internal static class TieGltfDocumentBuilder
         var texCoordAccessor = gltfBufferWriter.WriteVector2Accessor(
             geometry.TexCoords,
             target: GltfBufferWriter.ArrayBufferTarget);
+        var useMultipassTexCoordAttribute = geometry.MultipassTexCoords.Count == geometry.Positions.Count;
+        var multipassTexCoordAccessor = useMultipassTexCoordAttribute
+            ? gltfBufferWriter.WriteVector2Accessor(
+                geometry.MultipassTexCoords,
+                target: GltfBufferWriter.ArrayBufferTarget)
+            : (int?)null;
         var useGlowEmissionAttribute = geometry.GlowColors.Count == geometry.Positions.Count
             && TieGltfGlowBuilder.CountActiveVertices(geometry.GlowColors) > 0;
         var glowEmissionAccessor = useGlowEmissionAttribute
@@ -96,6 +102,10 @@ internal static class TieGltfDocumentBuilder
             ["NORMAL"] = normalAccessor,
             ["TEXCOORD_0"] = texCoordAccessor
         };
+        if (multipassTexCoordAccessor.HasValue)
+        {
+            attributes["TEXCOORD_1"] = multipassTexCoordAccessor.Value;
+        }
         if (sourceNormalMaskAccessor.HasValue)
         {
             attributes[profile.SourceNormalAttributeName] = sourceNormalMaskAccessor.Value;
@@ -119,7 +129,10 @@ internal static class TieGltfDocumentBuilder
             var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
             var materialIndex = materialBuilder.GetMaterialIndex(
                 group.ShaderIndex,
-                group.MultipassType,
+                group.MultipassOffset,
+                group.PassFlags,
+                group.MultipassUvSize,
+                group.EnvPassBleedColor,
                 tie.Header.ModeBits,
                 group.UseGlowEmission ? glowEmission : null);
             var glowRgbaIndexCount = TieGltfGlowBuilder.CountActiveIndices(group.Indices, geometry.GlowColors);
@@ -133,7 +146,20 @@ internal static class TieGltfDocumentBuilder
                 {
                     group.PacketIndex,
                     group.ShaderIndex,
-                    group.MultipassType,
+                    group.MultipassOffset,
+                    MultipassType = group.PassFlags,
+                    group.PassFlags,
+                    TiePassFlags = group.PassFlags,
+                    TiePassFlagsBits = TiePassFlags.FormatByteBits(group.PassFlags),
+                    TieSecondPassMode = TiePassFlags.ResolveSecondPassMode(group.PassFlags),
+                    TieTextureMatrixEnabled = TiePassFlags.UsesTextureMatrix(group.PassFlags),
+                    TieTextureMatrixSelector = TiePassFlags.TextureMatrixSelector(group.PassFlags),
+                    TieEnvironmentPassBits = TiePassFlags.EnvironmentPassBits(group.PassFlags),
+                    group.MultipassUvSize,
+                    TieMultipassUvRole = TiePassFlags.ResolveMultipassUvRole(
+                        group.PassFlags,
+                        group.MultipassUvSize),
+                    TieReflectiveBleedColor = group.EnvPassBleedColor?.ToRgbaHex(),
                     PacketShaderIndices = group.PacketShaderIndices,
                     PacketShaderSwitchVuAddresses = group.PacketShaderSwitchVuAddresses,
                     HeaderModeBits = FormatModeBits(tie.Header.ModeBits),
@@ -322,6 +348,7 @@ internal static class TieGltfDocumentBuilder
             GlowRgbaEmissionStrength = glowEmission.Strength,
             GlowRgbaEmissivePrimitiveCount = geometry.PacketIndexGroups.Count(group => group.UseGlowEmission),
             TextureCoordinateCount = geometry.TexCoords.Count,
+            MultipassTextureCoordinateCount = geometry.MultipassTexCoords.Count,
             PrimitiveCount = primitives.Count,
             TexturedPrimitiveCount = primitives.Count(primitive => (int)primitive["material"] != 0),
             AlphaTextureCount = externalTextureAlpha?.Count(pair => pair.Value.HasAlpha) ?? 0,
@@ -337,7 +364,20 @@ internal static class TieGltfDocumentBuilder
             {
                 group.PacketIndex,
                 group.ShaderIndex,
-                group.MultipassType,
+                group.MultipassOffset,
+                MultipassType = group.PassFlags,
+                group.PassFlags,
+                TiePassFlags = group.PassFlags,
+                TiePassFlagsBits = TiePassFlags.FormatByteBits(group.PassFlags),
+                TieSecondPassMode = TiePassFlags.ResolveSecondPassMode(group.PassFlags),
+                TieTextureMatrixEnabled = TiePassFlags.UsesTextureMatrix(group.PassFlags),
+                TieTextureMatrixSelector = TiePassFlags.TextureMatrixSelector(group.PassFlags),
+                TieEnvironmentPassBits = TiePassFlags.EnvironmentPassBits(group.PassFlags),
+                group.MultipassUvSize,
+                TieMultipassUvRole = TiePassFlags.ResolveMultipassUvRole(
+                    group.PassFlags,
+                    group.MultipassUvSize),
+                TieReflectiveBleedColor = group.EnvPassBleedColor?.ToRgbaHex(),
                 group.PacketShaderIndices,
                 group.PacketShaderSwitchVuAddresses,
                 HeaderModeBits = FormatModeBits(tie.Header.ModeBits),
@@ -604,8 +644,18 @@ internal static class TieGltfDocumentBuilder
                         packet.MultipassOffset,
                         packet.ScissorOffset,
                         packet.ScissorSize,
-                        packet.MultipassType,
+                        MultipassType = packet.PassFlags,
+                        packet.PassFlags,
+                        TiePassFlags = packet.PassFlags,
+                        TiePassFlagsBits = TiePassFlags.FormatByteBits(packet.PassFlags),
+                        TieSecondPassMode = TiePassFlags.ResolveSecondPassMode(packet.PassFlags),
+                        TieTextureMatrixEnabled = TiePassFlags.UsesTextureMatrix(packet.PassFlags),
+                        TieTextureMatrixSelector = TiePassFlags.TextureMatrixSelector(packet.PassFlags),
+                        TieEnvironmentPassBits = TiePassFlags.EnvironmentPassBits(packet.PassFlags),
                         packet.MultipassUvSize,
+                        TieMultipassUvRole = TiePassFlags.ResolveMultipassUvRole(
+                            packet.PassFlags,
+                            packet.MultipassUvSize),
                         ShaderSwitchVuAddresses = packet.ShaderSwitchVuAddresses,
                         ShaderReferences = packet.ShaderReferences.Select(reference => new
                         {

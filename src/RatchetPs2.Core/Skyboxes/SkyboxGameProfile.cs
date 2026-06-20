@@ -11,17 +11,9 @@ public sealed record SkyboxGameProfile
 
     public bool TextureIsSwizzled { get; init; }
 
-    public bool DoubleTextureAlpha { get; init; }
-
-    public bool StraightenPremultipliedAlpha { get; init; }
-
-    public byte TextureAlphaCutoff { get; init; }
-
-    public bool DilateTransparentRgb { get; init; } = true;
-
     public bool UseDlLevel7LoaderRotationPatch { get; init; }
 
-    public static SkyboxGameProfile ForGame(GameId gameId, bool preserveSourceAlpha = false)
+    public static SkyboxGameProfile ForGame(GameId gameId)
     {
         return gameId switch
         {
@@ -29,15 +21,11 @@ public sealed record SkyboxGameProfile
             {
                 GameLabel = gameId.ToString(),
                 TextureIsSwizzled = true,
-                DoubleTextureAlpha = !preserveSourceAlpha,
-                DilateTransparentRgb = !preserveSourceAlpha,
                 UseDlLevel7LoaderRotationPatch = true
             },
             GameId.UYA => Default with
             {
-                GameLabel = gameId.ToString(),
-                DoubleTextureAlpha = !preserveSourceAlpha,
-                DilateTransparentRgb = !preserveSourceAlpha
+                GameLabel = gameId.ToString()
             },
             _ => throw new NotSupportedException($"Skybox glTF export does not support {gameId}.")
         };
@@ -47,8 +35,7 @@ public sealed record SkyboxGameProfile
     {
         return new TextureConversionOptions
         {
-            IsSwizzled = TextureIsSwizzled,
-            DoubleAlpha = DoubleTextureAlpha
+            IsSwizzled = TextureIsSwizzled
         };
     }
 
@@ -62,9 +49,6 @@ public sealed record SkyboxGameProfile
             BufferFileName = bufferFileName,
             GameLabel = GameLabel,
             TextureConversionOptions = CreateTextureConversionOptions(),
-            StraightenPremultipliedAlpha = StraightenPremultipliedAlpha,
-            TextureAlphaCutoff = TextureAlphaCutoff,
-            DilateTransparentRgb = DilateTransparentRgb,
             ShellRotationOverrides = ShellRotationOverridesFor(levelNumber, shellCount)
         };
     }
