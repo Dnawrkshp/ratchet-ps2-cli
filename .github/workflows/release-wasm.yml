@@ -31,8 +31,10 @@ jobs:
         with:
           dotnet-version: 9.0.x
 
-      - name: Install WASM Workload
-        run: dotnet workload install wasm-tools
+      - name: Restore WASM Workloads
+        run: |
+          dotnet --version
+          dotnet workload restore "$WASM_PROJECT"
 
       - name: Publish WASM Package
         run: |
