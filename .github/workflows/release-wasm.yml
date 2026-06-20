@@ -20,7 +20,7 @@ jobs:
       DOTNET_CLI_TELEMETRY_OPTOUT: true
       DOTNET_NOLOGO: true
       WASM_PROJECT: src/RatchetPs2.Wasm/RatchetPs2.Wasm.csproj
-      PUBLISH_DIR: ${{ runner.temp }}/ratchetps2-wasm-publish
+      PUBLISH_DIR: artifacts/ratchetps2-wasm-publish
 
     steps:
       - name: Checkout
@@ -35,7 +35,9 @@ jobs:
         run: dotnet workload install wasm-tools
 
       - name: Publish WASM Package
-        run: dotnet publish "$WASM_PROJECT" -c Release -o "$PUBLISH_DIR"
+        run: |
+          rm -rf "$PUBLISH_DIR"
+          dotnet publish "$WASM_PROJECT" -c Release -o "$PUBLISH_DIR"
 
       - name: Verify Package Layout
         run: |
