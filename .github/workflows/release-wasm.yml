@@ -1,0 +1,80 @@
+name: Release WASM Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wasm-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release-wasm:
+    name: Build and Release WASM
+    runs-on: ubuntu-latest
+    env:
+      DOTNET_CLI_TELEMETRY_OPTOUT: true
+      DOTNET_NOLOGO: true
+      WASM_PROJECT: src/RatchetPs2.Wasm/RatchetPs2.Wasm.csproj
+      PUBLISH_DIR: ${{ runner.temp }}/ratchetps2-wasm-publish
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 9.0.x
+
+      - name: Install WASM Workload
+        run: dotnet workload install wasm-tools
+
+      - name: Publish WASM Package
+        run: dotnet publish "$WASM_PROJECT" -c Release -o "$PUBLISH_DIR"
+
+      - name: Verify Package Layout
+        run: |
+          test -f "$PUBLISH_DIR/package/ratchetps2-wasm.js"
+          test -f "$PUBLISH_DIR/package/ratchetps2-wasm.d.ts"
+          test -f "$PUBLISH_DIR/package/package.json"
+          test -f "$PUBLISH_DIR/package/_framework/blazor.webassembly.js"
+
+      - name: Add Release Metadata
+        run: |
+          cat > "$PUBLISH_DIR/package/ratchetps2-wasm-release.json" <<EOF
+          {
+            "sourceRepository": "${GITHUB_REPOSITORY}",
+            "sourceRef": "${GITHUB_REF_NAME}",
+            "sourceSha": "${GITHUB_SHA}",
+            "builtAt": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+      - name: Package Release Asset
+        id: package
+        run: |
+          artifact_name="ratchetps2-wasm-${GITHUB_REF_NAME}.tar.gz"
+          artifact_path="${RUNNER_TEMP}/${artifact_name}"
+          tar -czf "$artifact_path" -C "$PUBLISH_DIR" package
+          echo "artifact_name=$artifact_name" >> "$GITHUB_OUTPUT"
+          echo "artifact_path=$artifact_path" >> "$GITHUB_OUTPUT"
+
+      - name: Create or Update GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag_name="${GITHUB_REF_NAME}"
+          artifact_path="${{ steps.package.outputs.artifact_path }}"
+
+          if gh release view "$tag_name" >/dev/null 2>&1; then
+            gh release upload "$tag_name" "$artifact_path" --clobber
+          else
+            gh release create "$tag_name" "$artifact_path" \
+              --title "$tag_name" \
+              --notes "Ratchet PS2 WASM package for $tag_name."
+          fi
