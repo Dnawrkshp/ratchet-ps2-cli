@@ -3,6 +3,7 @@ using System.Text.Json;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Wad;
+using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 
 ValidateLevelInfoLookup();
@@ -14,6 +15,8 @@ ValidateLooseLevelWadFailures();
 ValidateMissionPlaceholderDetection();
 ValidateLevelSceneWadEmptyDetection();
 ValidateCoreLevelSegments();
+ValidateGameplayLevelSettingsParsing();
+ValidateGameplayMobyInstancesParsing();
 ValidateCodeSegmentParsing();
 ValidateHudBankParsing();
 ValidateWorldInstanceParsing();
@@ -141,12 +144,16 @@ static void ValidateLooseLevelWadUnpacking()
     Expect(files.ContainsKey("level_wad/header.bin"), "loose WAD unpack should include the level WAD header");
     Expect(files["level_wad/core_sound.bnk"].Bytes[0] == 0x41, "loose WAD unpack should include core sound bank bytes");
     Expect(files["level_wad/chunks/chunk0.wad"].Bytes[0] == 0x51, "loose WAD unpack should include chunk bytes");
-    Expect(files["missions/0000/mission.wad"].Bytes[0x40] == 0xA1, "loose WAD unpack should include mission WAD bytes");
-    Expect(files["missions/0000/gameplay.bin"].Bytes.SequenceEqual(new byte[] { 0xA1, 0xA2, 0xA3, 0xA4 }), "loose WAD unpack should slice mission gameplay bytes");
+    Expect(files["missions/0000/mission.wad"].Bytes[0x60] == 0xA1, "loose WAD unpack should include mission WAD bytes");
+    Expect(files["missions/0000/gameplay.bin"].Bytes[0x20] == 0xA1, "loose WAD unpack should slice mission gameplay bytes");
+    Expect(files["missions/0000/gameplay/moby_classes.bin"].Bytes.SequenceEqual(new byte[] { 0xA1, 0xA2 }), "loose WAD unpack should split mission gameplay moby classes");
+    Expect(files["missions/0000/gameplay/moby_instances.bin"].Bytes.SequenceEqual(new byte[] { 0xA3, 0xA4 }), "loose WAD unpack should split mission gameplay moby instances");
     Expect(files["missions/0000/classes.bin"].Bytes.SequenceEqual(new byte[] { 0xB1, 0xB2, 0xB3, 0xB4 }), "loose WAD unpack should slice mission classes bytes");
     Expect(files["missions/0000/gameplay_instances.bin"].Bytes[0] == 0x81, "loose WAD unpack should include mission instance bytes");
     Expect(!files.ContainsKey("missions/0001/mission.wad"), "loose WAD unpack should skip placeholder missions");
     Expect(files["assets/asset_header.bin"].Bytes.SequenceEqual(new byte[] { 1, 2, 3, 4 }), "loose WAD unpack should expose core asset header payload");
+    Expect(files["gameplay/core/level_settings.bin"].Bytes.SequenceEqual(new byte[] { 0xC1, 0xC2, 0xC3 }), "loose WAD unpack should split core gameplay level settings");
+    Expect(files["gameplay/core/cameras.bin"].Bytes.SequenceEqual(new byte[] { 0xD1, 0xD2 }), "loose WAD unpack should split core gameplay cameras");
     Expect(files["world/lighting/directional_lights.bin"].Bytes[0] == 0xD1, "loose WAD unpack should expose parsed world slot payloads");
 
     var packed = package.ToPackedPackage();
@@ -327,6 +334,124 @@ static void ValidateCoreLevelSegments()
     Expect(palette.RawBytes.SequenceEqual(compressed), "compressed segment raw bytes should be preserved");
     Expect(palette.PayloadBytes.SequenceEqual(decompressed), "compressed segment payload should be decompressed");
     Expect(palette.WasCompressedWad, "compressed segment should be marked as compressed WAD");
+}
+
+static void ValidateGameplayLevelSettingsParsing()
+{
+    var levelSettingsBytes = new byte[0xb8];
+    WriteInt32(levelSettingsBytes, 0x00, 57);
+    WriteInt32(levelSettingsBytes, 0x04, 65);
+    WriteInt32(levelSettingsBytes, 0x08, 50);
+    WriteInt32(levelSettingsBytes, 0x0c, 40);
+    WriteInt32(levelSettingsBytes, 0x10, 50);
+    WriteInt32(levelSettingsBytes, 0x14, 40);
+    WriteSingle(levelSettingsBytes, 0x18, 61440);
+    WriteSingle(levelSettingsBytes, 0x1c, 179200);
+    WriteSingle(levelSettingsBytes, 0x20, 255);
+    WriteSingle(levelSettingsBytes, 0x24, 63.75f);
+    WriteSingle(levelSettingsBytes, 0x3c, 20);
+    WriteSingle(levelSettingsBytes, 0x40, 20);
+    WriteSingle(levelSettingsBytes, 0x44, 20);
+    WriteInt32(levelSettingsBytes, 0x4c, -1);
+    WriteInt32(levelSettingsBytes, 0x7c, 59);
+
+    var gameplay = DlGameplayBlockReader.ReadCore(BuildGameplayData(
+        DlGameplayBlockReader.CoreHeaderSize,
+        (0x00, levelSettingsBytes),
+        (0x08, [0xaa]),
+        (0x0c, [0xbb]),
+        (0x5c, [0xcc]),
+        (0x60, [0xdd])));
+    var settings = gameplay.Blocks.Single(block => block.SemanticName == "level_settings").LevelSettings;
+
+    Expect(settings is not null, "core level_settings block should be parsed into a typed model");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "ambient_sound_instances"), "gameplay sound instances should use the ambient sound name");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "us_english_strings"), "gameplay language string blocks should use string names");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "splines"), "gameplay path blocks should use spline names");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "grind_splines"), "gameplay grind path blocks should use grind spline names");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "pad_78"), "gameplay 0x78 slot should be named padding");
+    Expect(gameplay.Blocks.Any(block => block.SemanticName == "pad_7c"), "gameplay 0x7c slot should be named padding");
+    Expect(settings!.BackgroundColor == new DlRgb96(57, 65, 50), "level settings background color should be parsed");
+    Expect(settings.FogColor == new DlRgb96(40, 50, 40), "level settings fog color should be parsed");
+    Expect(settings.FogFarDistance == 179200, "level settings fog far distance should be parsed");
+    Expect(settings.ShipPosition == new DlVector3(20, 20, 20), "level settings ship position should be parsed");
+    Expect(settings.ShipPath == -1, "level settings ship path should be parsed");
+    Expect(settings.ChunkPlanes.Count == 0, "empty level settings chunk plane terminator should be skipped");
+    Expect(settings.CoreSoundsCount == 59, "level settings core sound count should be parsed");
+    Expect(settings.ThirdPartCount == 0, "level settings DL third part count should be parsed");
+    Expect(settings.FifthPart is not null, "level settings DL fifth part should be parsed");
+    Expect(settings.DebugAttackDamage.Length == 0, "empty level settings debug attack damage array should be parsed");
+}
+
+static void ValidateGameplayMobyInstancesParsing()
+{
+    var mobyBytes = new byte[DlMobyInstancesReader.HeaderSize + DlMobyInstancesReader.RecordSize];
+    WriteInt32(mobyBytes, 0x00, 1);
+    WriteInt32(mobyBytes, 0x04, 400);
+
+    const int mobyOffset = DlMobyInstancesReader.HeaderSize;
+    WriteInt32(mobyBytes, mobyOffset, DlMobyInstancesReader.RecordSize);
+    WriteInt32(mobyBytes, mobyOffset + 0x04, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x08, 0x78);
+    WriteInt32(mobyBytes, mobyOffset + 0x0c, 4);
+    WriteInt32(mobyBytes, mobyOffset + 0x10, 0x0b37);
+    WriteSingle(mobyBytes, mobyOffset + 0x14, 1.5f);
+    WriteInt32(mobyBytes, mobyOffset + 0x18, 64);
+    WriteInt32(mobyBytes, mobyOffset + 0x1c, 80);
+    WriteInt32(mobyBytes, mobyOffset + 0x20, 32);
+    WriteInt32(mobyBytes, mobyOffset + 0x24, 64);
+    WriteSingle(mobyBytes, mobyOffset + 0x28, 10);
+    WriteSingle(mobyBytes, mobyOffset + 0x2c, 20);
+    WriteSingle(mobyBytes, mobyOffset + 0x30, 30);
+    WriteSingle(mobyBytes, mobyOffset + 0x34, 0.25f);
+    WriteSingle(mobyBytes, mobyOffset + 0x38, 0.5f);
+    WriteSingle(mobyBytes, mobyOffset + 0x3c, 0.75f);
+    WriteInt32(mobyBytes, mobyOffset + 0x40, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x44, 1);
+    WriteSingle(mobyBytes, mobyOffset + 0x48, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x4c, 1);
+    WriteInt32(mobyBytes, mobyOffset + 0x50, 10);
+    WriteInt32(mobyBytes, mobyOffset + 0x54, 1);
+    WriteInt32(mobyBytes, mobyOffset + 0x58, 0x54);
+    WriteInt32(mobyBytes, mobyOffset + 0x5c, 86);
+    WriteInt32(mobyBytes, mobyOffset + 0x60, 77);
+    WriteInt32(mobyBytes, mobyOffset + 0x64, 2);
+    WriteInt32(mobyBytes, mobyOffset + 0x68, 2);
+    WriteInt32(mobyBytes, mobyOffset + 0x6c, -1);
+
+    var gameplay = DlGameplayBlockReader.ReadCore(BuildGameplayData(
+        DlGameplayBlockReader.CoreHeaderSize,
+        (0x30, mobyBytes)));
+    var mobyInstances = gameplay.Blocks.Single(block => block.SemanticName == "moby_instances").MobyInstances;
+
+    Expect(mobyInstances is not null, "core moby_instances block should be parsed into a typed model");
+    Expect(mobyInstances!.StaticCount == 1, "moby instance static count should be parsed");
+    Expect(mobyInstances.SpawnableMobyCount == 400, "moby instance spawnable count should be parsed");
+    Expect(mobyInstances.TrailingBytes.Length == 0, "moby instance fixed records should consume the payload");
+
+    var moby = mobyInstances.Instances.Single();
+    Expect(moby.Size == DlMobyInstancesReader.RecordSize, "moby instance size field should be parsed");
+    Expect(moby.Mission == -1, "moby instance mission should be parsed");
+    Expect(moby.Uid == 0x78, "moby instance uid should be parsed");
+    Expect(moby.Bolts == 4, "moby instance bolts should be parsed");
+    Expect(moby.ClassId == 0x0b37, "moby instance class id should be parsed");
+    Expect(moby.Scale == 1.5f, "moby instance scale should be parsed");
+    Expect(moby.DrawDistance == 64, "moby instance draw distance should be parsed");
+    Expect(moby.UpdateDistance == 80, "moby instance update distance should be parsed");
+    Expect(moby.Unused20 == 32, "moby instance unused 0x20 sentinel should be parsed");
+    Expect(moby.Unused24 == 64, "moby instance unused 0x24 sentinel should be parsed");
+    Expect(moby.Position == new DlVector3(10, 20, 30), "moby instance position should be parsed");
+    Expect(moby.Rotation == new DlVector3(0.25f, 0.5f, 0.75f), "moby instance rotation should be parsed");
+    Expect(moby.Group == -1, "moby instance group should be parsed");
+    Expect(moby.IsRooted == 1, "moby instance rooted flag should be parsed");
+    Expect(moby.RootedDistance == -1, "moby instance rooted distance should be parsed");
+    Expect(moby.Unused4C == 1, "moby instance unused 0x4c sentinel should be parsed");
+    Expect(moby.PvarIndex == 10, "moby instance pvar index should be parsed");
+    Expect(moby.Occlusion == 1, "moby instance occlusion should be parsed");
+    Expect(moby.ModeBits == 0x54, "moby instance mode bits should be parsed");
+    Expect(moby.Color == new DlRgb96(86, 77, 2), "moby instance color should be parsed");
+    Expect(moby.Light == 2, "moby instance light should be parsed");
+    Expect(moby.Unused6C == -1, "moby instance unused 0x6c sentinel should be parsed");
 }
 
 static void ValidateCodeSegmentParsing()
@@ -707,17 +832,18 @@ static byte[] CreateSyntheticLooseLevelWad(int payloadBaseSector, bool negativeB
 
     var mission = data.AsSpan(7 * DlLevelConstants.SectorSize, DlLevelConstants.SectorSize);
     WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x00, 0x40);
-    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x04, 4);
-    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x08, 0x44);
+    var missionGameplay = BuildGameplayData(
+        DlGameplayBlockReader.MissionHeaderSize,
+        (0x00, new byte[] { 0xA1, 0xA2 }),
+        (0x04, new byte[] { 0xA3, 0xA4 }));
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x04, missionGameplay.Length);
+    WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x08, 0x40 + missionGameplay.Length);
     WriteInt32(data, (7 * DlLevelConstants.SectorSize) + 0x0c, 4);
-    mission[0x40] = 0xA1;
-    mission[0x41] = 0xA2;
-    mission[0x42] = 0xA3;
-    mission[0x43] = 0xA4;
-    mission[0x44] = 0xB1;
-    mission[0x45] = 0xB2;
-    mission[0x46] = 0xB3;
-    mission[0x47] = 0xB4;
+    missionGameplay.CopyTo(mission[0x40..]);
+    mission[0x40 + missionGameplay.Length] = 0xB1;
+    mission[0x41 + missionGameplay.Length] = 0xB2;
+    mission[0x42 + missionGameplay.Length] = 0xB3;
+    mission[0x43 + missionGameplay.Length] = 0xB4;
 
     data[8 * DlLevelConstants.SectorSize] = 0x81;
     data[9 * DlLevelConstants.SectorSize] = 0x91;
@@ -734,14 +860,20 @@ static byte[] CreateSyntheticLooseLevelWad(int payloadBaseSector, bool negativeB
 static byte[] CreateSyntheticCoreLevel()
 {
     var world = BuildWorldInstanceData((0x00, new byte[] { 0xD1, 0xD2, 0xD3, 0xD4 }));
+    var gameplay = BuildGameplayData(
+        DlGameplayBlockReader.CoreHeaderSize,
+        (0x00, new byte[] { 0xC1, 0xC2, 0xC3 }),
+        (0x04, new byte[] { 0xD1, 0xD2 }));
     var data = new byte[DlLevelConstants.SectorSize * 2];
     WriteFileBlock(data, 0x10, new DlFileBlock(0x100, 4));
     WriteFileBlock(data, 0x58, new DlFileBlock(0x180, world.Length));
+    WriteFileBlock(data, 0x60, new DlFileBlock(0x200, gameplay.Length));
     data[0x100] = 1;
     data[0x101] = 2;
     data[0x102] = 3;
     data[0x103] = 4;
     world.CopyTo(data.AsSpan(0x180));
+    gameplay.CopyTo(data.AsSpan(0x200));
     return data;
 }
 
@@ -809,6 +941,22 @@ static byte[] BuildWorldInstanceData(params (int HeaderOffset, byte[] Payload)[]
         WriteInt32(data, slot.HeaderOffset, offset);
         slot.Payload.CopyTo(data.AsSpan(offset));
         offset += slot.Payload.Length;
+    }
+
+    return data;
+}
+
+static byte[] BuildGameplayData(int headerSize, params (int HeaderOffset, byte[] Payload)[] blocks)
+{
+    var length = headerSize + blocks.Sum(block => block.Payload.Length);
+    var data = new byte[length];
+    var offset = headerSize;
+
+    foreach (var block in blocks)
+    {
+        WriteInt32(data, block.HeaderOffset, offset);
+        block.Payload.CopyTo(data.AsSpan(offset));
+        offset += block.Payload.Length;
     }
 
     return data;

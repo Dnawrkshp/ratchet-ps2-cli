@@ -82,6 +82,420 @@
           "type": "PackedFileEntry[]"
         }
       ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlRgb96",
+      "properties": [
+        {
+          "name": "red",
+          "type": "number"
+        },
+        {
+          "name": "green",
+          "type": "number"
+        },
+        {
+          "name": "blue",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlVector3",
+      "properties": [
+        {
+          "name": "x",
+          "type": "number"
+        },
+        {
+          "name": "y",
+          "type": "number"
+        },
+        {
+          "name": "z",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlLevelSettingsChunkPlane",
+      "properties": [
+        {
+          "name": "point",
+          "type": "DlVector3"
+        },
+        {
+          "name": "planeCount",
+          "type": "number"
+        },
+        {
+          "name": "normal",
+          "type": "DlVector3"
+        },
+        {
+          "name": "padding",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlLevelSettingsThirdPart",
+      "properties": [
+        {
+          "name": "unknown0",
+          "type": "number"
+        },
+        {
+          "name": "unknown4",
+          "type": "number"
+        },
+        {
+          "name": "unknown8",
+          "type": "number"
+        },
+        {
+          "name": "unknownC",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlLevelSettingsRewardStats",
+      "properties": [
+        {
+          "name": "xpDecayRate",
+          "type": "number"
+        },
+        {
+          "name": "xpDecayMin",
+          "type": "number"
+        },
+        {
+          "name": "boltDecayRate",
+          "type": "number"
+        },
+        {
+          "name": "boltDecayMin",
+          "type": "number"
+        },
+        {
+          "name": "unknown10",
+          "type": "number"
+        },
+        {
+          "name": "unknown14",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlLevelSettingsFifthPart",
+      "properties": [
+        {
+          "name": "unknown0",
+          "type": "number"
+        },
+        {
+          "name": "mobyInstanceCount",
+          "type": "number"
+        },
+        {
+          "name": "unknown8",
+          "type": "number"
+        },
+        {
+          "name": "unknownC",
+          "type": "number"
+        },
+        {
+          "name": "unknown10",
+          "type": "number"
+        },
+        {
+          "name": "debugHitPoints",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlLevelSettings",
+      "properties": [
+        {
+          "name": "backgroundColor",
+          "type": "DlRgb96"
+        },
+        {
+          "name": "fogColor",
+          "type": "DlRgb96"
+        },
+        {
+          "name": "fogNearDistance",
+          "type": "number"
+        },
+        {
+          "name": "fogFarDistance",
+          "type": "number"
+        },
+        {
+          "name": "fogNearIntensity",
+          "type": "number"
+        },
+        {
+          "name": "fogFarIntensity",
+          "type": "number"
+        },
+        {
+          "name": "deathHeight",
+          "type": "number"
+        },
+        {
+          "name": "isSphericalWorld",
+          "type": "boolean"
+        },
+        {
+          "name": "sphereCenter",
+          "type": "DlVector3"
+        },
+        {
+          "name": "shipPosition",
+          "type": "DlVector3"
+        },
+        {
+          "name": "shipRotationZ",
+          "type": "number"
+        },
+        {
+          "name": "shipPath",
+          "type": "number"
+        },
+        {
+          "name": "shipCameraCuboidStart",
+          "type": "number"
+        },
+        {
+          "name": "shipCameraCuboidEnd",
+          "type": "number"
+        },
+        {
+          "name": "padding58",
+          "type": "number"
+        },
+        {
+          "name": "chunkPlanes",
+          "type": "DlLevelSettingsChunkPlane[]"
+        },
+        {
+          "name": "coreSoundsCount",
+          "type": "number"
+        },
+        {
+          "name": "thirdPartCount",
+          "type": "number | null"
+        },
+        {
+          "name": "thirdPart",
+          "type": "DlLevelSettingsThirdPart[]"
+        },
+        {
+          "name": "rewardStats",
+          "type": "DlLevelSettingsRewardStats | null"
+        },
+        {
+          "name": "fifthPart",
+          "type": "DlLevelSettingsFifthPart | null"
+        },
+        {
+          "name": "debugAttackDamageLength",
+          "type": "number"
+        },
+        {
+          "name": "trailingByteLength",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlMobyInstance",
+      "properties": [
+        {
+          "name": "size",
+          "type": "number"
+        },
+        {
+          "name": "mission",
+          "type": "number"
+        },
+        {
+          "name": "uid",
+          "type": "number"
+        },
+        {
+          "name": "bolts",
+          "type": "number"
+        },
+        {
+          "name": "classId",
+          "type": "number"
+        },
+        {
+          "name": "scale",
+          "type": "number"
+        },
+        {
+          "name": "drawDistance",
+          "type": "number"
+        },
+        {
+          "name": "updateDistance",
+          "type": "number"
+        },
+        {
+          "name": "unused20",
+          "type": "number"
+        },
+        {
+          "name": "unused24",
+          "type": "number"
+        },
+        {
+          "name": "position",
+          "type": "DlVector3"
+        },
+        {
+          "name": "rotation",
+          "type": "DlVector3"
+        },
+        {
+          "name": "group",
+          "type": "number"
+        },
+        {
+          "name": "isRooted",
+          "type": "number"
+        },
+        {
+          "name": "rootedDistance",
+          "type": "number"
+        },
+        {
+          "name": "unused4C",
+          "type": "number"
+        },
+        {
+          "name": "pvarIndex",
+          "type": "number"
+        },
+        {
+          "name": "occlusion",
+          "type": "number"
+        },
+        {
+          "name": "modeBits",
+          "type": "number"
+        },
+        {
+          "name": "color",
+          "type": "DlRgb96"
+        },
+        {
+          "name": "light",
+          "type": "number"
+        },
+        {
+          "name": "unused6C",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlMobyInstances",
+      "properties": [
+        {
+          "name": "staticCount",
+          "type": "number"
+        },
+        {
+          "name": "spawnableMobyCount",
+          "type": "number"
+        },
+        {
+          "name": "pad8",
+          "type": "number"
+        },
+        {
+          "name": "padC",
+          "type": "number"
+        },
+        {
+          "name": "instances",
+          "type": "DlMobyInstance[]"
+        },
+        {
+          "name": "trailingByteLength",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlGameplayBlock",
+      "properties": [
+        {
+          "name": "index",
+          "type": "number"
+        },
+        {
+          "name": "headerOffset",
+          "type": "number"
+        },
+        {
+          "name": "pointer",
+          "type": "number"
+        },
+        {
+          "name": "semanticName",
+          "type": "string"
+        },
+        {
+          "name": "payloadLength",
+          "type": "number"
+        },
+        {
+          "name": "levelSettings",
+          "type": "DlLevelSettings | null"
+        },
+        {
+          "name": "mobyInstances",
+          "type": "DlMobyInstances | null"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlGameplayBlocks",
+      "properties": [
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "headerSize",
+          "type": "number"
+        },
+        {
+          "name": "blocks",
+          "type": "DlGameplayBlock[]"
+        }
+      ]
     }
   ],
   "exports": [
@@ -275,6 +689,40 @@
         "    contentType: entry.contentType,",
         "  })),",
         "};"
+      ]
+    },
+    {
+      "dotNetMethodName": "ParseDlGameplayCore",
+      "jsMethodName": "parseDlGameplayCore",
+      "returnType": "Promise<DlGameplayBlocks>",
+      "parameters": [
+        {
+          "name": "gameplayBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "preamble": [
+        "const input = toUint8Array(gameplayBytes);"
+      ],
+      "invokeArguments": [
+        "input"
+      ]
+    },
+    {
+      "dotNetMethodName": "ParseDlGameplayMission",
+      "jsMethodName": "parseDlGameplayMission",
+      "returnType": "Promise<DlGameplayBlocks>",
+      "parameters": [
+        {
+          "name": "gameplayBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "preamble": [
+        "const input = toUint8Array(gameplayBytes);"
+      ],
+      "invokeArguments": [
+        "input"
       ]
     },
     {

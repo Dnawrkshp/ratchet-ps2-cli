@@ -272,6 +272,28 @@ export async function unpackDlLevelWad(levelWadBytes) {
   };
 }
 
+export async function parseDlGameplayCore(gameplayBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(gameplayBytes);
+  return DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "ParseDlGameplayCore",
+    input
+  );
+}
+
+export async function parseDlGameplayMission(gameplayBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(gameplayBytes);
+  return DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "ParseDlGameplayMission",
+    input
+  );
+}
+
 export async function buildDlLevelWadRenderPackage(levelWadBytes) {
   await ensureStarted();
 

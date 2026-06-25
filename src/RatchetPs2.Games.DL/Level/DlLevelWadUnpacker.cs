@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Wad;
+using RatchetPs2.Games.DL.Gameplay;
 
 namespace RatchetPs2.Games.DL.Level;
 
@@ -78,7 +79,12 @@ public static class DlLevelWadUnpacker
         var classesLength = BitConverter.ToInt32(missionData, 12);
         var localOffsetDelta = gameplayOffset - 0x40;
 
-        AddPossiblyCompressedMissionBlock(files, $"{missionRoot}/gameplay.bin", missionData, 0x40, gameplayLength);
+        var gameplayBytes = AddPossiblyCompressedMissionBlock(files, $"{missionRoot}/gameplay.bin", missionData, 0x40, gameplayLength);
+        if (gameplayBytes.Length >= DlGameplayBlockReader.MissionHeaderSize)
+        {
+            AddGameplayBlocks(files, $"{missionRoot}/gameplay", DlGameplayBlockReader.ReadMission(gameplayBytes));
+        }
+
         if (classesOffset > 0 && classesLength > 0)
         {
             AddPossiblyCompressedMissionBlock(
@@ -90,7 +96,7 @@ public static class DlLevelWadUnpacker
         }
     }
 
-    private static void AddPossiblyCompressedMissionBlock(
+    private static byte[] AddPossiblyCompressedMissionBlock(
         List<DlLevelWadFile> files,
         string path,
         byte[] source,
@@ -99,7 +105,7 @@ public static class DlLevelWadUnpacker
     {
         if (offset < 0 || length <= 0 || (long)offset + length > source.Length)
         {
-            return;
+            return [];
         }
 
         var data = source.AsSpan(offset, length).ToArray();
@@ -112,6 +118,7 @@ public static class DlLevelWadUnpacker
         }
 
         AddFile(files, path, data);
+        return data;
     }
 
     private static void AddCorePayloads(List<DlLevelWadFile> files, byte[] coreLevelBytes)
@@ -125,6 +132,20 @@ public static class DlLevelWadUnpacker
             {
                 AddWorldPayloads(files, segment.PayloadBytes);
             }
+
+            if (segment.HeaderOffset == 0x60 && segment.PayloadBytes.Length > 0)
+            {
+                AddGameplayBlocks(files, "gameplay/core", DlGameplayBlockReader.ReadCore(segment.PayloadBytes));
+            }
+        }
+    }
+
+    private static void AddGameplayBlocks(List<DlLevelWadFile> files, string root, DlGameplayBlocks gameplay)
+    {
+        AddFile(files, $"{root}/header.bin", gameplay.HeaderBytes);
+        foreach (var block in gameplay.Blocks)
+        {
+            AddFile(files, $"{root}/{block.SemanticName}.bin", block.PayloadBytes);
         }
     }
 

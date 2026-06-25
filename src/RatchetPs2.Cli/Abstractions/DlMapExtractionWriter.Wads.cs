@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Wad;
+using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 namespace RatchetPs2.Cli.Abstractions;
 
@@ -253,7 +254,13 @@ internal static partial class DlMapExtractionWriter
         var classesOffset = BitConverter.ToInt32(missionData, 8);
         var classesLength = BitConverter.ToInt32(missionData, 12);
         var localOffsetDelta = gameplayOffset - 0x40;
-        WritePossiblyCompressedMissionBlock(outputDirectory, "gameplay.bin", missionData, 0x40, gameplayLength);
+        var gameplayBytes = WritePossiblyCompressedMissionBlock(outputDirectory, "gameplay.bin", missionData, 0x40, gameplayLength);
+        if (gameplayBytes.Length >= DlGameplayBlockReader.MissionHeaderSize)
+        {
+            WriteGameplayBlocks(
+                CreateDirectory(outputDirectory, "gameplay"),
+                DlGameplayBlockReader.ReadMission(gameplayBytes));
+        }
 
         if (classesOffset > 0 && classesLength > 0)
         {
@@ -266,7 +273,7 @@ internal static partial class DlMapExtractionWriter
         }
     }
 
-    private static void WritePossiblyCompressedMissionBlock(
+    private static byte[] WritePossiblyCompressedMissionBlock(
         string outputDirectory,
         string fileName,
         byte[] source,
@@ -275,7 +282,7 @@ internal static partial class DlMapExtractionWriter
     {
         if (offset < 0 || length <= 0 || (long)offset + length > source.Length)
         {
-            return;
+            return [];
         }
 
         var data = source.AsSpan(offset, length).ToArray();
@@ -288,5 +295,6 @@ internal static partial class DlMapExtractionWriter
         }
 
         File.WriteAllBytes(Path.Combine(outputDirectory, fileName), data);
+        return data;
     }
 }

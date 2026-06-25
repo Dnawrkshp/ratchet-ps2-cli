@@ -24,6 +24,126 @@ export interface PackedFilePackageResult {
   entries: PackedFileEntry[];
 }
 
+export interface DlRgb96 {
+  red: number;
+  green: number;
+  blue: number;
+}
+
+export interface DlVector3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface DlLevelSettingsChunkPlane {
+  point: DlVector3;
+  planeCount: number;
+  normal: DlVector3;
+  padding: number;
+}
+
+export interface DlLevelSettingsThirdPart {
+  unknown0: number;
+  unknown4: number;
+  unknown8: number;
+  unknownC: number;
+}
+
+export interface DlLevelSettingsRewardStats {
+  xpDecayRate: number;
+  xpDecayMin: number;
+  boltDecayRate: number;
+  boltDecayMin: number;
+  unknown10: number;
+  unknown14: number;
+}
+
+export interface DlLevelSettingsFifthPart {
+  unknown0: number;
+  mobyInstanceCount: number;
+  unknown8: number;
+  unknownC: number;
+  unknown10: number;
+  debugHitPoints: number;
+}
+
+export interface DlLevelSettings {
+  backgroundColor: DlRgb96;
+  fogColor: DlRgb96;
+  fogNearDistance: number;
+  fogFarDistance: number;
+  fogNearIntensity: number;
+  fogFarIntensity: number;
+  deathHeight: number;
+  isSphericalWorld: boolean;
+  sphereCenter: DlVector3;
+  shipPosition: DlVector3;
+  shipRotationZ: number;
+  shipPath: number;
+  shipCameraCuboidStart: number;
+  shipCameraCuboidEnd: number;
+  padding58: number;
+  chunkPlanes: DlLevelSettingsChunkPlane[];
+  coreSoundsCount: number;
+  thirdPartCount: number | null;
+  thirdPart: DlLevelSettingsThirdPart[];
+  rewardStats: DlLevelSettingsRewardStats | null;
+  fifthPart: DlLevelSettingsFifthPart | null;
+  debugAttackDamageLength: number;
+  trailingByteLength: number;
+}
+
+export interface DlMobyInstance {
+  size: number;
+  mission: number;
+  uid: number;
+  bolts: number;
+  classId: number;
+  scale: number;
+  drawDistance: number;
+  updateDistance: number;
+  unused20: number;
+  unused24: number;
+  position: DlVector3;
+  rotation: DlVector3;
+  group: number;
+  isRooted: number;
+  rootedDistance: number;
+  unused4C: number;
+  pvarIndex: number;
+  occlusion: number;
+  modeBits: number;
+  color: DlRgb96;
+  light: number;
+  unused6C: number;
+}
+
+export interface DlMobyInstances {
+  staticCount: number;
+  spawnableMobyCount: number;
+  pad8: number;
+  padC: number;
+  instances: DlMobyInstance[];
+  trailingByteLength: number;
+}
+
+export interface DlGameplayBlock {
+  index: number;
+  headerOffset: number;
+  pointer: number;
+  semanticName: string;
+  payloadLength: number;
+  levelSettings: DlLevelSettings | null;
+  mobyInstances: DlMobyInstances | null;
+}
+
+export interface DlGameplayBlocks {
+  kind: string;
+  headerSize: number;
+  blocks: DlGameplayBlock[];
+}
+
 export interface RatchetPs2WasmInitOptions {
   assetBaseUrl?: string;
 }
@@ -47,5 +167,9 @@ export function convertPifListToPngPacked(pifImages: Array<Uint8Array | ArrayBuf
 export function convertPifListToPngPackedBlobs(pifImages: Array<Uint8Array | ArrayBuffer>, options?: ConvertPifToPngOptions): Promise<Blob[]>;
 
 export function unpackDlLevelWad(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function parseDlGameplayCore(gameplayBytes: Uint8Array | ArrayBuffer): Promise<DlGameplayBlocks>;
+
+export function parseDlGameplayMission(gameplayBytes: Uint8Array | ArrayBuffer): Promise<DlGameplayBlocks>;
 
 export function buildDlLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;

@@ -1,3 +1,4 @@
+using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 namespace RatchetPs2.Cli.Abstractions;
 
@@ -54,13 +55,39 @@ internal static partial class DlMapExtractionWriter
                 0x48 => HandledCorePayload(segment, "hud/manifest.json", "HUD bank extraction"),
                 0x50 => HandledCorePayload(segment, "assets/manifest.json", "asset extraction"),
                 0x58 => HandledCorePayload(segment, "world/manifest.json", "world instance extraction"),
-                0x60 => WriteCorePayload(outputRoot, segment, "gameplay/gameplay_core.bin"),
+                0x60 => WriteGameplayCorePayload(outputRoot, segment),
                 0x68 => WriteCorePayload(outputRoot, segment, "global_nav/global_nav_data.bin"),
                 _ => WriteCorePayload(outputRoot, segment, $"core_unknown/{segment.Name}{segment.OutputExtension}")
             });
         }
 
         return routes;
+    }
+
+    private static CorePayloadRoute WriteGameplayCorePayload(string outputRoot, DlCoreLevelSegment segment)
+    {
+        var route = WriteCorePayload(outputRoot, segment, "gameplay/gameplay_core.bin");
+        if (segment.PayloadBytes.Length >= DlGameplayBlockReader.CoreHeaderSize)
+        {
+            WriteGameplayBlocks(
+                CreateDirectory(outputRoot, "gameplay", "core"),
+                DlGameplayBlockReader.ReadCore(segment.PayloadBytes));
+        }
+
+        return route;
+    }
+
+    private static void WriteGameplayBlocks(string outputDirectory, DlGameplayBlocks gameplay)
+    {
+        DeleteMatchingFiles(outputDirectory, "*.bin");
+        File.WriteAllBytes(Path.Combine(outputDirectory, "header.bin"), gameplay.HeaderBytes);
+        foreach (var block in gameplay.Blocks)
+        {
+            if (block.PayloadBytes.Length > 0)
+            {
+                File.WriteAllBytes(Path.Combine(outputDirectory, $"{block.SemanticName}.bin"), block.PayloadBytes);
+            }
+        }
     }
 
     private static CorePayloadRoute WriteCorePayload(
