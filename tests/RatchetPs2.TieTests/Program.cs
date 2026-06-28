@@ -64,6 +64,97 @@ if (File.Exists(tie9767Path))
             && tie9767.GlowRgbaVertices.All(vertex => vertex.PacketIndex == 1),
         $"expected 09767 glow remaps to cover the full packet 1 logical vertex set, got {tie9767.GlowRgbaVertices.Count} vertices");
 }
+var dlProfile = TieGameProfile.Default.WithGameLabel("DL");
+var tie9312Path = Path.Combine(tiesRoot, "ALL DL", "9312", "core.bin");
+if (File.Exists(tie9312Path))
+{
+    using var tie9312Input = File.OpenRead(tie9312Path);
+    var tie9312 = TieClassReader.Read(tie9312Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    var tie9312Export = TieGltfExporter.Export(
+        tie9312,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    using var tie9312Diagnostics = JsonDocument.Parse(tie9312Export.DiagnosticsBytes);
+    var tie9312Root = tie9312Diagnostics.RootElement;
+    var tie9312Topology = tie9312.LodTopologies[0];
+    Expect(
+        tie9312.GlowRgbaRemaps.Count == 2
+            && tie9312.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
+            && tie9312.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 0 })
+            && tie9312.GlowRgbaRemaps[0].ResolvedShaderIndex == 0
+            && tie9312.GlowRgbaRemaps[1].ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved
+            && tie9312.GlowRgbaVertices.Count == 40
+            && tie9312.GlowRgbaVertices.All(vertex =>
+                vertex.StripIndex >= 0
+                && vertex.StripIndex < tie9312Topology.Strips.Count
+                && tie9312Topology.Strips[vertex.StripIndex].ShaderIndex == 0)
+            && tie9312Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 40,
+        $"expected DL 9312 primary glow marker to resolve to packet 0 shader 0, got remaps={string.Join("; ", tie9312.GlowRgbaRemaps.Select(remap => $"{remap.Offset:X}/{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, source={tie9312.GlowRgbaVertices.Count}, export={tie9312Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
+    Expect(
+        tie9312Root.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() > 0
+            && tie9312Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
+        $"expected DL 9312 texture 0 glow to export one emissive primitive, got emitted={tie9312Root.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()}, primitives={tie9312Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
+}
+var tie9221Path = Path.Combine(tiesRoot, "ALL DL", "9221", "core.bin");
+if (File.Exists(tie9221Path))
+{
+    using var tie9221Input = File.OpenRead(tie9221Path);
+    var tie9221 = TieClassReader.Read(tie9221Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    var tie9221Topology = tie9221.LodTopologies[0];
+    Expect(
+        tie9221.GlowRgbaRemaps.Count == 2
+            && tie9221.GlowRgbaRemaps.All(remap =>
+                remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
+                && remap.ResolvedPacketIndices.SequenceEqual(new[] { 0 })
+                && remap.ResolvedShaderIndex == 1),
+        $"expected DL 9221 glow remaps to resolve to packet 0 shader 1, got {string.Join("; ", tie9221.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}");
+    Expect(
+        tie9221.GlowRgbaVertices.Count == 16
+            && tie9221.GlowRgbaVertices.All(vertex =>
+                vertex.StripIndex >= 0
+                && vertex.StripIndex < tie9221Topology.Strips.Count
+                && tie9221Topology.Strips[vertex.StripIndex].ShaderIndex == 1),
+        $"expected DL 9221 glow vertices to stay on shader 1, got {tie9221.GlowRgbaVertices.Count} vertices across strips {string.Join(",", tie9221.GlowRgbaVertices.Select(vertex => vertex.StripIndex).Distinct().OrderBy(index => index))}");
+    var tie9221Export = TieGltfExporter.Export(
+        tie9221,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    using var tie9221Diagnostics = JsonDocument.Parse(tie9221Export.DiagnosticsBytes);
+    var tie9221Root = tie9221Diagnostics.RootElement;
+    Expect(
+        tie9221Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 16
+            && tie9221Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
+        $"expected DL 9221 export to emit only the shader 1 glow primitive, got source={tie9221Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9221Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
+}
+var tie9117Path = Path.Combine(tiesRoot, "ALL DL", "9117", "core.bin");
+if (File.Exists(tie9117Path))
+{
+    using var tie9117Input = File.OpenRead(tie9117Path);
+    var tie9117 = TieClassReader.Read(tie9117Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    var tie9117Topology = tie9117.LodTopologies[0];
+    Expect(
+        tie9117.GlowRgbaRemaps.Count == 1
+            && tie9117.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
+            && tie9117.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 3, 4 })
+            && tie9117.GlowRgbaRemaps[0].ResolvedShaderIndex == 6
+            && tie9117.GlowRgbaVertices.Count == 40
+            && tie9117.GlowRgbaVertices.All(vertex =>
+                vertex.PacketIndex is 3 or 4
+                && vertex.StripIndex >= 0
+                && vertex.StripIndex < tie9117Topology.Strips.Count
+                && tie9117Topology.Strips[vertex.StripIndex].ShaderIndex == 6),
+        $"expected DL 9117 glow marker to resolve to carried shader 6 on packets 3 and 4, got remaps={string.Join("; ", tie9117.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={tie9117.GlowRgbaVertices.Count}");
+    var tie9117Export = TieGltfExporter.Export(
+        tie9117,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    using var tie9117Diagnostics = JsonDocument.Parse(tie9117Export.DiagnosticsBytes);
+    var tie9117Root = tie9117Diagnostics.RootElement;
+    Expect(
+        tie9117Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 40
+            && tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 2,
+        $"expected DL 9117 export to emit only the texture 6 glow primitives, got source={tie9117Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
+}
 var gcPacketStartGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3575", "core.bin");
 if (File.Exists(gcPacketStartGlowPath))
 {

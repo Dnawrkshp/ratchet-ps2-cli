@@ -67,7 +67,10 @@ internal static class TieGlowRgbaReader
             {
                 foreach (var range in orderedRanges)
                 {
-                    ResolveGlowRemapMultipassBlocks(range, multipassBlocks);
+                    if (!TryResolveGlowRemapMultipassShaderRange(range, packetsByBlockKey))
+                    {
+                        ResolveGlowRemapMultipassBlocks(range, multipassBlocks);
+                    }
                 }
 
                 continue;
@@ -101,6 +104,8 @@ internal static class TieGlowRgbaReader
                     packetsByBlockKey,
                     GetNextRangeBoundary(orderedRanges, range) ?? lodDataEndOffset);
             }
+
+            SuppressAmbiguousControlStartRanges(orderedRanges, packetsByBlockKey);
 
             // GC glow remaps are still a heuristic WIP. These tail/local shader
             // promotions cover the known GC fixtures, but additional tuning is
@@ -231,6 +236,12 @@ internal static class TieGlowRgbaReader
             return;
         }
 
+        if (sourcePacket is not null
+            && TryResolveGlowRemapScissorFirstShaderRange(range, sourcePacket, lodBlocks, packetsByBlockKey, endOffset))
+        {
+            return;
+        }
+
         if (TryResolveGlowRemapVertexRowRange(range, sourcePacket, endOffset))
         {
             return;
@@ -322,6 +333,84 @@ internal static class TieGlowRgbaReader
         return true;
     }
 
+    private static bool TryResolveGlowRemapScissorFirstShaderRange(
+        GlowRgbaRemapRange range,
+        TiePacket sourcePacket,
+        IReadOnlyList<TiePacketDataBlock> lodBlocks,
+        IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey,
+        int endOffset)
+    {
+        var block = range.Block;
+        if (!range.IsRgbaRemapOffset
+            || block is null
+            || sourcePacket.ShaderReferences.Count != 2
+            || !RangeStartsAtRegionStart(range, "scissor-rows"))
+        {
+            return false;
+        }
+
+        var nextBlock = lodBlocks
+            .Where(candidate => candidate.LodIndex == block.LodIndex && candidate.Offset > block.Offset)
+            .OrderBy(candidate => candidate.Offset)
+            .ThenBy(candidate => candidate.PacketIndex)
+            .FirstOrDefault();
+        if (nextBlock is null
+            || !nextBlock.Regions.Any(region => region.Name == "control-region" && region.Offset == endOffset)
+            || !packetsByBlockKey.TryGetValue((nextBlock.LodIndex, nextBlock.PacketIndex), out var nextPacket)
+            || nextPacket.ShaderReferences.Count <= sourcePacket.ShaderReferences.Count)
+        {
+            return false;
+        }
+
+        var shaderIndex = sourcePacket.ShaderReferences[0].ShaderIndex;
+        var rows = GetGlowEligibleRows(block, sourcePacket)
+            .Where(row => TrySelectShaderIndex(sourcePacket, row.PrimaryVuAddress, out var rowShaderIndex)
+                && rowShaderIndex == shaderIndex)
+            .ToArray();
+        if (shaderIndex < 0 || rows.Length == 0)
+        {
+            return false;
+        }
+
+        range.ResolvedStartOffset = rows[0].Offset;
+        range.EndOffset = rows[^1].Offset + 0x10;
+        range.ResolutionKind = TieGlowRgbaRemapResolutionKind.PacketShaderRange;
+        range.ResolvedShaderIndex = shaderIndex;
+        range.ResolvedPacketIndex = block.PacketIndex;
+        range.ResolvedPacketCount = 1;
+        range.StartVertexRowIndex = rows[0].Index;
+        range.EndVertexRowIndexExclusive = rows[^1].Index + 1;
+        range.ResolvedVertexRowCount = rows.Length;
+        range.ResolvedBlocks.Add(block);
+        range.AddResolvedRows(block, range.ResolvedStartOffset, range.EndOffset.Value, rows);
+        return true;
+    }
+
+    private static bool TryResolveGlowRemapMultipassShaderRange(
+        GlowRgbaRemapRange range,
+        IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey)
+    {
+        var block = range.Block;
+        if (block is null
+            || !packetsByBlockKey.TryGetValue((block.LodIndex, block.PacketIndex), out var packet)
+            || !IsGlowPassFlagsPacket(packet)
+            || packet.ShaderReferences.Count <= 1)
+        {
+            return false;
+        }
+
+        var sourceRow = block.VertexRows.FirstOrDefault(row =>
+            range.Offset >= row.Offset && range.Offset < row.Offset + 0x10);
+        if (sourceRow is null
+            || !TrySelectShaderIndex(packet, sourceRow.PrimaryVuAddress, out var shaderIndex))
+        {
+            return false;
+        }
+
+        ApplyShaderRangeResolution(range, shaderIndex, [block]);
+        return true;
+    }
+
     private static bool TryResolveGlowRemapShaderRange(
         GlowRgbaRemapRange range,
         TiePacket sourcePacket,
@@ -353,6 +442,17 @@ internal static class TieGlowRgbaReader
         }
 
         if (TryResolveBoundedPrimaryShaderRowRange(range, sourcePacket, block, shaderIndex, endOffset))
+        {
+            return true;
+        }
+
+        if (TryResolveGlowRemapPrimaryTailCarriedShaderRange(
+            range,
+            sourcePacket,
+            lodBlocks,
+            packetsByBlockKey,
+            block,
+            shaderIndex))
         {
             return true;
         }
@@ -416,6 +516,81 @@ internal static class TieGlowRgbaReader
         range.ResolvedBlocks.Add(block);
         range.AddResolvedRows(block, rowStartOffset, rowEndOffset, rows);
         return true;
+    }
+
+    private static bool TryResolveGlowRemapPrimaryTailCarriedShaderRange(
+        GlowRgbaRemapRange range,
+        TiePacket sourcePacket,
+        IReadOnlyList<TiePacketDataBlock> lodBlocks,
+        IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey,
+        TiePacketDataBlock block,
+        int sourceShaderIndex)
+    {
+        if (!range.IsRgbaRemapOffset || sourceShaderIndex < 0)
+        {
+            return false;
+        }
+
+        var eligibleRows = GetGlowEligibleRows(block, sourcePacket);
+        if (eligibleRows.Length == 0)
+        {
+            return false;
+        }
+
+        if (range.Offset != eligibleRows[^1].Offset)
+        {
+            return false;
+        }
+
+        foreach (var targetBlock in lodBlocks
+                     .Where(candidate => candidate.LodIndex == block.LodIndex
+                         && candidate.Offset > block.Offset
+                         && candidate.VertexRows.Count > 0)
+                     .OrderBy(candidate => candidate.Offset)
+                     .ThenBy(candidate => candidate.PacketIndex))
+        {
+            if (!packetsByBlockKey.TryGetValue((targetBlock.LodIndex, targetBlock.PacketIndex), out var targetPacket))
+            {
+                continue;
+            }
+
+            var sourceReferenceIndex = -1;
+            for (var index = 0; index < targetPacket.ShaderReferences.Count; index++)
+            {
+                if (targetPacket.ShaderReferences[index].ShaderIndex == sourceShaderIndex)
+                {
+                    sourceReferenceIndex = index;
+                    break;
+                }
+            }
+
+            if (sourceReferenceIndex < 0)
+            {
+                continue;
+            }
+
+            foreach (var targetShaderIndex in targetPacket.ShaderReferences
+                         .Skip(sourceReferenceIndex + 1)
+                         .Select(reference => reference.ShaderIndex)
+                         .Where(shaderIndex => shaderIndex >= 0 && shaderIndex != sourceShaderIndex)
+                         .Distinct())
+            {
+                var carriedBlocks = GetForwardContiguousShaderBlocks(
+                    lodBlocks,
+                    packetsByBlockKey,
+                    targetBlock,
+                    targetShaderIndex);
+                if (carriedBlocks.Length <= 1)
+                {
+                    continue;
+                }
+
+                ApplyShaderRangeResolution(range, targetShaderIndex, carriedBlocks);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool TryResolveGlowRemapLocalFirstShaderRange(
@@ -666,6 +841,40 @@ internal static class TieGlowRgbaReader
         return false;
     }
 
+    private static void SuppressAmbiguousControlStartRanges(
+        IReadOnlyList<GlowRgbaRemapRange> ranges,
+        IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey)
+    {
+        foreach (var range in ranges)
+        {
+            var block = range.Block;
+            if (block is null
+                || range.IsRgbaRemapOffset
+                || range.ResolutionKind != TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange
+                || !RangeStartsAtRegionStart(range, "control-region")
+                || !packetsByBlockKey.TryGetValue((block.LodIndex, block.PacketIndex), out var packet)
+                || packet.ShaderReferences.Count <= 2)
+            {
+                continue;
+            }
+
+            var previous = ranges
+                .Where(candidate =>
+                    candidate.Block?.LodIndex == block.LodIndex
+                    && candidate.Offset < range.Offset)
+                .OrderByDescending(candidate => candidate.Offset)
+                .FirstOrDefault();
+            if (previous is null
+                || previous.ResolutionKind != TieGlowRgbaRemapResolutionKind.Unresolved
+                || !RangeStartsInRegion(previous, "scissor-rows"))
+            {
+                continue;
+            }
+
+            range.ClearResolution();
+        }
+    }
+
     private static void SuppressLocalTailRangesWithTailShaderBridge(
         IReadOnlyList<GlowRgbaRemapRange> ranges,
         IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey)
@@ -862,6 +1071,15 @@ internal static class TieGlowRgbaReader
                 region.Name == regionName
                 && range.Offset >= region.Offset
                 && range.Offset < region.Offset + region.Length);
+    }
+
+    private static bool RangeStartsAtRegionStart(GlowRgbaRemapRange range, string regionName)
+    {
+        var block = range.Block;
+        return block is not null
+            && block.Regions.Any(region =>
+                region.Name == regionName
+                && range.Offset == region.Offset);
     }
 
     private static void ApplyShaderRangeResolution(

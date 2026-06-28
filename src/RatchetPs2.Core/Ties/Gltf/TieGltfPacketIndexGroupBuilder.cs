@@ -16,6 +16,7 @@ internal static class TieGltfPacketIndexGroupBuilder
 
         var packetIndexGroups = SplitPacketIndexGroupsByGlowEmission(
             BuildPacketIndexGroups(tie, topology, sourceNormalPhaseRepairTriangles),
+            tie,
             glowColors);
         var packetRgbaSlotCount = CountPacketRgbaSlots(tie, topology.LodIndex);
         var sourceNormalPhaseRepairTriangleCount = CountSourceNormalPhaseRepairTriangles(
@@ -168,6 +169,7 @@ internal static class TieGltfPacketIndexGroupBuilder
 
     private static List<PacketIndexGroup> SplitPacketIndexGroupsByGlowEmission(
         IReadOnlyList<PacketIndexGroup> packetIndexGroups,
+        TieClass tie,
         IReadOnlyList<Vector4> colors)
     {
         if (colors.Count == 0)
@@ -175,20 +177,38 @@ internal static class TieGltfPacketIndexGroupBuilder
             return packetIndexGroups.ToList();
         }
 
+        var shaderGlowPackets = tie.GlowRgbaRemaps
+            .Where(remap => remap.ResolvedShaderIndex is not null)
+            .SelectMany(remap => remap.ResolvedPacketIndices.Select(packetIndex => (
+                PacketIndex: packetIndex,
+                ShaderIndex: remap.ResolvedShaderIndex!.Value)))
+            .ToHashSet();
+        var singleShaderMultipassGlowPackets = tie.GlowRgbaRemaps
+            .Where(remap => remap.ResolvedShaderIndex is null
+                && remap.ResolutionKind is TieGlowRgbaRemapResolutionKind.PacketMultipassRange
+                    or TieGlowRgbaRemapResolutionKind.PacketMultipassSet)
+            .SelectMany(remap => remap.ResolvedPacketIndices)
+            .ToHashSet();
         var splitGroups = new List<PacketIndexGroup>(packetIndexGroups.Count);
         foreach (var group in packetIndexGroups)
         {
             PacketIndexGroup? currentGroup = null;
+            bool? currentUniformGlow = null;
             bool? currentUseGlowEmission = null;
             for (var i = 0; i + 2 < group.Indices.Count; i += 3)
             {
-                var useGlowEmission = TriangleUsesUniformGlowEmission(
+                var uniformGlow = TriangleUsesUniformGlowEmission(
                     group.Indices[i],
                     group.Indices[i + 1],
                     group.Indices[i + 2],
                     colors);
-                if (currentGroup is null || currentUseGlowEmission != useGlowEmission)
+                var useGlowEmission = uniformGlow
+                    && CanUseGlowEmissionMaterial(group, shaderGlowPackets, singleShaderMultipassGlowPackets);
+                if (currentGroup is null
+                    || currentUniformGlow != uniformGlow
+                    || currentUseGlowEmission != useGlowEmission)
                 {
+                    currentUniformGlow = uniformGlow;
                     currentUseGlowEmission = useGlowEmission;
                     currentGroup = new PacketIndexGroup(
                         group.PacketIndex,
@@ -211,6 +231,16 @@ internal static class TieGltfPacketIndexGroupBuilder
         }
 
         return splitGroups;
+    }
+
+    private static bool CanUseGlowEmissionMaterial(
+        PacketIndexGroup group,
+        IReadOnlySet<(int PacketIndex, int ShaderIndex)> shaderGlowPackets,
+        IReadOnlySet<int> singleShaderMultipassGlowPackets)
+    {
+        return shaderGlowPackets.Contains((group.PacketIndex, group.ShaderIndex))
+            || (group.PacketShaderIndices.Count == 1
+                && singleShaderMultipassGlowPackets.Contains(group.PacketIndex));
     }
 
     private static bool TriangleUsesUniformGlowEmission(uint a, uint b, uint c, IReadOnlyList<Vector4> colors)
