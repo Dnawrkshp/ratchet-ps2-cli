@@ -39,6 +39,10 @@ public sealed class ShrubGltfExportOptions
 
 public static partial class ShrubGltfExporter
 {
+    public const string SourceNormalIndexAttributeName = "_SHRUB_SOURCE_NORMAL_INDEX";
+    public const string SourceHAttributeName = "_SHRUB_SOURCE_H";
+    public const string SourceNormalTableExtraName = "ShrubSourceNormalTable";
+
     private const string UnlitExtensionName = "KHR_materials_unlit";
     private const int GltfLinearFilter = 9729;
     private const int GltfWrapRepeat = 10497;
@@ -92,6 +96,14 @@ public static partial class ShrubGltfExporter
             var texCoordAccessor = gltfBufferWriter.WriteVector2Accessor(
                 group.TexCoords,
                 target: GltfBufferWriter.ArrayBufferTarget);
+            var sourceNormalIndexAccessor = gltfBufferWriter.WriteScalarFloatAccessor(
+                group.SourceNormalIndices,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: true);
+            var sourceHAccessor = gltfBufferWriter.WriteScalarFloatAccessor(
+                group.SourceHs,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: true);
             var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
 
             var primitive = new Dictionary<string, object>
@@ -100,7 +112,9 @@ public static partial class ShrubGltfExporter
                 {
                     ["POSITION"] = positionAccessor,
                     ["NORMAL"] = normalAccessor,
-                    ["TEXCOORD_0"] = texCoordAccessor
+                    ["TEXCOORD_0"] = texCoordAccessor,
+                    [SourceNormalIndexAttributeName] = sourceNormalIndexAccessor,
+                    [SourceHAttributeName] = sourceHAccessor
                 },
                 ["indices"] = indexAccessor,
                 ["mode"] = 4,
@@ -130,7 +144,7 @@ public static partial class ShrubGltfExporter
             {
                 name = "shrub",
                 primitives,
-                extras = ShouldWriteFullMetadata(options) ? BuildMeshExtras(shrub, mesh) : null
+                extras = BuildMeshExtras(shrub, mesh, options.MetadataMode)
             }
         };
         var nodes = new List<object>

@@ -34,6 +34,10 @@ public static partial class ShrubGltfExporter
 
         public List<Vector2> TexCoords { get; } = [];
 
+        public List<float> SourceNormalIndices { get; } = [];
+
+        public List<float> SourceHs { get; } = [];
+
         public List<uint> Indices { get; } = [];
     }
 

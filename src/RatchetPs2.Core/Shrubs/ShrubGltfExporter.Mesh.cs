@@ -63,6 +63,8 @@ public static partial class ShrubGltfExporter
                 vertex.Z * shrub.Header.Scale * positionScale));
             group.Normals.Add(ReadNormal(shrub, vertex.NormalIndex));
             group.TexCoords.Add(new Vector2(vertex.S / 4096f, vertex.T / 4096f));
+            group.SourceNormalIndices.Add(vertex.NormalIndex);
+            group.SourceHs.Add(vertex.H);
             group.SourceVertexCount++;
         }
 

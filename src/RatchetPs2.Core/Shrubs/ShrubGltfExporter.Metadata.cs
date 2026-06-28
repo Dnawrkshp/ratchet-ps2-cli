@@ -14,6 +14,7 @@ public static partial class ShrubGltfExporter
             Note = "Preview geometry reconstructed from packed shrub VIF packets using Wrench shrub packet semantics.",
             CoordinateBasis = GltfCoordinateBasis.Ps2XzyBasisDescription,
             Header = BuildHeaderExtras(shrub),
+            ShrubSourceNormalTable = BuildSourceNormalTableExtras(shrub),
             Geometry = BuildGeometryExtras(mesh)
         };
     }
@@ -30,11 +31,26 @@ public static partial class ShrubGltfExporter
         };
     }
 
-    private static object BuildMeshExtras(ShrubClass shrub, ShrubMesh mesh)
+    private static object? BuildMeshExtras(ShrubClass shrub, ShrubMesh mesh, GltfExportMetadataMode metadataMode)
     {
+        if (metadataMode == GltfExportMetadataMode.None)
+        {
+            return null;
+        }
+
+        var sourceNormalTable = BuildSourceNormalTableExtras(shrub);
+        if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
+        {
+            return new
+            {
+                ShrubSourceNormalTable = sourceNormalTable
+            };
+        }
+
         return new
         {
             Header = BuildHeaderExtras(shrub),
+            ShrubSourceNormalTable = sourceNormalTable,
             Geometry = BuildGeometryExtras(mesh),
             Packets = shrub.Packets.Select(packet => new
             {
@@ -48,6 +64,25 @@ public static partial class ShrubGltfExporter
                 PrimitiveCount = packet.Primitives.Count
             }).ToArray()
         };
+    }
+
+    private static object[] BuildSourceNormalTableExtras(ShrubClass shrub)
+    {
+        return shrub.Normals.Select((normal, index) =>
+        {
+            var gltfNormal = ReadNormal(shrub, index);
+            return new
+            {
+                Index = index,
+                SourceX = normal.X,
+                SourceY = normal.Y,
+                SourceZ = normal.Z,
+                SourceW = normal.Padding,
+                GltfX = gltfNormal.X,
+                GltfY = gltfNormal.Y,
+                GltfZ = gltfNormal.Z
+            };
+        }).ToArray<object>();
     }
 
     private static object BuildHeaderExtras(ShrubClass shrub)
@@ -113,6 +148,7 @@ public static partial class ShrubGltfExporter
             ExportType = $"{gameLabel} shrub geometry",
             shrub.ByteLength,
             Header = BuildHeaderExtras(shrub),
+            ShrubSourceNormalTable = BuildSourceNormalTableExtras(shrub),
             Geometry = BuildGeometryExtras(mesh),
             Packets = shrub.Packets.Select(packet => new
             {

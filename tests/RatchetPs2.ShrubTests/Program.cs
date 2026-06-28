@@ -67,6 +67,7 @@ foreach (var fixture in fixtures)
     Expect(export.DiagnosticsBytes.Length > 0, $"{fixture.Game} packed shrub export should produce diagnostics");
     ValidateShrubMaterialMetadata(export.GltfBytes, fixture.Game);
     ValidateShrubTriangleWinding(export.GltfBytes, export.BinBytes, fixture.Game);
+    ValidateShrubSourceLightingContract(export.GltfBytes, fixture.Game, expectedNormalTableCount: 24);
 }
 
 ValidateShrubGltfCoordinateBasis();
@@ -110,7 +111,8 @@ static void ValidateShrubGltfCoordinateBasis()
         ByteLength = 0,
         Normals =
         [
-            new ShrubNormal(0, 0, short.MaxValue, 0)
+            new ShrubNormal(0, 0, short.MaxValue, 7),
+            new ShrubNormal(short.MaxValue, 0, 0, -3)
         ],
         Packets =
         [
@@ -125,9 +127,9 @@ static void ValidateShrubGltfCoordinateBasis()
                         0,
                         ShrubGeometryType.TriangleList,
                         [
-                            new ShrubVertex(0, 0, 0, 0, 0, 0, 0),
-                            new ShrubVertex(2, 0, 0, 0, 0, 0, 0),
-                            new ShrubVertex(0, 2, 0, 0, 0, 0, 0)
+                            new ShrubVertex(0, 0, 0, 0, 0, 5, 0),
+                            new ShrubVertex(2, 0, 0, 0, 0, 6, 1),
+                            new ShrubVertex(0, 2, 0, 0, 0, -7, 0)
                         ])
                 ]
             }
@@ -161,6 +163,79 @@ static void ValidateShrubGltfCoordinateBasis()
     Expect(VectorNearlyEqual(position1, new Vector3(2f, 0f, 0f)), $"expected source +X to remain glTF +X, got {position1}");
     Expect(VectorNearlyEqual(position2, new Vector3(0f, 0f, -2f)), $"expected source +Y to become glTF -Z, got {position2}");
     Expect(VectorNearlyEqual(normal0, Vector3.UnitY), $"expected source +Z normal to become glTF +Y, got {normal0}");
+
+    ValidateShrubSourceLightingContract(export.GltfBytes, "DL", expectedNormalTableCount: 2);
+
+    var accessors = root.GetProperty("accessors");
+    var bufferViews = root.GetProperty("bufferViews");
+    var attributes = root
+        .GetProperty("meshes")[0]
+        .GetProperty("primitives")[0]
+        .GetProperty("attributes");
+    var sourceNormalIndices = ReadAccessorScalarFloat(
+        accessors,
+        bufferViews,
+        export.BinBytes,
+        attributes.GetProperty(ShrubGltfExporter.SourceNormalIndexAttributeName).GetInt32(),
+        "DL",
+        ShrubGltfExporter.SourceNormalIndexAttributeName);
+    var sourceHs = ReadAccessorScalarFloat(
+        accessors,
+        bufferViews,
+        export.BinBytes,
+        attributes.GetProperty(ShrubGltfExporter.SourceHAttributeName).GetInt32(),
+        "DL",
+        ShrubGltfExporter.SourceHAttributeName);
+    Expect(sourceNormalIndices.SequenceEqual(new[] { 0f, 1f, 0f }), "expected source shrub normal indices to round-trip into glTF");
+    Expect(sourceHs.SequenceEqual(new[] { 5f, 6f, -7f }), "expected source shrub H values to round-trip into glTF");
+
+    var sourceNormalTable = root
+        .GetProperty("meshes")[0]
+        .GetProperty("extras")
+        .GetProperty(ShrubGltfExporter.SourceNormalTableExtraName);
+    Expect(sourceNormalTable[1].GetProperty("SourceX").GetInt32() == short.MaxValue, "expected source normal table to preserve raw X");
+    Expect(sourceNormalTable[1].GetProperty("SourceW").GetInt32() == -3, "expected source normal table to preserve raw W");
+}
+
+static void ValidateShrubSourceLightingContract(byte[] gltfBytes, string game, int expectedNormalTableCount)
+{
+    using var gltfDocument = JsonDocument.Parse(gltfBytes);
+    var root = gltfDocument.RootElement;
+    var accessors = root.GetProperty("accessors");
+
+    foreach (var mesh in root.GetProperty("meshes").EnumerateArray())
+    {
+        var extras = mesh.GetProperty("extras");
+        if (extras.TryGetProperty("ShrubBillboard", out _))
+        {
+            continue;
+        }
+
+        var sourceNormalTable = extras.GetProperty(ShrubGltfExporter.SourceNormalTableExtraName);
+        Expect(
+            sourceNormalTable.GetArrayLength() == expectedNormalTableCount,
+            $"{game} shrub source normal table should expose {expectedNormalTableCount} entries");
+
+        foreach (var primitive in mesh.GetProperty("primitives").EnumerateArray())
+        {
+            var attributes = primitive.GetProperty("attributes");
+            Expect(
+                attributes.TryGetProperty(ShrubGltfExporter.SourceNormalIndexAttributeName, out var sourceNormalIndexAccessor),
+                $"{game} shrub primitive should expose source normal index attribute");
+            Expect(
+                attributes.TryGetProperty(ShrubGltfExporter.SourceHAttributeName, out var sourceHAccessor),
+                $"{game} shrub primitive should expose source H attribute");
+
+            var positionAccessor = attributes.GetProperty("POSITION").GetInt32();
+            var positionCount = accessors[positionAccessor].GetProperty("count").GetInt32();
+            Expect(
+                accessors[sourceNormalIndexAccessor.GetInt32()].GetProperty("count").GetInt32() == positionCount,
+                $"{game} shrub source normal index count should match positions");
+            Expect(
+                accessors[sourceHAccessor.GetInt32()].GetProperty("count").GetInt32() == positionCount,
+                $"{game} shrub source H count should match positions");
+        }
+    }
 }
 
 static void ValidateShrubMaterialMetadata(byte[] gltfBytes, string game)
@@ -293,6 +368,30 @@ static Vector3[] ReadAccessorVector3(
             BitConverter.ToSingle(binBytes, elementOffset + 0),
             BitConverter.ToSingle(binBytes, elementOffset + 4),
             BitConverter.ToSingle(binBytes, elementOffset + 8));
+    }
+
+    return values;
+}
+
+static float[] ReadAccessorScalarFloat(
+    JsonElement accessors,
+    JsonElement bufferViews,
+    byte[] binBytes,
+    int accessorIndex,
+    string game,
+    string attributeName)
+{
+    var accessor = accessors[accessorIndex];
+    var componentType = accessor.GetProperty("componentType").GetInt32();
+    var type = accessor.GetProperty("type").GetString();
+    Expect(componentType == 5126 && type == "SCALAR", $"{game} shrub {attributeName} should be a float SCALAR accessor");
+
+    var count = accessor.GetProperty("count").GetInt32();
+    var (offset, stride) = AccessorLayout(accessor, bufferViews, componentSize: 4, componentCount: 1);
+    var values = new float[count];
+    for (var i = 0; i < count; i++)
+    {
+        values[i] = BitConverter.ToSingle(binBytes, offset + (i * stride));
     }
 
     return values;
