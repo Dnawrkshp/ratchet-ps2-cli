@@ -3,6 +3,7 @@ using System.Globalization;
 using System.Text.Json;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Shrubs;
 using RatchetPs2.Core.Skyboxes;
 using RatchetPs2.Core.Textures.Png;
@@ -19,13 +20,15 @@ public sealed record DlLevelWadRenderPackageBuildOptions
         IncludeSourceFiles = false,
         IncludeDiagnostics = false,
         MinifyGltf = true,
-        GltfMetadataMode = GltfExportMetadataMode.RuntimeOnly
+        GltfMetadataMode = GltfExportMetadataMode.RuntimeOnly,
+        MobyLodIndex = 0
     };
 
     public bool IncludeSourceFiles { get; init; } = true;
     public bool IncludeDiagnostics { get; init; } = true;
     public bool MinifyGltf { get; init; }
     public GltfExportMetadataMode GltfMetadataMode { get; init; } = GltfExportMetadataMode.Full;
+    public int? MobyLodIndex { get; init; }
 }
 
 public static class DlLevelWadRenderPackageBuilder
@@ -146,8 +149,10 @@ public static class DlLevelWadRenderPackageBuilder
         var tieDefinitions = DlAssetReader.ReadModelDefinitions(headerBytes, header.TieModelOffset, header.TieModelCount);
         var shrubDefinitions = DlAssetReader.ReadShrubDefinitions(headerBytes, header.ShrubModelOffset, header.ShrubModelCount);
         var tfragTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.TerrainTextureOffset, header.TerrainTextureCount);
+        var mobyTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.MobyTextureOffset, header.MobyTextureCount);
         var tieTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.TieTextureOffset, header.TieTextureCount);
         var shrubTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.ShrubTextureOffset, header.ShrubTextureCount);
+        var fxDefinitions = DlAssetReader.ReadFxTextureDefinitions(headerBytes, header.FxTextureDefOffset, header.FxTextureCount);
         var knownAssetOffsets = CollectKnownAssetOffsets(
             header,
             assetBytes.Length,
@@ -183,6 +188,25 @@ public static class DlLevelWadRenderPackageBuilder
             tfragStart,
             SummarizeRoutes(gltfExports, route => route.Family == "tfrag"));
         timings.AddRange(tfragTimings);
+
+        var mobyStart = Stopwatch.GetTimestamp();
+        var mobyRouteStart = gltfExports.Count;
+        gltfExports.AddRange(BuildMobyGltfs(
+            files,
+            mobyDefinitions,
+            mobyTextureDefinitions,
+            paletteBytes,
+            assetBytes,
+            header.TextureDataOffset,
+            gsStashDefinitions,
+            knownAssetOffsets,
+            options));
+        AddTiming(
+            timings,
+            "managed.assets.mobys",
+            "Moby glTF exports",
+            mobyStart,
+            SummarizeRoutes(gltfExports.Skip(mobyRouteStart)));
 
         var tieStart = Stopwatch.GetTimestamp();
         var tieRouteStart = gltfExports.Count;
@@ -228,6 +252,15 @@ public static class DlLevelWadRenderPackageBuilder
             shrubStart,
             SummarizeRoutes(gltfExports.Skip(shrubRouteStart)));
 
+        var fxStart = Stopwatch.GetTimestamp();
+        BuildFxTextures(files, fxDefinitions, assetBytes, header.FxTextureDataOffset);
+        AddTiming(
+            timings,
+            "managed.assets.fx-textures",
+            "FX texture exports",
+            fxStart,
+            $"{fxDefinitions.Count} textures");
+
         var assetManifest = new Dictionary<string, object?>
         {
             ["Header"] = header,
@@ -235,11 +268,14 @@ public static class DlLevelWadRenderPackageBuilder
             ["HeaderTables"] = new
             {
                 MipmapDefinitions = allMipmapDefinitions,
+                MobyDefinitions = mobyDefinitions,
                 TieDefinitions = tieDefinitions,
                 ShrubDefinitions = shrubDefinitions,
                 TfragTextureDefinitions = tfragTextureDefinitions,
+                MobyTextureDefinitions = mobyTextureDefinitions,
                 TieTextureDefinitions = tieTextureDefinitions,
-                ShrubTextureDefinitions = shrubTextureDefinitions
+                ShrubTextureDefinitions = shrubTextureDefinitions,
+                FxTextureDefinitions = fxDefinitions
             },
             ["GltfExports"] = gltfExports,
             ["GltfExportCount"] = gltfExports.Count(export => export.Status == "written"),
@@ -388,6 +424,96 @@ public static class DlLevelWadRenderPackageBuilder
         catch (Exception ex) when (IsGltfExportFailure(ex))
         {
             return GltfExportRoute.Failed("skybox", null, SkyboxSourcePath, SkyboxGltfPath, ex.Message);
+        }
+    }
+
+    private static IEnumerable<GltfExportRoute> BuildMobyGltfs(
+        List<DlLevelWadFile> files,
+        IReadOnlyList<DlAssetModelDefinition> modelDefinitions,
+        IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
+        byte[] paletteBytes,
+        byte[] assetBytes,
+        int textureDataOffset,
+        IReadOnlyList<DlAssetMipmapDefinition> gsStashDefinitions,
+        IReadOnlyList<int> knownAssetOffsets,
+        DlLevelWadRenderPackageBuildOptions options)
+    {
+        foreach (var definition in modelDefinitions)
+        {
+            var folderName = DlAssetReader.GetAssetFolderName(definition.ModelId);
+            var relativeDirectory = $"moby/{folderName}";
+            var sourcePath = $"{relativeDirectory}/moby.bin";
+            var gltfPath = $"{relativeDirectory}/moby.gltf";
+            var packageRoot = $"assets/{relativeDirectory}";
+            var mobyBytes = DlAssetReader.ReadAssetSlice(assetBytes, definition.ModelOffset, knownAssetOffsets);
+            if (options.IncludeSourceFiles)
+            {
+                AddFile(files, $"{packageRoot}/moby.bin", mobyBytes);
+                AddJsonFile(files, $"{packageRoot}/moby.json", definition);
+            }
+
+            if (mobyBytes.Length == 0)
+            {
+                yield return GltfExportRoute.Empty("moby", definition.ModelId, sourcePath, gltfPath);
+                continue;
+            }
+
+            var textureResources = new RenderTextureResources();
+            var relativeTextureIndex = 0;
+            foreach (var textureId in definition.TextureIds)
+            {
+                if (textureId == 0xff || textureId >= textureDefinitions.Count)
+                {
+                    continue;
+                }
+
+                var texture = DlAssetReader.BuildAssetTexture(
+                    "moby",
+                    relativeTextureIndex,
+                    textureDefinitions[textureId],
+                    paletteBytes,
+                    assetBytes,
+                    textureDataOffset,
+                    gsStashDefinitions);
+                AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
+                relativeTextureIndex++;
+            }
+
+            GltfExportRoute route;
+            try
+            {
+                using var input = new MemoryStream(mobyBytes, writable: false);
+                var export = MobyGltfExporter.Export(
+                    input,
+                    "moby.gltf",
+                    new MobyGltfExportOptions
+                    {
+                        SkipAnimationSequences = true,
+                        AnimationFormat = MobyAnimationFormat.Compact,
+                        LodIndex = options.MobyLodIndex,
+                        ExternalTextureUris = textureResources.Uris,
+                        ExternalTextureSizes = textureResources.Sizes,
+                        ExternalTextureAlpha = textureResources.Alpha,
+                        BufferFileName = "moby.buffer.bin"
+                    });
+
+                AddFile(files, $"{packageRoot}/moby.gltf", export.GltfBytes, "model/gltf+json");
+                AddFile(files, $"{packageRoot}/moby.buffer.bin", export.BinBytes);
+                AddOptionalDiagnostics(files, $"{packageRoot}/moby.diagnostics.json", export.DiagnosticsBytes, options);
+                route = GltfExportRoute.Written(
+                    "moby",
+                    definition.ModelId,
+                    sourcePath,
+                    gltfPath,
+                    $"{relativeDirectory}/moby.buffer.bin",
+                    options.IncludeDiagnostics ? $"{relativeDirectory}/moby.diagnostics.json" : null);
+            }
+            catch (Exception ex) when (IsGltfExportFailure(ex))
+            {
+                route = GltfExportRoute.Failed("moby", definition.ModelId, sourcePath, gltfPath, ex.Message);
+            }
+
+            yield return route;
         }
     }
 
@@ -585,6 +711,35 @@ public static class DlLevelWadRenderPackageBuilder
 
             yield return route;
         }
+    }
+
+    private static void BuildFxTextures(
+        List<DlLevelWadFile> files,
+        IReadOnlyList<DlFxTextureDefinition> fxDefinitions,
+        byte[] assetBytes,
+        int fxTextureDataOffset)
+    {
+        var textures = new List<object>(fxDefinitions.Count);
+        foreach (var definition in fxDefinitions)
+        {
+            var texture = DlAssetReader.BuildFxTexture(definition, assetBytes, fxTextureDataOffset);
+            AddTexture(files, "assets/fx/textures", "textures", texture, null);
+            textures.Add(new
+            {
+                definition.Index,
+                Path = $"fx/textures/tex.{definition.Index:0000}.png",
+                definition.Width,
+                definition.Height,
+                definition.PaletteOffset,
+                definition.TextureOffset
+            });
+        }
+
+        AddJsonFile(files, "assets/fx/manifest.json", new
+        {
+            TextureCount = fxDefinitions.Count,
+            Textures = textures
+        });
     }
 
     private static void BuildWorldInstances(

@@ -3,6 +3,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using RatchetPs2.Core.Geometry;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.Textures.Png;
 
 namespace RatchetPs2.Core.Moby;
 
@@ -12,9 +13,12 @@ public sealed class MobyGltfExportOptions
 {
     public bool IncludeDebugUvColors { get; init; }
     public bool SkipAnimationSequences { get; init; }
+    public int? LodIndex { get; init; }
     public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
     public MobyGltfSkeletonParentMode SkeletonParentMode { get; init; } = MobyGltfSkeletonParentMode.Auto;
     public IReadOnlyDictionary<int, string>? ExternalTextureUris { get; init; }
+    public IReadOnlyDictionary<int, TextureSize>? ExternalTextureSizes { get; init; }
+    public IReadOnlyDictionary<int, TextureAlphaInfo>? ExternalTextureAlpha { get; init; }
     public MobyGltfLowLodTextureMode LowLodTextureMode { get; init; } = MobyGltfLowLodTextureMode.Rolling;
     public IReadOnlyDictionary<int, int>? MeshTextureOverrides { get; init; }
     public bool InferTextureIdsFromUvTiles { get; init; } = true;
@@ -43,6 +47,7 @@ public static class MobyGltfExporter
     {
         ArgumentNullException.ThrowIfNull(input);
         options ??= new MobyGltfExportOptions();
+        ValidateLodIndex(options.LodIndex);
         return Export(
             MobyModelReader.Read(
                 input,
@@ -59,6 +64,7 @@ public static class MobyGltfExporter
     {
         ArgumentNullException.ThrowIfNull(model);
         options ??= new MobyGltfExportOptions();
+        ValidateLodIndex(options.LodIndex);
 
         var binFileName = string.IsNullOrWhiteSpace(options.BufferFileName)
             ? $"{Path.GetFileNameWithoutExtension(gltfFileName)}.buffer.bin"
@@ -100,6 +106,19 @@ public static class MobyGltfExporter
         for (var meshIndex = 0; meshIndex < (model.MeshTable?.Entries.Count ?? 0); meshIndex++)
         {
             var entry = model.MeshTable!.Entries[meshIndex];
+            if (!ShouldExportMesh(entry.MeshType, options.LodIndex))
+            {
+                diagnostics.Add(new
+                {
+                    MeshIndex = meshIndex,
+                    entry.MeshType,
+                    entry.VertexCount,
+                    Skipped = true,
+                    Reason = $"LOD {options.LodIndex} export"
+                });
+                continue;
+            }
+
             var explicitTextureId = TryGetPrimaryTextureId(entry, out var primaryTextureId)
                 ? primaryTextureId
                 : (int?)null;
@@ -393,6 +412,8 @@ public static class MobyGltfExporter
                 else if (TryGetExternalTextureMaterialIndex(
                              group.TextureId,
                              options.ExternalTextureUris,
+                             options.ExternalTextureSizes,
+                             options.ExternalTextureAlpha,
                              images,
                              textures,
                              materials,
@@ -493,6 +514,20 @@ public static class MobyGltfExporter
         }, jsonOptions);
 
         return new MobyGltfExport(gltfBytes, binBytes, diagnosticsBytes);
+    }
+
+    private static void ValidateLodIndex(int? lodIndex)
+    {
+        if (lodIndex is not null and not 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(lodIndex), lodIndex, "Moby glTF export currently supports only LOD 0, or null for all mesh groups.");
+        }
+    }
+
+    private static bool ShouldExportMesh(MobyMeshType meshType, int? lodIndex)
+    {
+        return lodIndex is null
+            || meshType is MobyMeshType.HighLod or MobyMeshType.Bangle or MobyMeshType.Metal;
     }
 
     private sealed class GltfSkinContext
@@ -2073,6 +2108,8 @@ public static class MobyGltfExporter
     private static bool TryGetExternalTextureMaterialIndex(
         int? textureId,
         IReadOnlyDictionary<int, string>? textureUris,
+        IReadOnlyDictionary<int, TextureSize>? textureSizes,
+        IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha,
         List<object> images,
         List<object> textures,
         List<object> materials,
@@ -2108,22 +2145,52 @@ public static class MobyGltfExporter
             source = imageIndex
         });
 
-        materialIndex = materials.Count;
-        materials.Add(new
+        var alpha = textureAlpha is not null && textureAlpha.TryGetValue(textureId.Value, out var alphaInfo)
+            ? alphaInfo
+            : TextureAlphaInfo.Opaque;
+        var size = textureSizes is not null && textureSizes.TryGetValue(textureId.Value, out var resolvedSize)
+            ? resolvedSize
+            : new TextureSize(0, 0);
+        var pbr = new Dictionary<string, object>
         {
-            name = $"tex_{textureId.Value:0000}",
-            doubleSided = true,
-            pbrMetallicRoughness = new
+            ["baseColorTexture"] = new
             {
-                baseColorTexture = new
-                {
-                    index = textureIndex
-                },
-                baseColorFactor = new[] { 1f, 1f, 1f, 1f },
-                metallicFactor = 0f,
-                roughnessFactor = 1f
+                index = textureIndex
+            },
+            ["baseColorFactor"] = new[] { 1f, 1f, 1f, 1f },
+            ["metallicFactor"] = 0f,
+            ["roughnessFactor"] = 1f
+        };
+        var material = new Dictionary<string, object?>
+        {
+            ["name"] = $"tex_{textureId.Value:0000}",
+            ["doubleSided"] = true,
+            ["pbrMetallicRoughness"] = pbr,
+            ["extras"] = new
+            {
+                MobyTextureId = textureId.Value,
+                MobyTextureUri = uri,
+                TextureWidth = size.Width,
+                TextureHeight = size.Height,
+                alpha.HasAlpha,
+                AlphaMode = alpha.AlphaMode.ToString(),
+                alpha.GltfAlphaMode,
+                alpha.MinAlpha,
+                alpha.MaxAlpha,
+                alpha.UsesBinaryAlpha
             }
-        });
+        };
+        if (alpha.GltfAlphaMode is { } alphaMode)
+        {
+            material["alphaMode"] = alphaMode;
+            if (alpha.AlphaMode == TextureAlphaMode.Mask)
+            {
+                material["alphaCutoff"] = 0.5f;
+            }
+        }
+
+        materialIndex = materials.Count;
+        materials.Add(material);
 
         materialIndexByTextureId.Add(textureId.Value, materialIndex);
         return true;

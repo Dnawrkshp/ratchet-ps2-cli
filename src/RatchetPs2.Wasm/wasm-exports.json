@@ -14,6 +14,11 @@
       "value": "\"rgba32\" | \"indexed8\" | \"indexed4\""
     },
     {
+      "kind": "typeAlias",
+      "name": "MobyGame",
+      "value": "\"DL\" | \"UYA\""
+    },
+    {
       "kind": "interface",
       "name": "ConvertPifToPngOptions",
       "properties": [
@@ -25,6 +30,27 @@
         {
           "name": "doubleAlpha",
           "type": "boolean",
+          "optional": true
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "ExportMobyGltfOptions",
+      "properties": [
+        {
+          "name": "game",
+          "type": "MobyGame",
+          "optional": true
+        },
+        {
+          "name": "skipAnimations",
+          "type": "boolean",
+          "optional": true
+        },
+        {
+          "name": "lod",
+          "type": "number",
           "optional": true
         }
       ]
@@ -679,6 +705,45 @@
         "  \"RatchetPs2.Wasm\",",
         "  \"UnpackDlLevelWad\",",
         "  input",
+        ");",
+        "return {",
+        "  packedBytes: toUint8Array(result.packedBytes),",
+        "  entries: result.entries.map((entry) => ({",
+        "    path: entry.path,",
+        "    offset: entry.offset,",
+        "    length: entry.length,",
+        "    contentType: entry.contentType,",
+        "  })),",
+        "};"
+      ]
+    },
+    {
+      "jsMethodName": "exportMobyGltf",
+      "returnType": "Promise<PackedFilePackageResult>",
+      "parameters": [
+        {
+          "name": "mobyBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        },
+        {
+          "name": "options",
+          "type": "ExportMobyGltfOptions",
+          "optional": true,
+          "optionsObject": true
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(mobyBytes);",
+        "const game = options.game ?? \"DL\";",
+        "const skipAnimations = options.skipAnimations ?? false;",
+        "const lod = options.lod ?? null;",
+        "const result = await DotNet.invokeMethodAsync(",
+        "  \"RatchetPs2.Wasm\",",
+        "  \"ExportMobyGltf\",",
+        "  input,",
+        "  game,",
+        "  skipAnimations,",
+        "  lod",
         ");",
         "return {",
         "  packedBytes: toUint8Array(result.packedBytes),",

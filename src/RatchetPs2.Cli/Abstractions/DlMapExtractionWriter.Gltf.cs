@@ -161,6 +161,8 @@ internal static partial class DlMapExtractionWriter
                     SkipAnimationSequences = true,
                     AnimationFormat = MobyAnimationFormat.Compact,
                     ExternalTextureUris = textureResources?.Uris,
+                    ExternalTextureSizes = textureResources?.Sizes,
+                    ExternalTextureAlpha = textureResources?.Alpha,
                     BufferFileName = Path.GetFileName(bufferFile)
                 });
 

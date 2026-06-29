@@ -272,6 +272,32 @@ export async function unpackDlLevelWad(levelWadBytes) {
   };
 }
 
+export async function exportMobyGltf(mobyBytes, options = {}) {
+  await ensureStarted();
+
+  const input = toUint8Array(mobyBytes);
+  const game = options.game ?? "DL";
+  const skipAnimations = options.skipAnimations ?? false;
+  const lod = options.lod ?? null;
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "ExportMobyGltf",
+    input,
+    game,
+    skipAnimations,
+    lod
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
 export async function parseDlGameplayCore(gameplayBytes) {
   await ensureStarted();
 

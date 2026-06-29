@@ -190,10 +190,12 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
     Expect(
         entries.Keys.All(path =>
             !path.EndsWith("/tie.bin", StringComparison.Ordinal)
+            && !path.EndsWith("/moby.bin", StringComparison.Ordinal)
             && !path.EndsWith("/shrub.bin", StringComparison.Ordinal)
             && !path.EndsWith("/tie.json", StringComparison.Ordinal)
+            && !path.EndsWith("/moby.json", StringComparison.Ordinal)
             && !path.EndsWith("/shrub.json", StringComparison.Ordinal)),
-        "browser render package should omit source tie and shrub sidecars");
+        "browser render package should omit source moby, tie, and shrub sidecars");
 
     using var rootManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["manifest.json"]));
     var performanceTimings = rootManifest.RootElement.GetProperty("PerformanceTimings").EnumerateArray().ToArray();
@@ -201,16 +203,60 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
         performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.assets.tfrag"),
         "render package manifest should include top-level terrain timing");
     Expect(
+        performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.assets.mobys"),
+        "render package manifest should include top-level moby timing");
+    Expect(
+        performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.assets.fx-textures"),
+        "render package manifest should include FX texture timing");
+    Expect(
         performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.tfrag.decode"),
         "render package manifest should include terrain exporter subphase timing");
 
     using var assetManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["assets/manifest.json"]));
+    var assetHeader = assetManifest.RootElement.GetProperty("Header");
     var gltfExports = assetManifest.RootElement.GetProperty("GltfExports").EnumerateArray().ToArray();
     Expect(
         gltfExports.Any(entry =>
             entry.GetProperty("Family").GetString() == "tfrag"
             && entry.GetProperty("Status").GetString() == "written"),
         "render package asset manifest should contain a written tfrag export");
+
+    if (assetHeader.GetProperty("MobyModelCount").GetInt32() > 0)
+    {
+        Expect(
+            gltfExports.Any(entry =>
+                entry.GetProperty("Family").GetString() == "moby"
+                && entry.GetProperty("Status").GetString() == "written"),
+            "render package asset manifest should contain a written moby export");
+        Expect(
+            entries.Keys.Any(path =>
+                path.StartsWith("assets/moby/", StringComparison.Ordinal)
+                && path.EndsWith("/moby.gltf", StringComparison.Ordinal)),
+            "render package should include moby glTF files");
+        var mobyGltfPath = entries.Keys.First(path =>
+            path.StartsWith("assets/moby/", StringComparison.Ordinal)
+            && path.EndsWith("/moby.gltf", StringComparison.Ordinal));
+        using var mobyGltf = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries[mobyGltfPath]));
+        Expect(
+            !mobyGltf.RootElement.GetProperty("nodes").EnumerateArray().Any(node =>
+                node.TryGetProperty("name", out var name)
+                && (name.GetString()?.Contains("low_lod", StringComparison.Ordinal) == true
+                    || name.GetString()?.Contains("mesh_type_2", StringComparison.Ordinal) == true
+                    || name.GetString()?.Contains("LowLod", StringComparison.Ordinal) == true
+                    || name.GetString()?.Contains("MeshType2", StringComparison.Ordinal) == true)),
+            "browser render package moby glTF should include only LOD0 render mesh groups");
+    }
+
+    var fxTextureCount = assetHeader.GetProperty("FxTextureCount").GetInt32();
+    if (fxTextureCount > 0)
+    {
+        Expect(entries.ContainsKey("assets/fx/manifest.json"), "render package should include the FX texture manifest");
+        Expect(
+            entries.Keys.Count(path =>
+                path.StartsWith("assets/fx/textures/", StringComparison.Ordinal)
+                && path.EndsWith(".png", StringComparison.Ordinal)) == fxTextureCount,
+            "render package should include one PNG per FX texture");
+    }
 
     if (gltfExports.Any(entry =>
         entry.GetProperty("Family").GetString() == "tie"

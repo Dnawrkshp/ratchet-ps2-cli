@@ -25,6 +25,7 @@ Top-level commands:
 
 - `hello`: Print a hello-world style greeting for a selected game.
 - `hw3d`: Inspect experimental HUD widget 3D files.
+- `moby`: Work with moby model files.
 - `pif`: Work with PIF texture files.
 - `shrub`: Work with shrub static foliage geometry files.
 - `skybox`: Work with skybox geometry files.
@@ -97,6 +98,42 @@ Examples:
 ratchet-ps2 pif to-png --input texture.pif --output texture.png
 ratchet-ps2 pif to-png --input minimap.pif --output minimap.png --double-alpha
 ratchet-ps2 pif to-png --input icon.pif --output icon.png --png-format indexed8
+```
+
+## `moby`
+
+Commands for moby model files.
+
+```bash
+ratchet-ps2 moby [command] [options]
+```
+
+### `moby export-gltf`
+
+Export a UYA or DL `moby.bin` model to glTF.
+
+```bash
+ratchet-ps2 moby export-gltf --game <UYA|DL> --input <input> --output <output> [--lod <lod>] [--texture-directory <directory>]
+```
+
+Options:
+
+- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--input <input>`: Required path to the input `moby.bin` binary.
+- `--output <output>`: Required path to write the output `.gltf` file.
+- `--lod <lod>`: Use `0` to export LOD0 only. Omit to export all moby mesh groups.
+- `--texture-directory <directory>`: Optional directory containing `tex.####.0.png` files. Defaults to the input moby's directory.
+
+Output behavior:
+
+- A sibling `.buffer.bin` is written for binary glTF buffers.
+- A sibling `.diagnostics.json` is written with decoded mesh summaries.
+- `--lod 0` keeps high-LOD render meshes and non-LOD accessory meshes, and skips low-LOD fallback mesh groups.
+
+Example:
+
+```bash
+ratchet-ps2 moby export-gltf --game DL --input moby.bin --output moby.gltf --lod 0
 ```
 
 ## `skybox`

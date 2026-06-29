@@ -13,6 +13,10 @@ internal static class MobyExportGltfCommand
         var gameOption = CommonOptions.Game();
         var inputOption = CommonOptions.InputFile("Path to the source moby model binary.");
         var outputOption = CommonOptions.OutputFile("Path to write the exported .gltf file.");
+        var lodOption = new Option<int?>("--lod")
+        {
+            Description = "Moby LOD to export. Use 0 for LOD0 only; omit to export all mesh groups."
+        };
         var textureDirectoryOption = new Option<DirectoryInfo?>("--texture-directory")
         {
             Description = "Directory containing external tex.####.0.png files to reference from the exported glTF. Defaults to the input moby's directory when matching PNGs are present."
@@ -41,6 +45,7 @@ internal static class MobyExportGltfCommand
             gameOption,
             inputOption,
             outputOption,
+            lodOption,
             textureDirectoryOption,
             debugUvColorsOption,
             skipAnimationsOption,
@@ -52,6 +57,7 @@ internal static class MobyExportGltfCommand
             var gameValue = parseResult.GetValue(gameOption);
             var inputFile = parseResult.GetValue(inputOption);
             var outputFile = parseResult.GetValue(outputOption);
+            var lodIndex = parseResult.GetValue(lodOption);
             var textureDirectory = parseResult.GetValue(textureDirectoryOption);
             var debugUvColors = parseResult.GetValue(debugUvColorsOption);
             var skipAnimations = parseResult.GetValue(skipAnimationsOption);
@@ -84,6 +90,13 @@ internal static class MobyExportGltfCommand
                 return;
             }
 
+            if (lodIndex is not null and not 0)
+            {
+                parseResult.GetResult(lodOption)?.AddError(
+                    $"Unsupported --lod value '{lodIndex}'. Expected 0, or omit --lod to export all mesh groups.");
+                return;
+            }
+
             if (!TryParseLowLodTextureMode(lowLodTextureModeValue, out var lowLodTextureMode))
             {
                 parseResult.GetResult(lowLodTextureModeOption)?.AddError(
@@ -98,7 +111,8 @@ internal static class MobyExportGltfCommand
             }
 
             outputFile.Directory?.Create();
-            var textureUris = PrepareExternalTextureUris(textureDirectory ?? inputFile.Directory, outputFile);
+            var outputDirectory = outputFile.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory());
+            var textureResources = TextureResourcePreparer.PrepareExternalTextures(textureDirectory ?? inputFile.Directory, outputDirectory);
             using var input = inputFile.OpenRead();
             var binFile = Path.Combine(
                 outputFile.DirectoryName ?? string.Empty,
@@ -111,8 +125,11 @@ internal static class MobyExportGltfCommand
                 {
                     IncludeDebugUvColors = debugUvColors,
                     SkipAnimationSequences = skipAnimations,
+                    LodIndex = lodIndex,
                     AnimationFormat = MobyGameFormats.Resolve(gameModuleResolver, gameId),
-                    ExternalTextureUris = textureUris,
+                    ExternalTextureUris = textureResources?.Uris,
+                    ExternalTextureSizes = textureResources?.Sizes,
+                    ExternalTextureAlpha = textureResources?.Alpha,
                     LowLodTextureMode = lowLodTextureMode,
                     MeshTextureOverrides = meshTextureOverrides,
                     BufferFileName = Path.GetFileName(binFile)
@@ -127,7 +144,7 @@ internal static class MobyExportGltfCommand
             File.WriteAllBytes(diagnosticsFile, export.DiagnosticsBytes);
 
             Console.WriteLine(
-                $"Exported {gameId} moby glTF '{inputFile.FullName}' to '{outputFile.FullName}'.");
+                $"Exported {gameId} moby{(lodIndex.HasValue ? $" LOD {lodIndex.Value}" : string.Empty)} glTF '{inputFile.FullName}' to '{outputFile.FullName}'.");
         });
 
         return command;
@@ -194,57 +211,4 @@ internal static class MobyExportGltfCommand
         return true;
     }
 
-    private static IReadOnlyDictionary<int, string>? PrepareExternalTextureUris(DirectoryInfo? sourceDirectory, FileInfo outputFile)
-    {
-        if (sourceDirectory is null || !sourceDirectory.Exists)
-        {
-            return null;
-        }
-
-        var candidates = sourceDirectory
-            .EnumerateFiles("tex.*.0.png", SearchOption.TopDirectoryOnly)
-            .Select(file => (File: file, TextureId: TryParseTextureId(file.Name, out var textureId) ? textureId : (int?)null))
-            .Where(item => item.TextureId.HasValue)
-            .OrderBy(item => item.TextureId!.Value)
-            .ToList();
-        if (candidates.Count == 0)
-        {
-            return null;
-        }
-
-        var outputDirectory = outputFile.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory());
-        var textureOutputDirectory = new DirectoryInfo(Path.Combine(outputDirectory.FullName, "textures"));
-        textureOutputDirectory.Create();
-
-        var uris = new Dictionary<int, string>();
-        foreach (var (sourceFile, textureId) in candidates)
-        {
-            var destinationFile = new FileInfo(Path.Combine(textureOutputDirectory.FullName, sourceFile.Name));
-            if (!Path.GetFullPath(sourceFile.FullName).Equals(Path.GetFullPath(destinationFile.FullName), StringComparison.Ordinal))
-            {
-                sourceFile.CopyTo(destinationFile.FullName, overwrite: true);
-            }
-
-            uris[textureId!.Value] = ToGltfUri(Path.GetRelativePath(outputDirectory.FullName, destinationFile.FullName));
-        }
-
-        return uris;
-    }
-
-    private static bool TryParseTextureId(string fileName, out int textureId)
-    {
-        textureId = 0;
-        var parts = fileName.Split('.');
-        return parts.Length == 4
-            && parts[0] == "tex"
-            && parts[2] == "0"
-            && parts[3].Equals("png", StringComparison.OrdinalIgnoreCase)
-            && int.TryParse(parts[1], out textureId)
-            && textureId >= 0;
-    }
-
-    private static string ToGltfUri(string relativePath)
-    {
-        return relativePath.Replace(Path.DirectorySeparatorChar, '/').Replace(Path.AltDirectorySeparatorChar, '/');
-    }
 }
