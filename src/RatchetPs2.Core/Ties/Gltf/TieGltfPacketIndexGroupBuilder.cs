@@ -183,7 +183,7 @@ internal static class TieGltfPacketIndexGroupBuilder
                 PacketIndex: packetIndex,
                 ShaderIndex: remap.ResolvedShaderIndex!.Value)))
             .ToHashSet();
-        var singleShaderMultipassGlowPackets = tie.GlowRgbaRemaps
+        var multipassGlowPackets = tie.GlowRgbaRemaps
             .Where(remap => remap.ResolvedShaderIndex is null
                 && remap.ResolutionKind is TieGlowRgbaRemapResolutionKind.PacketMultipassRange
                     or TieGlowRgbaRemapResolutionKind.PacketMultipassSet)
@@ -203,7 +203,7 @@ internal static class TieGltfPacketIndexGroupBuilder
                     group.Indices[i + 2],
                     colors);
                 var useGlowEmission = uniformGlow
-                    && CanUseGlowEmissionMaterial(group, shaderGlowPackets, singleShaderMultipassGlowPackets);
+                    && CanUseGlowEmissionMaterial(group, shaderGlowPackets, multipassGlowPackets);
                 if (currentGroup is null
                     || currentUniformGlow != uniformGlow
                     || currentUseGlowEmission != useGlowEmission)
@@ -236,11 +236,13 @@ internal static class TieGltfPacketIndexGroupBuilder
     private static bool CanUseGlowEmissionMaterial(
         PacketIndexGroup group,
         IReadOnlySet<(int PacketIndex, int ShaderIndex)> shaderGlowPackets,
-        IReadOnlySet<int> singleShaderMultipassGlowPackets)
+        IReadOnlySet<int> multipassGlowPackets)
     {
         return shaderGlowPackets.Contains((group.PacketIndex, group.ShaderIndex))
+            || (group.PassFlags == TiePassFlags.GlowEmissionPassFlags
+                && multipassGlowPackets.Contains(group.PacketIndex))
             || (group.PacketShaderIndices.Count == 1
-                && singleShaderMultipassGlowPackets.Contains(group.PacketIndex));
+                && multipassGlowPackets.Contains(group.PacketIndex));
     }
 
     private static bool TriangleUsesUniformGlowEmission(uint a, uint b, uint c, IReadOnlyList<Vector4> colors)

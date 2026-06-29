@@ -155,6 +155,44 @@ if (File.Exists(tie9117Path))
             && tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 2,
         $"expected DL 9117 export to emit only the texture 6 glow primitives, got source={tie9117Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
 }
+var tie9487Path = Path.Combine(tiesRoot, "ALL DL", "9487", "core.bin");
+if (File.Exists(tie9487Path))
+{
+    using var tie9487Input = File.OpenRead(tie9487Path);
+    var tie9487 = TieClassReader.Read(tie9487Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    Expect(
+        tie9487.GlowRgbaRemaps.Count == 3
+            && tie9487.GlowRgbaRemaps.All(remap =>
+                remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketMultipassSet
+                && remap.ResolvedPacketIndices.SequenceEqual(new[] { 1, 27 }))
+            && tie9487.GlowRgbaVertices.Count == 90,
+        $"expected DL 9487 glow remaps to resolve to multipass glow packets 1 and 27, got remaps={string.Join("; ", tie9487.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={tie9487.GlowRgbaVertices.Count}");
+    var tie9487Export = TieGltfExporter.Export(
+        tie9487,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    using var tie9487Diagnostics = JsonDocument.Parse(tie9487Export.DiagnosticsBytes);
+    var tie9487Root = tie9487Diagnostics.RootElement;
+    using var tie9487Gltf = JsonDocument.Parse(tie9487Export.GltfBytes);
+    var tie9487EmissiveGroups = tie9487Gltf.RootElement
+        .GetProperty("meshes")[0]
+        .GetProperty("primitives")
+        .EnumerateArray()
+        .Where(primitive =>
+            primitive.GetProperty("extras").TryGetProperty("GlowRgbaUsesEmission", out var usesEmission)
+            && usesEmission.GetBoolean())
+        .Select(primitive => (
+            PacketIndex: primitive.GetProperty("extras").GetProperty("PacketIndex").GetInt32(),
+            ShaderIndex: primitive.GetProperty("extras").GetProperty("ShaderIndex").GetInt32()))
+        .OrderBy(group => group.PacketIndex)
+        .ThenBy(group => group.ShaderIndex)
+        .ToArray();
+    Expect(
+        tie9487Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 90
+            && tie9487Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 3
+            && tie9487EmissiveGroups.SequenceEqual(new[] { (1, 1), (1, 6), (27, 6) }),
+        $"expected DL 9487 export to emit both packet 1 glow shaders plus packet 27, got source={tie9487Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9487Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}, groups={string.Join(",", tie9487EmissiveGroups.Select(group => $"{group.PacketIndex}/{group.ShaderIndex}"))}");
+}
 var gcPacketStartGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3575", "core.bin");
 if (File.Exists(gcPacketStartGlowPath))
 {
