@@ -1,5 +1,6 @@
 using Microsoft.JSInterop;
 using RatchetPs2.Games.DL.Gameplay;
+using System.Buffers.Binary;
 using System.Runtime.Versioning;
 
 namespace RatchetPs2.Wasm;
@@ -28,6 +29,7 @@ public static partial class Exports
         return new WasmDlGameplayBlocks(
             gameplay.Kind,
             gameplay.HeaderSize,
+            ToWasmPvarTables(gameplay.Blocks),
             gameplay.Blocks
                 .Select(block => new WasmDlGameplayBlock(
                     block.Index,
@@ -82,12 +84,109 @@ public static partial class Exports
                 mobyInstances.Instances.ToArray(),
                 mobyInstances.TrailingBytes.Length);
     }
+
+    private static WasmDlPvarTables? ToWasmPvarTables(IReadOnlyList<DlGameplayBlock> blocks)
+    {
+        byte[] mobyLinksBytes = FindPayload(blocks, "pvar_moby_links");
+        byte[] tableBytes = FindPayload(blocks, "pvar_table");
+        byte[] dataBytes = FindPayload(blocks, "pvar_data");
+        byte[] relativePointerBytes = FindPayload(blocks, "pvar_relative_pointers");
+
+        if (mobyLinksBytes.Length == 0 &&
+            tableBytes.Length == 0 &&
+            dataBytes.Length == 0 &&
+            relativePointerBytes.Length == 0)
+        {
+            return null;
+        }
+
+        return new WasmDlPvarTables(
+            mobyLinksBytes,
+            tableBytes,
+            dataBytes,
+            relativePointerBytes,
+            ReadPvarTableEntries(tableBytes, dataBytes),
+            ReadPvarRelativePointers(relativePointerBytes));
+    }
+
+    private static byte[] FindPayload(IReadOnlyList<DlGameplayBlock> blocks, string semanticName)
+    {
+        return blocks.FirstOrDefault(block => block.SemanticName == semanticName)?.PayloadBytes ?? [];
+    }
+
+    private static WasmDlPvarTableEntry[] ReadPvarTableEntries(byte[] tableBytes, byte[] dataBytes)
+    {
+        const int entrySize = 8;
+        if (tableBytes.Length % entrySize != 0)
+        {
+            throw new InvalidDataException("DL pvar table length must be divisible by 8.");
+        }
+
+        var entries = new WasmDlPvarTableEntry[tableBytes.Length / entrySize];
+        for (int index = 0; index < entries.Length; index++)
+        {
+            ReadOnlySpan<byte> entryBytes = tableBytes.AsSpan(index * entrySize, entrySize);
+            int offset = BinaryPrimitives.ReadInt32LittleEndian(entryBytes[..4]);
+            int length = BinaryPrimitives.ReadInt32LittleEndian(entryBytes[4..]);
+            if (offset < 0 || length < 0 || offset > dataBytes.Length - length)
+            {
+                throw new InvalidDataException($"DL pvar table entry {index} points outside pvar_data.");
+            }
+
+            entries[index] = new WasmDlPvarTableEntry(
+                index,
+                offset,
+                length,
+                length == 0 ? [] : dataBytes.AsSpan(offset, length).ToArray());
+        }
+
+        return entries;
+    }
+
+    private static WasmDlPvarRelativePointer[] ReadPvarRelativePointers(byte[] relativePointerBytes)
+    {
+        const int entrySize = 8;
+        if (relativePointerBytes.Length % entrySize != 0)
+        {
+            throw new InvalidDataException("DL pvar relative pointer table length must be divisible by 8.");
+        }
+
+        var pointers = new WasmDlPvarRelativePointer[relativePointerBytes.Length / entrySize];
+        for (int index = 0; index < pointers.Length; index++)
+        {
+            ReadOnlySpan<byte> entryBytes = relativePointerBytes.AsSpan(index * entrySize, entrySize);
+            pointers[index] = new WasmDlPvarRelativePointer(
+                BinaryPrimitives.ReadInt32LittleEndian(entryBytes[..4]),
+                BinaryPrimitives.ReadInt32LittleEndian(entryBytes[4..]));
+        }
+
+        return pointers;
+    }
 }
 
 public sealed record WasmDlGameplayBlocks(
     string Kind,
     int HeaderSize,
+    WasmDlPvarTables? PvarTables,
     WasmDlGameplayBlock[] Blocks);
+
+public sealed record WasmDlPvarTables(
+    byte[] MobyLinksBytes,
+    byte[] TableBytes,
+    byte[] DataBytes,
+    byte[] RelativePointerBytes,
+    WasmDlPvarTableEntry[] Entries,
+    WasmDlPvarRelativePointer[] RelativePointers);
+
+public sealed record WasmDlPvarTableEntry(
+    int Index,
+    int Offset,
+    int Length,
+    byte[] Data);
+
+public sealed record WasmDlPvarRelativePointer(
+    int PvarIndex,
+    int Offset);
 
 public sealed record WasmDlGameplayBlock(
     int Index,

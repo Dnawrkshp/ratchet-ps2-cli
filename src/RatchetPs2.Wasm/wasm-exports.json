@@ -473,6 +473,72 @@
     },
     {
       "kind": "interface",
+      "name": "DlPvarTableEntry",
+      "properties": [
+        {
+          "name": "index",
+          "type": "number"
+        },
+        {
+          "name": "offset",
+          "type": "number"
+        },
+        {
+          "name": "length",
+          "type": "number"
+        },
+        {
+          "name": "data",
+          "type": "Uint8Array"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlPvarRelativePointer",
+      "properties": [
+        {
+          "name": "pvarIndex",
+          "type": "number"
+        },
+        {
+          "name": "offset",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "DlPvarTables",
+      "properties": [
+        {
+          "name": "mobyLinksBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "tableBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "dataBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "relativePointerBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "entries",
+          "type": "DlPvarTableEntry[]"
+        },
+        {
+          "name": "relativePointers",
+          "type": "DlPvarRelativePointer[]"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
       "name": "DlGameplayBlock",
       "properties": [
         {
@@ -516,6 +582,10 @@
         {
           "name": "headerSize",
           "type": "number"
+        },
+        {
+          "name": "pvarTables",
+          "type": "DlPvarTables | null"
         },
         {
           "name": "blocks",

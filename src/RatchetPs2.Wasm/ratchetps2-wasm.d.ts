@@ -136,6 +136,27 @@ export interface DlMobyInstances {
   trailingByteLength: number;
 }
 
+export interface DlPvarTableEntry {
+  index: number;
+  offset: number;
+  length: number;
+  data: Uint8Array;
+}
+
+export interface DlPvarRelativePointer {
+  pvarIndex: number;
+  offset: number;
+}
+
+export interface DlPvarTables {
+  mobyLinksBytes: Uint8Array;
+  tableBytes: Uint8Array;
+  dataBytes: Uint8Array;
+  relativePointerBytes: Uint8Array;
+  entries: DlPvarTableEntry[];
+  relativePointers: DlPvarRelativePointer[];
+}
+
 export interface DlGameplayBlock {
   index: number;
   headerOffset: number;
@@ -149,6 +170,7 @@ export interface DlGameplayBlock {
 export interface DlGameplayBlocks {
   kind: string;
   headerSize: number;
+  pvarTables: DlPvarTables | null;
   blocks: DlGameplayBlock[];
 }
 
