@@ -3,11 +3,13 @@ using System.Text.Json;
 using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Shrubs;
 using RatchetPs2.Core.Textures;
+using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Ties;
 
 var repoRoot = FindRepoRoot(AppContext.BaseDirectory);
 ValidateSharedPs2ColorRules();
+ValidateSharedTexCoordUnwrapRules();
 var fixtures = new[]
 {
     new TfragFixture(
@@ -62,8 +64,11 @@ foreach (var fixture in fixtures)
     ValidateLodGroups(export.GltfBytes, fixture.Game);
     ValidateNormals(export.GltfBytes, fixture.Game);
     ValidateLightSelectors(export.GltfBytes, fixture.Game);
+
     ValidateTriangleWinding(export.GltfBytes, export.BinBytes, fixture.Game);
 }
+
+ValidateDlLevel10Chunk283Texture8UvSpan(repoRoot);
 
 Console.WriteLine("Tfrag terrain export tests passed.");
 
@@ -74,6 +79,29 @@ static void ValidateSharedPs2ColorRules()
     Expect(TieGameProfile.Default.FullOpacityAlpha == Ps2Color.FullOpacityAlpha, "tie full-opacity alpha should use the shared PS2 alpha scale");
     Expect(Math.Abs(Ps2Color.NormalizeOpacityAlpha(0x80) - 1f) < 0.000001f, "PS2 alpha 0x80 should normalize to full opacity");
     Expect(Math.Abs(Ps2Color.NormalizeIntensityComponent(0x80) - 1f) < 0.000001f, "PS2 intensity 0x80 should normalize to full intensity");
+}
+
+static void ValidateSharedTexCoordUnwrapRules()
+{
+    var subTileEdge = GltfTexCoordUtils.AdjustTriangleTexCoords(
+        new Vector2(0f, 0.25f),
+        new Vector2(0f, 1f),
+        new Vector2(0f, 0.25f),
+        textureSize: null,
+        repeatU: false,
+        repeatV: true);
+    Expect(NearlyEqual(subTileEdge[1].Y, 1f), "sub-tile repeated UV spans should keep the authored tile edge");
+
+    var seam = GltfTexCoordUtils.AdjustTriangleTexCoords(
+        new Vector2(0f, 0.99f),
+        new Vector2(0f, 0.01f),
+        new Vector2(0f, 0.99f),
+        textureSize: null,
+        repeatU: false,
+        repeatV: true);
+    var seamMin = seam.Min(texCoord => texCoord.Y);
+    var seamMax = seam.Max(texCoord => texCoord.Y);
+    Expect(seamMax - seamMin < 0.03f, "repeated UV spans that straddle the tile seam should still unwrap");
 }
 
 static void ValidateLodGroups(byte[] gltfBytes, string game)
@@ -210,6 +238,81 @@ static void ValidateLightSelectors(byte[] gltfBytes, string game)
     Expect(primitiveCount > 0, $"{game} tfrag light selector validation should inspect primitives");
 }
 
+static void ValidateDlLevel10Chunk283Texture8UvSpan(string repoRoot)
+{
+    var path = Path.Combine(repoRoot, "test-assets", "tfrags", "DL", "level10", "terrain", "terrain.bin");
+    if (!File.Exists(path))
+    {
+        return;
+    }
+
+    using var input = File.OpenRead(path);
+    var terrain = TfragTerrainReader.Read(input);
+    var export = TfragGltfExporter.Export(
+        terrain,
+        "terrain.gltf",
+        new TfragGltfExportOptions
+        {
+            GameLabel = "DL",
+            IncludeDiagnostics = false,
+            ExternalTextureSizes = new Dictionary<int, TextureSize>
+            {
+                [8] = new TextureSize(128, 128)
+            },
+            Minify = true,
+            MetadataMode = GltfExportMetadataMode.RuntimeOnly
+        });
+
+    using var document = JsonDocument.Parse(export.GltfBytes);
+    var root = document.RootElement;
+    var accessors = root.GetProperty("accessors");
+    var bufferViews = root.GetProperty("bufferViews");
+    var materials = root.GetProperty("materials");
+    var foundWallPrimitive = false;
+
+    foreach (var mesh in root.GetProperty("meshes").EnumerateArray())
+    {
+        if (!mesh.TryGetProperty("name", out var nameElement)
+            || nameElement.GetString() != "chunk_0283_lod_0")
+        {
+            continue;
+        }
+
+        foreach (var primitive in mesh.GetProperty("primitives").EnumerateArray())
+        {
+            var material = materials[primitive.GetProperty("material").GetInt32()];
+            if (!material.TryGetProperty("name", out var materialName)
+                || materialName.GetString() != "tfrag_tex_0008")
+            {
+                continue;
+            }
+
+            var attributes = primitive.GetProperty("attributes");
+            var texCoords = ReadVector2Accessor(
+                accessors,
+                bufferViews,
+                export.BinBytes,
+                attributes.GetProperty("TEXCOORD_0").GetInt32(),
+                "DL",
+                "TEXCOORD_0");
+            var minU = texCoords.Min(texCoord => texCoord.X);
+            var maxU = texCoords.Max(texCoord => texCoord.X);
+            var minV = texCoords.Min(texCoord => texCoord.Y);
+            var maxV = texCoords.Max(texCoord => texCoord.Y);
+            if (!NearlyEqual(minU, -2f) || !NearlyEqual(maxU, 2f))
+            {
+                continue;
+            }
+
+            foundWallPrimitive = true;
+            Expect(NearlyEqual(minV, 0.25f), $"DL level10 chunk 0283 texture 8 wall should keep V min 0.25, got {minV}");
+            Expect(NearlyEqual(maxV, 1f), $"DL level10 chunk 0283 texture 8 wall should keep V max 1.0, got {maxV}");
+        }
+    }
+
+    Expect(foundWallPrimitive, "DL level10 chunk 0283 texture 8 wall primitive should be exported");
+}
+
 static void ValidateTriangleWinding(byte[] gltfBytes, byte[] binBytes, string game)
 {
     using var document = JsonDocument.Parse(gltfBytes);
@@ -306,6 +409,33 @@ static Vector3[] ReadVector3Accessor(
     return values;
 }
 
+static Vector2[] ReadVector2Accessor(
+    JsonElement accessors,
+    JsonElement bufferViews,
+    byte[] binBytes,
+    int accessorIndex,
+    string game,
+    string attributeName)
+{
+    var accessor = accessors[accessorIndex];
+    var componentType = accessor.GetProperty("componentType").GetInt32();
+    var type = accessor.GetProperty("type").GetString();
+    Expect(componentType == 5126 && type == "VEC2", $"{game} tfrag {attributeName} should be a float VEC2 accessor");
+
+    var count = accessor.GetProperty("count").GetInt32();
+    var (offset, stride) = AccessorLayout(accessor, bufferViews, componentSize: 4, componentCount: 2);
+    var values = new Vector2[count];
+    for (var i = 0; i < count; i++)
+    {
+        var elementOffset = offset + (i * stride);
+        values[i] = new Vector2(
+            BitConverter.ToSingle(binBytes, elementOffset + 0),
+            BitConverter.ToSingle(binBytes, elementOffset + 4));
+    }
+
+    return values;
+}
+
 static uint[] ReadIndexAccessor(
     JsonElement accessors,
     JsonElement bufferViews,
@@ -359,6 +489,11 @@ static int GetOptionalInt(JsonElement element, string propertyName, int fallback
     return element.TryGetProperty(propertyName, out var property)
         ? property.GetInt32()
         : fallback;
+}
+
+static bool NearlyEqual(float actual, float expected)
+{
+    return Math.Abs(actual - expected) <= 0.000001f;
 }
 
 static void Expect(bool condition, string message)

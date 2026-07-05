@@ -307,6 +307,12 @@ public static partial class GltfTexCoordUtils
         var bestRange = Range(a, b, c);
         var originalRange = bestRange;
         var bestInteriorBoundaryCount = CountInteriorIntegerBoundaries(a, b, c);
+        if (originalRange < 1f - rangeImprovementTolerance
+            && bestInteriorBoundaryCount == 0
+            && !StraddlesRepeatedTileSeam(a, b, c))
+        {
+            return [a, b, c];
+        }
 
         var centeredBOffset = -(int)MathF.Round(b - a);
         var centeredCOffset = -(int)MathF.Round(c - a);
@@ -336,6 +342,22 @@ public static partial class GltfTexCoordUtils
         }
 
         return [a, bestB, bestC];
+    }
+
+    private static bool StraddlesRepeatedTileSeam(float a, float b, float c)
+    {
+        const float seamProximity = 0.02f;
+
+        var fa = FractionalTileCoordinate(a);
+        var fb = FractionalTileCoordinate(b);
+        var fc = FractionalTileCoordinate(c);
+        return MathF.Min(fa, MathF.Min(fb, fc)) <= seamProximity
+            && MathF.Max(fa, MathF.Max(fb, fc)) >= 1f - seamProximity;
+    }
+
+    private static float FractionalTileCoordinate(float value)
+    {
+        return value - MathF.Floor(value);
     }
 
     private static bool CollapsesRepeatedTileSpan(float originalRange, float candidateRange)
