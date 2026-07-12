@@ -133,7 +133,36 @@ internal static class UyaMapExtractionWriter
             levelIndex,
             header.Bytes,
             palette.Bytes,
-            assetWad.Bytes);
+            assetWad.Bytes,
+            chunkWads: CollectChunkWads(byPath));
+    }
+
+    private static IReadOnlyDictionary<int, byte[]> CollectChunkWads(IReadOnlyDictionary<string, PackedFile> files)
+    {
+        var chunkWads = new Dictionary<int, byte[]>();
+        foreach (var (path, file) in files)
+        {
+            if (TryGetChunkIndex(path, out var chunkIndex) && chunkIndex > 0 && file.Bytes.Length > 0)
+            {
+                chunkWads[chunkIndex] = file.Bytes;
+            }
+        }
+
+        return chunkWads;
+    }
+
+    private static bool TryGetChunkIndex(string path, out int chunkIndex)
+    {
+        chunkIndex = 0;
+        const string prefix = "level_wad/chunks/chunk";
+        const string suffix = ".wad";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)
+            || !path.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(path[prefix.Length..^suffix.Length], out chunkIndex);
     }
 
     private static int ExtractOptionalPart(string outputRoot, string path, Stream isoStream, UyaFileBlock block)

@@ -18,6 +18,7 @@ internal static partial class DlMapExtractionWriter
 
         routes.Add(ExportSkyboxGltf(outputDirectory, levelIndex));
         routes.Add(ExportTfragGltf(outputDirectory));
+        routes.AddRange(ExportChunkTfragGltfs(outputDirectory));
         routes.AddRange(ExportModelFamilyGltfs(outputDirectory, "moby", mobyDefinitions));
         routes.AddRange(ExportModelFamilyGltfs(outputDirectory, "tie", tieDefinitions));
         routes.AddRange(ExportShrubGltfs(outputDirectory, shrubDefinitions));
@@ -57,13 +58,28 @@ internal static partial class DlMapExtractionWriter
 
     private static GltfExportRoute ExportTfragGltf(string outputDirectory)
     {
-        var inputFile = new FileInfo(Path.Combine(outputDirectory, "tfrag", "tfrag.bin"));
-        var outputFile = new FileInfo(Path.Combine(outputDirectory, "tfrag", "tfrag.gltf"));
+        return ExportTfragGltf(
+            outputDirectory,
+            null,
+            "tfrag/tfrag.bin",
+            "tfrag/tfrag.gltf",
+            new DirectoryInfo(Path.Combine(outputDirectory, "tfrag", "textures")));
+    }
+
+    private static GltfExportRoute ExportTfragGltf(
+        string outputDirectory,
+        int? modelId,
+        string sourcePath,
+        string gltfPath,
+        DirectoryInfo textureDirectory)
+    {
+        var inputFile = new FileInfo(CombineRelativePath(outputDirectory, sourcePath));
+        var outputFile = new FileInfo(CombineRelativePath(outputDirectory, gltfPath));
         PrepareGltfOutput(outputFile);
 
         if (!inputFile.Exists || inputFile.Length == 0)
         {
-            return GltfExportRoute.Empty("tfrag", null, "tfrag/tfrag.bin", "tfrag/tfrag.gltf");
+            return GltfExportRoute.Empty("tfrag", modelId, sourcePath, gltfPath);
         }
 
         try
@@ -72,7 +88,7 @@ internal static partial class DlMapExtractionWriter
             var bufferFile = Path.Combine(outputDirectoryInfo.FullName, "tfrag.buffer.bin");
             var diagnosticsFile = Path.Combine(outputDirectoryInfo.FullName, "tfrag.diagnostics.json");
             var textureResources = TextureResourcePreparer.PrepareExternalTextures(
-                new DirectoryInfo(Path.Combine(outputDirectoryInfo.FullName, "textures")),
+                textureDirectory,
                 outputDirectoryInfo,
                 normalizePs2FullOpacityAlpha: TfragTextureAlpha.FullOpacityAlpha);
 
@@ -95,16 +111,76 @@ internal static partial class DlMapExtractionWriter
 
             return GltfExportRoute.Written(
                 "tfrag",
-                null,
-                "tfrag/tfrag.bin",
-                "tfrag/tfrag.gltf",
-                "tfrag/tfrag.buffer.bin",
-                "tfrag/tfrag.diagnostics.json");
+                modelId,
+                sourcePath,
+                gltfPath,
+                ToRelativeAssetPath(outputDirectory, bufferFile),
+                ToRelativeAssetPath(outputDirectory, diagnosticsFile));
         }
         catch (Exception ex) when (IsGltfExportFailure(ex))
         {
-            return GltfExportRoute.Failed("tfrag", null, "tfrag/tfrag.bin", "tfrag/tfrag.gltf", ex.Message);
+            return GltfExportRoute.Failed("tfrag", modelId, sourcePath, gltfPath, ex.Message);
         }
+    }
+
+    private static IEnumerable<GltfExportRoute> ExportChunkTfragGltfs(string outputDirectory)
+    {
+        var chunksDirectory = new DirectoryInfo(Path.Combine(outputDirectory, "level_wad", "chunks"));
+        if (!chunksDirectory.Exists)
+        {
+            yield break;
+        }
+
+        foreach (var chunkFile in chunksDirectory.EnumerateFiles("chunk*.wad").OrderBy(file => file.Name))
+        {
+            if (!TryGetChunkIndex(chunkFile.Name, out var chunkIndex) || chunkIndex == 0)
+            {
+                continue;
+            }
+
+            var relativeDirectory = $"tfrag/chunks/chunk{chunkIndex}";
+            var sourcePath = $"{relativeDirectory}/tfrag.bin";
+            var gltfPath = $"{relativeDirectory}/tfrag.gltf";
+            GltfExportRoute? failedRoute = null;
+            try
+            {
+                var tfragBytes = TfragChunkWadReader.ReadTerrainPayload(File.ReadAllBytes(chunkFile.FullName));
+                var sourceFile = CombineRelativePath(outputDirectory, sourcePath);
+                Directory.CreateDirectory(Path.GetDirectoryName(sourceFile)!);
+                File.WriteAllBytes(sourceFile, tfragBytes);
+            }
+            catch (Exception ex) when (IsGltfExportFailure(ex) || ex is OverflowException)
+            {
+                failedRoute = GltfExportRoute.Failed("tfrag", chunkIndex, sourcePath, gltfPath, ex.Message);
+            }
+
+            if (failedRoute is not null)
+            {
+                yield return failedRoute;
+                continue;
+            }
+
+            yield return ExportTfragGltf(
+                outputDirectory,
+                chunkIndex,
+                sourcePath,
+                gltfPath,
+                new DirectoryInfo(Path.Combine(outputDirectory, "tfrag", "textures")));
+        }
+    }
+
+    private static bool TryGetChunkIndex(string fileName, out int chunkIndex)
+    {
+        chunkIndex = 0;
+        const string prefix = "chunk";
+        const string suffix = ".wad";
+        if (!fileName.StartsWith(prefix, StringComparison.Ordinal)
+            || !fileName.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(fileName[prefix.Length..^suffix.Length], out chunkIndex);
     }
 
     private static IEnumerable<GltfExportRoute> ExportModelFamilyGltfs(

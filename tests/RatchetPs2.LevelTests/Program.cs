@@ -4,6 +4,7 @@ using System.Text.Json;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
+using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Wad;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Gameplay;
@@ -24,6 +25,8 @@ ValidateUyaStandaloneGameplayUnpacking();
 ValidateUyaCustomMapZipUnpacking();
 ValidateUyaGameplayTypedParsing();
 ValidateUyaAssetRenderPackageBuild();
+ValidateChunkTfragAssetRenderPackageWhenAvailable();
+ValidateChunkTfragWadReaderWhenAvailable();
 ValidateLooseLevelWadRenderPackageWhenAvailable();
 ValidateUyaLooseLevelWadRenderPackageWhenAvailable();
 ValidateLooseLevelWadFailures();
@@ -493,6 +496,68 @@ static void ValidateUyaAssetRenderPackageBuild()
         "UYA asset render package should report the decompressed asset WAD length");
 }
 
+static void ValidateChunkTfragAssetRenderPackageWhenAvailable()
+{
+    var tfragPath = Path.Combine("test-assets", "tfrags", "DL", "level1", "terrain", "terrain.bin");
+    if (!File.Exists(tfragPath))
+    {
+        return;
+    }
+
+    var chunkWad = CreateChunkWad(File.ReadAllBytes(tfragPath));
+    var files = DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+        GameId.DL,
+        levelIndex: 1,
+        headerBytes: new byte[0xc0],
+        paletteBytes: [],
+        assetBytes: [],
+        options: DlLevelWadRenderPackageBuildOptions.Browser,
+        chunkWads: new Dictionary<int, byte[]>
+        {
+            [0] = chunkWad,
+            [1] = chunkWad
+        });
+    var byPath = files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+
+    Expect(!byPath.ContainsKey("assets/tfrag/chunks/chunk0/tfrag.gltf"), "chunk0 tfrag should not be exported");
+    Expect(byPath.ContainsKey("assets/tfrag/chunks/chunk1/tfrag.gltf"), "chunk1 tfrag glTF should be exported");
+    Expect(byPath.ContainsKey("assets/tfrag/chunks/chunk1/tfrag.buffer.bin"), "chunk1 tfrag buffer should be exported");
+    Expect(!byPath.ContainsKey("assets/tfrag/chunks/chunk1/tfrag.bin"), "browser package should omit chunk tfrag source bytes");
+
+    using var assetManifest = JsonDocument.Parse(byPath["assets/manifest.json"].Bytes);
+    var chunkRoute = assetManifest.RootElement
+        .GetProperty("GltfExports")
+        .EnumerateArray()
+        .SingleOrDefault(entry =>
+            entry.GetProperty("Family").GetString() == "tfrag"
+            && entry.GetProperty("ModelId").ValueKind == JsonValueKind.Number
+            && entry.GetProperty("ModelId").GetInt32() == 1);
+    Expect(chunkRoute.ValueKind == JsonValueKind.Object, "asset manifest should contain the chunk1 tfrag route");
+    Expect(chunkRoute.GetProperty("Status").GetString() == "written", "chunk1 tfrag route should be written");
+    Expect(
+        chunkRoute.GetProperty("GltfPath").GetString() == "tfrag/chunks/chunk1/tfrag.gltf",
+        "chunk1 tfrag route should point at the chunk glTF");
+}
+
+static void ValidateChunkTfragWadReaderWhenAvailable()
+{
+    var chunkPath = Path.Combine(
+        "test-assets",
+        "extractions_uya",
+        "level04_iso_world01",
+        "level_wad",
+        "chunks",
+        "chunk1.wad");
+    if (!File.Exists(chunkPath))
+    {
+        return;
+    }
+
+    var terrainBytes = TfragChunkWadReader.ReadTerrainPayload(File.ReadAllBytes(chunkPath));
+    var terrain = TfragTerrainReader.Read(terrainBytes);
+    Expect(terrain.Chunks.Count > 0, "chunk tfrag WAD reader should decode the first chunk payload as terrain");
+}
+
 static void ValidateLooseLevelWadRenderPackageWhenAvailable()
 {
     var wadPath = Environment.GetEnvironmentVariable("RATCHET_PS2_DL_LEVEL_WAD")
@@ -873,6 +938,17 @@ static void ValidateGameplayMobyInstancesParsing()
     Expect(moby.Color == new DlRgb96(86, 77, 2), "moby instance color should be parsed");
     Expect(moby.Light == 2, "moby instance light should be parsed");
     Expect(moby.Unused6C == -1, "moby instance unused 0x6c sentinel should be parsed");
+
+    var truncatedMobyBytes = new byte[0xf0];
+    WriteInt32(truncatedMobyBytes, 0x00, 7);
+    var truncatedGameplay = DlGameplayBlockReader.ReadCore(BuildGameplayData(
+        DlGameplayBlockReader.CoreHeaderSize,
+        (0x30, truncatedMobyBytes)));
+    var truncatedMobyInstances = truncatedGameplay.Blocks
+        .Single(block => block.SemanticName == "moby_instances")
+        .MobyInstances;
+
+    Expect(truncatedMobyInstances is null, "short moby instance payloads should not fail gameplay parsing");
 }
 
 static void ValidateCodeSegmentParsing()
@@ -1499,6 +1575,14 @@ static byte[] CreateLiteralWad(byte[] payload)
     WriteInt32(data, 3, data.Length);
     data[0x10] = (byte)(payload.Length - 3);
     payload.CopyTo(data.AsSpan(0x11));
+    return data;
+}
+
+static byte[] CreateChunkWad(byte[] terrainPayload)
+{
+    var data = new byte[0x10 + terrainPayload.Length];
+    WriteInt32(data, 0x00, 0x10);
+    terrainPayload.CopyTo(data.AsSpan(0x10));
     return data;
 }
 

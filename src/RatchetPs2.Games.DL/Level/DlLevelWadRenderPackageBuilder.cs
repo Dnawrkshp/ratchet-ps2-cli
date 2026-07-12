@@ -100,7 +100,8 @@ public static class DlLevelWadRenderPackageBuilder
             assetWad.PayloadBytes,
             manifest,
             timings,
-            options);
+            options,
+            ReadChunkWads(levelWadBytes, levelWad.Chunks));
         AddTiming(
             timings,
             "managed.assets-total",
@@ -141,7 +142,8 @@ public static class DlLevelWadRenderPackageBuilder
         byte[] headerBytes,
         byte[] paletteBytes,
         byte[] assetBytes,
-        DlLevelWadRenderPackageBuildOptions? options = null)
+        DlLevelWadRenderPackageBuildOptions? options = null,
+        IReadOnlyDictionary<int, byte[]>? chunkWads = null)
     {
         ArgumentNullException.ThrowIfNull(headerBytes);
         ArgumentNullException.ThrowIfNull(paletteBytes);
@@ -175,7 +177,8 @@ public static class DlLevelWadRenderPackageBuilder
             assetPayloadBytes,
             manifest,
             timings,
-            options);
+            options,
+            chunkWads);
 
         AddTiming(
             timings,
@@ -197,7 +200,8 @@ public static class DlLevelWadRenderPackageBuilder
         byte[] assetBytes,
         IDictionary<string, object?> rootManifest,
         List<RenderPackageTiming> timings,
-        DlLevelWadRenderPackageBuildOptions options)
+        DlLevelWadRenderPackageBuildOptions options,
+        IReadOnlyDictionary<int, byte[]>? chunkWads)
     {
         var header = DlAssetReader.ReadHeader(headerBytes);
         var allMipmapDefinitions = DlAssetReader.ReadMipmapDefinitions(
@@ -233,16 +237,36 @@ public static class DlLevelWadRenderPackageBuilder
 
         var tfragStart = Stopwatch.GetTimestamp();
         var tfragTimings = new List<RenderPackageTiming>();
-        gltfExports.Add(BuildTfrag(
+        var tfragTextureResources = BuildTfragTextureResources(
             files,
-            gameId,
             header,
             tfragTextureDefinitions,
             paletteBytes,
             assetBytes,
-            knownAssetOffsets,
+            textureIsSwizzled);
+        gltfExports.Add(BuildTfrag(
+            files,
+            gameId,
+            null,
+            ReadAssetRange(
+                assetBytes,
+                header.TerrainOffset,
+                header.OcclusionOffset,
+                allowZeroOffset: true),
+            "tfrag/tfrag.bin",
+            "tfrag/tfrag.gltf",
+            "tfrag/tfrag.buffer.bin",
+            "tfrag/tfrag.diagnostics.json",
+            "assets/tfrag",
+            tfragTextureResources,
             tfragTimings,
-            textureIsSwizzled,
+            options));
+        gltfExports.AddRange(BuildChunkTfrags(
+            files,
+            gameId,
+            chunkWads,
+            tfragTextureResources,
+            tfragTimings,
             options));
         AddTiming(
             timings,
@@ -361,47 +385,24 @@ public static class DlLevelWadRenderPackageBuilder
     private static GltfExportRoute BuildTfrag(
         List<PackedFile> files,
         GameId gameId,
-        DlAssetHeader header,
-        IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
-        byte[] paletteBytes,
-        byte[] assetBytes,
-        IReadOnlyList<int> knownAssetOffsets,
+        int? modelId,
+        byte[] tfragBytes,
+        string sourcePath,
+        string gltfPath,
+        string bufferPath,
+        string diagnosticsPath,
+        string packageRoot,
+        RenderTextureResources textureResources,
         List<RenderPackageTiming> timings,
-        bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
     {
-        const string sourcePath = "tfrag/tfrag.bin";
-        const string gltfPath = "tfrag/tfrag.gltf";
-        const string bufferPath = "tfrag/tfrag.buffer.bin";
-        const string diagnosticsPath = "tfrag/tfrag.diagnostics.json";
-        const string packageRoot = "assets/tfrag";
-
-        var tfragBytes = ReadAssetRange(
-            assetBytes,
-            header.TerrainOffset,
-            header.OcclusionOffset,
-            allowZeroOffset: true);
         if (options.IncludeSourceFiles)
         {
             AddFile(files, $"{packageRoot}/tfrag.bin", tfragBytes);
         }
         if (tfragBytes.Length == 0)
         {
-            return GltfExportRoute.Empty("tfrag", null, sourcePath, gltfPath);
-        }
-
-        var textureResources = new RenderTextureResources();
-        foreach (var definition in textureDefinitions)
-        {
-            var texture = DlAssetReader.BuildAssetTexture(
-                "tfrag",
-                definition.Index,
-                definition,
-                paletteBytes,
-                assetBytes,
-                header.TextureDataOffset,
-                isSwizzled: textureIsSwizzled);
-            AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources, TfragTextureAlpha.FullOpacityAlpha);
+            return GltfExportRoute.Empty("tfrag", modelId, sourcePath, gltfPath);
         }
 
         try
@@ -409,10 +410,10 @@ public static class DlLevelWadRenderPackageBuilder
             using var input = new MemoryStream(tfragBytes, writable: false);
             var export = TfragGltfExporter.Export(
                 input,
-                "tfrag.gltf",
+                Path.GetFileName(gltfPath),
                 new TfragGltfExportOptions
                 {
-                    BufferFileName = "tfrag.buffer.bin",
+                    BufferFileName = Path.GetFileName(bufferPath),
                     GameLabel = gameId.ToString(),
                     ExternalTextureUris = textureResources.Uris,
                     ExternalTextureSizes = textureResources.Sizes,
@@ -429,12 +430,12 @@ public static class DlLevelWadRenderPackageBuilder
                         detail)
                 });
 
-            AddFile(files, $"{packageRoot}/tfrag.gltf", export.GltfBytes, "model/gltf+json");
-            AddFile(files, $"{packageRoot}/tfrag.buffer.bin", export.BinBytes);
-            AddOptionalDiagnostics(files, $"{packageRoot}/tfrag.diagnostics.json", export.DiagnosticsBytes, options);
+            AddFile(files, $"assets/{gltfPath}", export.GltfBytes, "model/gltf+json");
+            AddFile(files, $"assets/{bufferPath}", export.BinBytes);
+            AddOptionalDiagnostics(files, $"assets/{diagnosticsPath}", export.DiagnosticsBytes, options);
             return GltfExportRoute.Written(
                 "tfrag",
-                null,
+                modelId,
                 sourcePath,
                 gltfPath,
                 bufferPath,
@@ -442,7 +443,89 @@ public static class DlLevelWadRenderPackageBuilder
         }
         catch (Exception ex) when (IsGltfExportFailure(ex))
         {
-            return GltfExportRoute.Failed("tfrag", null, sourcePath, gltfPath, ex.Message);
+            return GltfExportRoute.Failed("tfrag", modelId, sourcePath, gltfPath, ex.Message);
+        }
+    }
+
+    private static RenderTextureResources BuildTfragTextureResources(
+        List<PackedFile> files,
+        DlAssetHeader header,
+        IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
+        byte[] paletteBytes,
+        byte[] assetBytes,
+        bool textureIsSwizzled)
+    {
+        var textureResources = new RenderTextureResources();
+        foreach (var definition in textureDefinitions)
+        {
+            var texture = DlAssetReader.BuildAssetTexture(
+                "tfrag",
+                definition.Index,
+                definition,
+                paletteBytes,
+                assetBytes,
+                header.TextureDataOffset,
+                isSwizzled: textureIsSwizzled);
+            AddTexture(files, "assets/tfrag/textures", "textures", texture, textureResources, TfragTextureAlpha.FullOpacityAlpha);
+        }
+
+        return textureResources;
+    }
+
+    private static IEnumerable<GltfExportRoute> BuildChunkTfrags(
+        List<PackedFile> files,
+        GameId gameId,
+        IReadOnlyDictionary<int, byte[]>? chunkWads,
+        RenderTextureResources textureResources,
+        List<RenderPackageTiming> timings,
+        DlLevelWadRenderPackageBuildOptions options)
+    {
+        if (chunkWads is null || chunkWads.Count == 0)
+        {
+            yield break;
+        }
+
+        foreach (var (chunkIndex, chunkBytes) in chunkWads.OrderBy(entry => entry.Key))
+        {
+            if (chunkIndex == 0)
+            {
+                continue;
+            }
+
+            var relativeDirectory = $"tfrag/chunks/chunk{chunkIndex}";
+            var sourcePath = $"{relativeDirectory}/tfrag.bin";
+            var gltfPath = $"{relativeDirectory}/tfrag.gltf";
+            byte[] tfragBytes;
+            GltfExportRoute? failedRoute = null;
+            try
+            {
+                tfragBytes = TfragChunkWadReader.ReadTerrainPayload(chunkBytes);
+            }
+            catch (Exception ex) when (IsGltfExportFailure(ex) || ex is OverflowException)
+            {
+                failedRoute = GltfExportRoute.Failed("tfrag", chunkIndex, sourcePath, gltfPath, ex.Message);
+                tfragBytes = [];
+            }
+
+            if (failedRoute is not null)
+            {
+                yield return failedRoute;
+                continue;
+            }
+
+            yield return BuildTfrag(
+                files,
+                gameId,
+                chunkIndex,
+                tfragBytes,
+                sourcePath,
+                gltfPath,
+                $"{relativeDirectory}/tfrag.buffer.bin",
+                $"{relativeDirectory}/tfrag.diagnostics.json",
+                $"assets/{relativeDirectory}",
+                textureResources.Rebased("../../textures"),
+                timings,
+                options);
         }
     }
 
@@ -1010,6 +1093,23 @@ public static class DlLevelWadRenderPackageBuilder
         return offsets.Where(offset => offset > 0 && offset <= assetLength).Distinct().OrderBy(offset => offset).ToArray();
     }
 
+    private static IReadOnlyDictionary<int, byte[]> ReadChunkWads(
+        ReadOnlySpan<byte> levelWadBytes,
+        IReadOnlyList<DlFileBlock> chunks)
+    {
+        var chunkWads = new Dictionary<int, byte[]>();
+        for (var i = 1; i < chunks.Count; i++)
+        {
+            var bytes = DlLevelWadReader.ReadSectorFileBlock(levelWadBytes, chunks[i]);
+            if (bytes.Length > 0)
+            {
+                chunkWads[i] = bytes;
+            }
+        }
+
+        return chunkWads;
+    }
+
     private static RenderTextureResource AddTexture(
         List<PackedFile> files,
         string packageDirectory,
@@ -1314,6 +1414,23 @@ public static class DlLevelWadRenderPackageBuilder
             _uris[resource.Index] = resource.Uri;
             _sizes[resource.Index] = resource.Size;
             _alpha[resource.Index] = resource.Alpha;
+        }
+
+        public RenderTextureResources Rebased(string textureDirectory)
+        {
+            var result = new RenderTextureResources();
+            var prefix = textureDirectory.Trim().TrimEnd('/');
+            foreach (var (index, uri) in _uris)
+            {
+                var fileName = uri.Split('/').Last();
+                result.Add(new RenderTextureResource(
+                    index,
+                    string.IsNullOrWhiteSpace(prefix) ? fileName : $"{prefix}/{fileName}",
+                    _sizes[index],
+                    _alpha[index]));
+            }
+
+            return result;
         }
     }
 

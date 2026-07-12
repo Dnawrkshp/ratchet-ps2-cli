@@ -37,7 +37,8 @@ public static class UyaLevelWadRenderPackageBuilder
         files.AddRange(buildAssetFiles(new UyaLevelAssetSourceFiles(
             RequireSourceFile(sourceFiles, "assets/asset_header.bin").Bytes,
             RequireSourceFile(sourceFiles, "assets/palette.bin").Bytes,
-            RequireSourceFile(sourceFiles, "assets/asset_wad.bin").Bytes)));
+            RequireSourceFile(sourceFiles, "assets/asset_wad.bin").Bytes,
+            CollectChunkWads(sourceFiles))));
         AddTiming(
             timings,
             "managed.assets-total",
@@ -139,6 +140,34 @@ public static class UyaLevelWadRenderPackageBuilder
         return files.TryGetValue(NormalizePackagePath(path), out var file) ? file : null;
     }
 
+    private static IReadOnlyDictionary<int, byte[]> CollectChunkWads(IReadOnlyDictionary<string, PackedFile> files)
+    {
+        var chunkWads = new Dictionary<int, byte[]>();
+        foreach (var (path, file) in files)
+        {
+            if (TryGetChunkIndex(path, out var chunkIndex) && chunkIndex > 0 && file.Bytes.Length > 0)
+            {
+                chunkWads[chunkIndex] = file.Bytes;
+            }
+        }
+
+        return chunkWads;
+    }
+
+    private static bool TryGetChunkIndex(string path, out int chunkIndex)
+    {
+        chunkIndex = 0;
+        const string prefix = "level_wad/chunks/chunk";
+        const string suffix = ".wad";
+        if (!path.StartsWith(prefix, StringComparison.Ordinal)
+            || !path.EndsWith(suffix, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        return int.TryParse(path[prefix.Length..^suffix.Length], out chunkIndex);
+    }
+
     private static int? ReadLeadingCount(IReadOnlyDictionary<string, PackedFile> files, string path)
     {
         var file = TryGetSourceFile(files, path);
@@ -219,4 +248,5 @@ public static class UyaLevelWadRenderPackageBuilder
 public sealed record UyaLevelAssetSourceFiles(
     byte[] HeaderBytes,
     byte[] PaletteBytes,
-    byte[] AssetWadBytes);
+    byte[] AssetWadBytes,
+    IReadOnlyDictionary<int, byte[]> ChunkWads);

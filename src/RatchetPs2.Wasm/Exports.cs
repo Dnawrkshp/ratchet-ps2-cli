@@ -124,7 +124,8 @@ public static partial class Exports
                 assetFiles.HeaderBytes,
                 assetFiles.PaletteBytes,
                 assetFiles.AssetWadBytes,
-                DlLevelWadRenderPackageBuildOptions.Browser));
+                DlLevelWadRenderPackageBuildOptions.Browser,
+                assetFiles.ChunkWads));
     }
 
     [JSInvokable("ExportMobyGltf")]

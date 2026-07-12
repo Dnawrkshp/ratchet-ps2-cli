@@ -9,7 +9,7 @@ public static class DlMobyInstancesReader
 
     public static bool TryRead(ReadOnlySpan<byte> data, out DlMobyInstances? mobyInstances)
     {
-        if (data.Length < HeaderSize)
+        if (data.Length < HeaderSize || !HasCompleteRecords(data))
         {
             mobyInstances = null;
             return false;
@@ -17,6 +17,18 @@ public static class DlMobyInstancesReader
 
         mobyInstances = Read(data);
         return true;
+    }
+
+    private static bool HasCompleteRecords(ReadOnlySpan<byte> data)
+    {
+        var staticCount = ReadInt32LittleEndian(data, 0x00);
+        if (staticCount < 0)
+        {
+            return false;
+        }
+
+        var recordsLength = (long)staticCount * RecordSize;
+        return recordsLength <= data.Length - HeaderSize;
     }
 
     public static DlMobyInstances Read(ReadOnlySpan<byte> data)
