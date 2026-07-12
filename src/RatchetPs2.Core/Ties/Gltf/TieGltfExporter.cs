@@ -121,14 +121,16 @@ public static class TieGltfExporter
         AddTiming(options, "tie.normals", "Tie normals", normalStart, $"{normalResult.Normals.Count} normals");
 
         var ambientStart = Stopwatch.GetTimestamp();
-        var ambientIndexResult = TieGltfAmbientBuilder.BuildIndices(
-            tie,
-            topology,
-            normalResult.TableNormalTargetMode,
-            positions.Count,
-            flatIndices,
-            normalResult.IndexNormals,
-            normalResult.TableNormalLayout);
+        var ambientIndexResult = profile.UseAmbientIndexAttribute
+            ? TieGltfAmbientBuilder.BuildIndices(
+                tie,
+                topology,
+                normalResult.TableNormalTargetMode,
+                positions.Count,
+                flatIndices,
+                normalResult.IndexNormals,
+                normalResult.TableNormalLayout)
+            : TieGltfAmbientBuilder.Empty;
         AddTiming(
             options,
             "tie.ambient",
@@ -148,6 +150,7 @@ public static class TieGltfExporter
             normalResult.SourceNormalIndexStates,
             profile.SuppressGeneratedNormalFallback,
             profile.UseGeometryWindingRepair,
+            profile.UseLocalInwardGeometryWindingRepair,
             texCoords,
             multipassTexCoords,
             glowColorResult.Colors,

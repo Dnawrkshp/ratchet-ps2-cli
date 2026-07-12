@@ -19,6 +19,11 @@
       "value": "\"DL\" | \"UYA\""
     },
     {
+      "kind": "typeAlias",
+      "name": "WasmByteArray",
+      "value": "Uint8Array | number[] | string"
+    },
+    {
       "kind": "interface",
       "name": "ConvertPifToPngOptions",
       "properties": [
@@ -592,6 +597,320 @@
           "type": "DlGameplayBlock[]"
         }
       ]
+    },
+    {
+      "kind": "typeAlias",
+      "name": "UyaRgb96",
+      "value": "DlRgb96"
+    },
+    {
+      "kind": "typeAlias",
+      "name": "UyaVector3",
+      "value": "DlVector3"
+    },
+    {
+      "kind": "typeAlias",
+      "name": "UyaLevelSettingsChunkPlane",
+      "value": "DlLevelSettingsChunkPlane"
+    },
+    {
+      "kind": "typeAlias",
+      "name": "UyaPvarTables",
+      "value": "DlPvarTables"
+    },
+    {
+      "kind": "interface",
+      "name": "UyaLevelSettings",
+      "properties": [
+        {
+          "name": "backgroundColor",
+          "type": "UyaRgb96"
+        },
+        {
+          "name": "fogColor",
+          "type": "UyaRgb96"
+        },
+        {
+          "name": "fogNearDistance",
+          "type": "number"
+        },
+        {
+          "name": "fogFarDistance",
+          "type": "number"
+        },
+        {
+          "name": "fogNearIntensity",
+          "type": "number"
+        },
+        {
+          "name": "fogFarIntensity",
+          "type": "number"
+        },
+        {
+          "name": "deathHeight",
+          "type": "number"
+        },
+        {
+          "name": "isSphericalWorld",
+          "type": "boolean"
+        },
+        {
+          "name": "sphereCenter",
+          "type": "UyaVector3"
+        },
+        {
+          "name": "shipPosition",
+          "type": "UyaVector3"
+        },
+        {
+          "name": "shipRotationZ",
+          "type": "number"
+        },
+        {
+          "name": "shipPath",
+          "type": "number"
+        },
+        {
+          "name": "shipCameraCuboidStart",
+          "type": "number"
+        },
+        {
+          "name": "shipCameraCuboidEnd",
+          "type": "number"
+        },
+        {
+          "name": "padding58",
+          "type": "number"
+        },
+        {
+          "name": "chunkPlanes",
+          "type": "UyaLevelSettingsChunkPlane[]"
+        },
+        {
+          "name": "coreSoundsCount",
+          "type": "number"
+        },
+        {
+          "name": "rac3ThirdPart",
+          "type": "number"
+        },
+        {
+          "name": "trailingByteLength",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "UyaMobyInstance",
+      "properties": [
+        {
+          "name": "size",
+          "type": "number"
+        },
+        {
+          "name": "mission",
+          "type": "number"
+        },
+        {
+          "name": "unknown8",
+          "type": "number"
+        },
+        {
+          "name": "unknownC",
+          "type": "number"
+        },
+        {
+          "name": "uid",
+          "type": "number"
+        },
+        {
+          "name": "bolts",
+          "type": "number"
+        },
+        {
+          "name": "unknown18",
+          "type": "number"
+        },
+        {
+          "name": "unknown1C",
+          "type": "number"
+        },
+        {
+          "name": "unknown20",
+          "type": "number"
+        },
+        {
+          "name": "unknown24",
+          "type": "number"
+        },
+        {
+          "name": "classId",
+          "type": "number"
+        },
+        {
+          "name": "scale",
+          "type": "number"
+        },
+        {
+          "name": "drawDistance",
+          "type": "number"
+        },
+        {
+          "name": "updateDistance",
+          "type": "number"
+        },
+        {
+          "name": "unused38",
+          "type": "number"
+        },
+        {
+          "name": "unused3C",
+          "type": "number"
+        },
+        {
+          "name": "position",
+          "type": "UyaVector3"
+        },
+        {
+          "name": "rotation",
+          "type": "UyaVector3"
+        },
+        {
+          "name": "group",
+          "type": "number"
+        },
+        {
+          "name": "isRooted",
+          "type": "number"
+        },
+        {
+          "name": "rootedDistance",
+          "type": "number"
+        },
+        {
+          "name": "unknown64",
+          "type": "number"
+        },
+        {
+          "name": "pvarIndex",
+          "type": "number"
+        },
+        {
+          "name": "occlusion",
+          "type": "number"
+        },
+        {
+          "name": "modeBits",
+          "type": "number"
+        },
+        {
+          "name": "color",
+          "type": "UyaRgb96"
+        },
+        {
+          "name": "light",
+          "type": "number"
+        },
+        {
+          "name": "unknown84",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "UyaMobyInstances",
+      "properties": [
+        {
+          "name": "staticCount",
+          "type": "number"
+        },
+        {
+          "name": "spawnableMobyCount",
+          "type": "number"
+        },
+        {
+          "name": "pad8",
+          "type": "number"
+        },
+        {
+          "name": "padC",
+          "type": "number"
+        },
+        {
+          "name": "instances",
+          "type": "UyaMobyInstance[]"
+        },
+        {
+          "name": "trailingByteLength",
+          "type": "number"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "UyaGameplayBlock",
+      "properties": [
+        {
+          "name": "index",
+          "type": "number"
+        },
+        {
+          "name": "headerOffset",
+          "type": "number"
+        },
+        {
+          "name": "pointer",
+          "type": "number"
+        },
+        {
+          "name": "semanticName",
+          "type": "string"
+        },
+        {
+          "name": "payloadLength",
+          "type": "number"
+        },
+        {
+          "name": "payloadBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "levelSettings",
+          "type": "UyaLevelSettings | null"
+        },
+        {
+          "name": "mobyInstances",
+          "type": "UyaMobyInstances | null"
+        }
+      ]
+    },
+    {
+      "kind": "interface",
+      "name": "UyaGameplayBlocks",
+      "properties": [
+        {
+          "name": "kind",
+          "type": "string"
+        },
+        {
+          "name": "headerSize",
+          "type": "number"
+        },
+        {
+          "name": "headerBytes",
+          "type": "Uint8Array"
+        },
+        {
+          "name": "pvarTables",
+          "type": "UyaPvarTables | null"
+        },
+        {
+          "name": "blocks",
+          "type": "UyaGameplayBlock[]"
+        }
+      ]
     }
   ],
   "exports": [
@@ -788,6 +1107,33 @@
       ]
     },
     {
+      "jsMethodName": "unpackUyaLevelWad",
+      "returnType": "Promise<PackedFilePackageResult>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "const result = await DotNet.invokeMethodAsync(",
+        "  \"RatchetPs2.Wasm\",",
+        "  \"UnpackUyaLevelWad\",",
+        "  input",
+        ");",
+        "return {",
+        "  packedBytes: toUint8Array(result.packedBytes),",
+        "  entries: result.entries.map((entry) => ({",
+        "    path: entry.path,",
+        "    offset: entry.offset,",
+        "    length: entry.length,",
+        "    contentType: entry.contentType,",
+        "  })),",
+        "};"
+      ]
+    },
+    {
       "jsMethodName": "exportMobyGltf",
       "returnType": "Promise<PackedFilePackageResult>",
       "parameters": [
@@ -861,6 +1207,23 @@
       ]
     },
     {
+      "dotNetMethodName": "ParseUyaGameplayCore",
+      "jsMethodName": "parseUyaGameplayCore",
+      "returnType": "Promise<UyaGameplayBlocks>",
+      "parameters": [
+        {
+          "name": "gameplayBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "preamble": [
+        "const input = toUint8Array(gameplayBytes);"
+      ],
+      "invokeArguments": [
+        "input"
+      ]
+    },
+    {
       "jsMethodName": "buildDlLevelWadRenderPackage",
       "returnType": "Promise<PackedFilePackageResult>",
       "parameters": [
@@ -885,6 +1248,102 @@
         "    contentType: entry.contentType,",
         "  })),",
         "};"
+      ]
+    },
+    {
+      "jsMethodName": "buildDlLevelWadRenderPackageEnvelope",
+      "returnType": "Promise<WasmByteArray>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "return invokeRatchetPs2JsExport(\"BuildDlLevelWadRenderPackageEnvelope\", input);"
+      ]
+    },
+    {
+      "jsMethodName": "buildUyaLevelWadRenderPackage",
+      "returnType": "Promise<PackedFilePackageResult>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "const result = await DotNet.invokeMethodAsync(",
+        "  \"RatchetPs2.Wasm\",",
+        "  \"BuildUyaLevelWadRenderPackage\",",
+        "  input",
+        ");",
+        "return {",
+        "  packedBytes: toUint8Array(result.packedBytes),",
+        "  entries: result.entries.map((entry) => ({",
+        "    path: entry.path,",
+        "    offset: entry.offset,",
+        "    length: entry.length,",
+        "    contentType: entry.contentType,",
+        "  })),",
+        "};"
+      ]
+    },
+    {
+      "jsMethodName": "buildUyaLevelWadRenderPackageEnvelope",
+      "returnType": "Promise<WasmByteArray>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "return invokeRatchetPs2JsExport(\"BuildUyaLevelWadRenderPackageEnvelope\", input);"
+      ]
+    },
+    {
+      "jsMethodName": "buildUyaCustomMapZipRenderPackage",
+      "returnType": "Promise<PackedFilePackageResult>",
+      "parameters": [
+        {
+          "name": "zipBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(zipBytes);",
+        "const result = await DotNet.invokeMethodAsync(",
+        "  \"RatchetPs2.Wasm\",",
+        "  \"BuildUyaCustomMapZipRenderPackage\",",
+        "  input",
+        ");",
+        "return {",
+        "  packedBytes: toUint8Array(result.packedBytes),",
+        "  entries: result.entries.map((entry) => ({",
+        "    path: entry.path,",
+        "    offset: entry.offset,",
+        "    length: entry.length,",
+        "    contentType: entry.contentType,",
+        "  })),",
+        "};"
+      ]
+    },
+    {
+      "jsMethodName": "buildUyaCustomMapZipRenderPackageEnvelope",
+      "returnType": "Promise<WasmByteArray>",
+      "parameters": [
+        {
+          "name": "zipBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(zipBytes);",
+        "return invokeRatchetPs2JsExport(\"BuildUyaCustomMapZipRenderPackageEnvelope\", input);"
       ]
     }
   ]

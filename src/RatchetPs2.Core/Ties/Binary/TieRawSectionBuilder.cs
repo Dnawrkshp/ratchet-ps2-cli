@@ -33,9 +33,24 @@ internal static class TieRawSectionBuilder
         }
 
         MarkOffset(labelsByOffset, bytes, header.VertexNormalsOffset, "vertex-normals");
+        var remapEnd = header.ShadersOffset > 0
+            ? Math.Min(CheckedOffset(header.ShadersOffset, "shader table"), bytes.Length)
+            : bytes.Length;
         for (var i = 0; i < header.RgbaRemapOffsets.Length; i++)
         {
-            MarkOffset(labelsByOffset, bytes, header.RgbaRemapOffsets[i], $"rgba-remap-{i}");
+            if (TieVertexNormalReader.TryResolveRgbaRemapChunkOffset(
+                    bytes,
+                    header,
+                    header.RgbaRemapOffsets[i],
+                    remapEnd,
+                    out var rgbaRemapOffset))
+            {
+                MarkOffset(
+                    labelsByOffset,
+                    bytes,
+                    checked((uint)rgbaRemapOffset),
+                    $"rgba-remap-{i}");
+            }
         }
 
         for (var i = 0; i < header.GlowRemapOffsets.Length; i++)

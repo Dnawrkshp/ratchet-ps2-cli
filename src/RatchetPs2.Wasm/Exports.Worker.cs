@@ -3,6 +3,7 @@ using System.Runtime.InteropServices.JavaScript;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Runtime.Versioning;
+using RatchetPs2.Core.Wad.Models;
 
 namespace RatchetPs2.Wasm;
 
@@ -26,11 +27,39 @@ public static partial class Exports
     }
 
     [JSExport]
+    public static string ParseUyaGameplayCoreJson(byte[] gameplayBytes)
+    {
+        ArgumentNullException.ThrowIfNull(gameplayBytes);
+
+        return JsonSerializer.Serialize(ParseUyaGameplayCore(gameplayBytes), WorkerJsonOptions);
+    }
+
+    [JSExport]
     public static byte[] BuildDlLevelWadRenderPackageEnvelope(byte[] levelWadBytes)
     {
         ArgumentNullException.ThrowIfNull(levelWadBytes);
 
-        var package = BuildDlLevelWadRenderPackage(levelWadBytes);
+        return BuildRenderPackageEnvelope(BuildDlLevelWadRenderPackage(levelWadBytes));
+    }
+
+    [JSExport]
+    public static byte[] BuildUyaLevelWadRenderPackageEnvelope(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        return BuildRenderPackageEnvelope(BuildUyaLevelWadRenderPackage(levelWadBytes));
+    }
+
+    [JSExport]
+    public static byte[] BuildUyaCustomMapZipRenderPackageEnvelope(byte[] zipBytes)
+    {
+        ArgumentNullException.ThrowIfNull(zipBytes);
+
+        return BuildRenderPackageEnvelope(BuildUyaCustomMapZipRenderPackage(zipBytes));
+    }
+
+    private static byte[] BuildRenderPackageEnvelope(PackedFilePackage package)
+    {
         var entriesJson = JsonSerializer.SerializeToUtf8Bytes(package.Entries, WorkerJsonOptions);
         var result = new byte[4 + entriesJson.Length + package.PackedBytes.Length];
         BinaryPrimitives.WriteInt32LittleEndian(result.AsSpan(0, 4), entriesJson.Length);

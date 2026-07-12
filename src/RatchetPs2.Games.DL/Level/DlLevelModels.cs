@@ -1,4 +1,5 @@
 using RatchetPs2.Core.IO;
+using RatchetPs2.Core.Wad.Models;
 
 namespace RatchetPs2.Games.DL.Level;
 
@@ -118,42 +119,10 @@ public sealed record DlLooseLevelWad(
 
 public sealed record DlLevelWadPackage(
     DlLevelWad LevelWad,
-    IReadOnlyList<DlLevelWadFile> Files)
+    IReadOnlyList<PackedFile> Files)
 {
     public PackedFilePackage ToPackedPackage()
     {
-        var entries = new PackedFileEntry[Files.Count];
-        var totalLength = 0;
-
-        for (var i = 0; i < Files.Count; i++)
-        {
-            var file = Files[i];
-            entries[i] = new PackedFileEntry(file.Path, totalLength, file.Bytes.Length, file.ContentType);
-            totalLength = checked(totalLength + file.Bytes.Length);
-        }
-
-        var packedBytes = new byte[totalLength];
-        for (var i = 0; i < Files.Count; i++)
-        {
-            var file = Files[i];
-            file.Bytes.AsSpan().CopyTo(packedBytes.AsSpan(entries[i].Offset, file.Bytes.Length));
-        }
-
-        return new PackedFilePackage(packedBytes, entries);
+        return PackedFilePackageBuilder.Pack(Files);
     }
 }
-
-public sealed record DlLevelWadFile(
-    string Path,
-    byte[] Bytes,
-    string ContentType);
-
-public sealed record PackedFilePackage(
-    byte[] PackedBytes,
-    IReadOnlyList<PackedFileEntry> Entries);
-
-public sealed record PackedFileEntry(
-    string Path,
-    int Offset,
-    int Length,
-    string ContentType);

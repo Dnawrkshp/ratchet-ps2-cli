@@ -3,12 +3,15 @@ using System.Globalization;
 using System.Text.Json;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.IO;
 using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Shrubs;
 using RatchetPs2.Core.Skyboxes;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Ties;
+using RatchetPs2.Core.Wad;
+using RatchetPs2.Core.Wad.Models;
 
 namespace RatchetPs2.Games.DL.Level;
 
@@ -21,6 +24,7 @@ public sealed record DlLevelWadRenderPackageBuildOptions
         IncludeDiagnostics = false,
         MinifyGltf = true,
         GltfMetadataMode = GltfExportMetadataMode.RuntimeOnly,
+        TfragLodIndex = 0,
         MobyLodIndex = 0
     };
 
@@ -28,6 +32,7 @@ public sealed record DlLevelWadRenderPackageBuildOptions
     public bool IncludeDiagnostics { get; init; } = true;
     public bool MinifyGltf { get; init; }
     public GltfExportMetadataMode GltfMetadataMode { get; init; } = GltfExportMetadataMode.Full;
+    public int? TfragLodIndex { get; init; }
     public int? MobyLodIndex { get; init; }
 }
 
@@ -55,7 +60,7 @@ public static class DlLevelWadRenderPackageBuilder
             throw new InvalidDataException("DL level WAD does not contain a core level payload.");
         }
 
-        var files = new List<DlLevelWadFile>();
+        var files = new List<PackedFile>();
         var coreSegmentStart = Stopwatch.GetTimestamp();
         var coreSegments = DlCoreLevelSegmentReader.Read(coreLevelBytes);
         AddTiming(
@@ -88,6 +93,7 @@ public static class DlLevelWadRenderPackageBuilder
         var assetsStart = Stopwatch.GetTimestamp();
         BuildAssets(
             files,
+            GameId.DL,
             levelWad.Level,
             assetHeader.PayloadBytes,
             palette.PayloadBytes,
@@ -129,8 +135,62 @@ public static class DlLevelWadRenderPackageBuilder
         return PackFiles(files);
     }
 
+    public static IReadOnlyList<PackedFile> BuildAssetFiles(
+        GameId gameId,
+        int levelIndex,
+        byte[] headerBytes,
+        byte[] paletteBytes,
+        byte[] assetBytes,
+        DlLevelWadRenderPackageBuildOptions? options = null)
+    {
+        ArgumentNullException.ThrowIfNull(headerBytes);
+        ArgumentNullException.ThrowIfNull(paletteBytes);
+        ArgumentNullException.ThrowIfNull(assetBytes);
+
+        options ??= DlLevelWadRenderPackageBuildOptions.Default;
+        var assetWadWasCompressed = BinaryMagic.IsWad(assetBytes);
+        var assetPayloadBytes = assetWadWasCompressed
+            ? WadCompression.Decompress(assetBytes)
+            : assetBytes;
+        var files = new List<PackedFile>();
+        var manifest = new Dictionary<string, object?>
+        {
+            ["Game"] = gameId.ToString(),
+            ["Source"] = "loose_asset_files",
+            ["RenderPackageVersion"] = 1,
+            ["Level"] = levelIndex,
+            ["AssetWadWasCompressed"] = assetWadWasCompressed,
+            ["AssetWadRawLength"] = assetBytes.Length,
+            ["AssetWadPayloadLength"] = assetPayloadBytes.Length
+        };
+        var timings = new List<RenderPackageTiming>();
+        var assetsStart = Stopwatch.GetTimestamp();
+
+        BuildAssets(
+            files,
+            gameId,
+            levelIndex,
+            headerBytes,
+            paletteBytes,
+            assetPayloadBytes,
+            manifest,
+            timings,
+            options);
+
+        AddTiming(
+            timings,
+            "managed.assets-total",
+            "Asset package build",
+            assetsStart,
+            $"{files.Count} files");
+        manifest["PerformanceTimings"] = timings;
+        AddJsonFile(files, "assets/render_manifest.json", manifest);
+        return files;
+    }
+
     private static void BuildAssets(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         int levelIndex,
         byte[] headerBytes,
         byte[] paletteBytes,
@@ -153,6 +213,7 @@ public static class DlLevelWadRenderPackageBuilder
         var tieTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.TieTextureOffset, header.TieTextureCount);
         var shrubTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.ShrubTextureOffset, header.ShrubTextureCount);
         var fxDefinitions = DlAssetReader.ReadFxTextureDefinitions(headerBytes, header.FxTextureDefOffset, header.FxTextureCount);
+        var textureIsSwizzled = ShouldSwizzleAssetTextures(gameId);
         var knownAssetOffsets = CollectKnownAssetOffsets(
             header,
             assetBytes.Length,
@@ -162,7 +223,7 @@ public static class DlLevelWadRenderPackageBuilder
         var gltfExports = new List<GltfExportRoute>();
 
         var skyboxStart = Stopwatch.GetTimestamp();
-        gltfExports.Add(BuildSkybox(files, levelIndex, header, assetBytes, knownAssetOffsets, options));
+        gltfExports.Add(BuildSkybox(files, gameId, levelIndex, header, assetBytes, knownAssetOffsets, options));
         AddTiming(
             timings,
             "managed.assets.skybox",
@@ -174,12 +235,14 @@ public static class DlLevelWadRenderPackageBuilder
         var tfragTimings = new List<RenderPackageTiming>();
         gltfExports.Add(BuildTfrag(
             files,
+            gameId,
             header,
             tfragTextureDefinitions,
             paletteBytes,
             assetBytes,
             knownAssetOffsets,
             tfragTimings,
+            textureIsSwizzled,
             options));
         AddTiming(
             timings,
@@ -193,6 +256,7 @@ public static class DlLevelWadRenderPackageBuilder
         var mobyRouteStart = gltfExports.Count;
         gltfExports.AddRange(BuildMobyGltfs(
             files,
+            gameId,
             mobyDefinitions,
             mobyTextureDefinitions,
             paletteBytes,
@@ -200,6 +264,7 @@ public static class DlLevelWadRenderPackageBuilder
             header.TextureDataOffset,
             gsStashDefinitions,
             knownAssetOffsets,
+            textureIsSwizzled,
             options));
         AddTiming(
             timings,
@@ -213,6 +278,7 @@ public static class DlLevelWadRenderPackageBuilder
         var tieTimingAggregates = new Dictionary<string, TimingAggregate>(StringComparer.Ordinal);
         gltfExports.AddRange(BuildTieGltfs(
             files,
+            gameId,
             tieDefinitions,
             tieTextureDefinitions,
             paletteBytes,
@@ -225,6 +291,7 @@ public static class DlLevelWadRenderPackageBuilder
                 label,
                 durationMs,
                 detail),
+            textureIsSwizzled,
             options));
         AddTiming(
             timings,
@@ -238,12 +305,14 @@ public static class DlLevelWadRenderPackageBuilder
         var shrubRouteStart = gltfExports.Count;
         gltfExports.AddRange(BuildShrubGltfs(
             files,
+            gameId,
             shrubDefinitions,
             shrubTextureDefinitions,
             paletteBytes,
             assetBytes,
             header.TextureDataOffset,
             knownAssetOffsets,
+            textureIsSwizzled,
             options));
         AddTiming(
             timings,
@@ -253,7 +322,7 @@ public static class DlLevelWadRenderPackageBuilder
             SummarizeRoutes(gltfExports.Skip(shrubRouteStart)));
 
         var fxStart = Stopwatch.GetTimestamp();
-        BuildFxTextures(files, fxDefinitions, assetBytes, header.FxTextureDataOffset);
+        BuildFxTextures(files, fxDefinitions, assetBytes, header.FxTextureDataOffset, textureIsSwizzled);
         AddTiming(
             timings,
             "managed.assets.fx-textures",
@@ -263,6 +332,8 @@ public static class DlLevelWadRenderPackageBuilder
 
         var assetManifest = new Dictionary<string, object?>
         {
+            ["Game"] = gameId.ToString(),
+            ["TextureIsSwizzled"] = textureIsSwizzled,
             ["Header"] = header,
             ["HeaderLength"] = headerBytes.Length,
             ["HeaderTables"] = new
@@ -284,16 +355,19 @@ public static class DlLevelWadRenderPackageBuilder
 
         AddJsonFile(files, "assets/manifest.json", assetManifest);
         rootManifest["AssetHeader"] = header;
+        rootManifest["TextureIsSwizzled"] = textureIsSwizzled;
     }
 
     private static GltfExportRoute BuildTfrag(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         DlAssetHeader header,
         IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
         byte[] paletteBytes,
         byte[] assetBytes,
         IReadOnlyList<int> knownAssetOffsets,
         List<RenderPackageTiming> timings,
+        bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
     {
         const string sourcePath = "tfrag/tfrag.bin";
@@ -302,10 +376,10 @@ public static class DlLevelWadRenderPackageBuilder
         const string diagnosticsPath = "tfrag/tfrag.diagnostics.json";
         const string packageRoot = "assets/tfrag";
 
-        var tfragBytes = DlAssetReader.ReadAssetSlice(
+        var tfragBytes = ReadAssetRange(
             assetBytes,
             header.TerrainOffset,
-            knownAssetOffsets,
+            header.OcclusionOffset,
             allowZeroOffset: true);
         if (options.IncludeSourceFiles)
         {
@@ -325,7 +399,8 @@ public static class DlLevelWadRenderPackageBuilder
                 definition,
                 paletteBytes,
                 assetBytes,
-                header.TextureDataOffset);
+                header.TextureDataOffset,
+                isSwizzled: textureIsSwizzled);
             AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources, TfragTextureAlpha.FullOpacityAlpha);
         }
 
@@ -338,13 +413,14 @@ public static class DlLevelWadRenderPackageBuilder
                 new TfragGltfExportOptions
                 {
                     BufferFileName = "tfrag.buffer.bin",
-                    GameLabel = GameId.DL.ToString(),
+                    GameLabel = gameId.ToString(),
                     ExternalTextureUris = textureResources.Uris,
                     ExternalTextureSizes = textureResources.Sizes,
                     ExternalTextureAlpha = textureResources.Alpha,
                     IncludeDiagnostics = options.IncludeDiagnostics,
                     Minify = options.MinifyGltf,
                     MetadataMode = options.GltfMetadataMode,
+                    LodIndex = options.TfragLodIndex,
                     TimingSink = (key, label, durationMs, detail) => AddTiming(
                         timings,
                         $"managed.{key}",
@@ -371,7 +447,8 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static GltfExportRoute BuildSkybox(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         int levelIndex,
         DlAssetHeader header,
         byte[] assetBytes,
@@ -393,7 +470,7 @@ public static class DlLevelWadRenderPackageBuilder
         {
             using var input = new MemoryStream(skyboxBytes, writable: false);
             var skybox = SkyboxReader.Read(input);
-            var profile = SkyboxGameProfile.ForGame(GameId.DL);
+            var profile = SkyboxGameProfile.ForGame(gameId);
             var export = SkyboxGltfExporter.Export(
                 skybox,
                 "skybox.gltf",
@@ -428,7 +505,8 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static IEnumerable<GltfExportRoute> BuildMobyGltfs(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         IReadOnlyList<DlAssetModelDefinition> modelDefinitions,
         IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
         byte[] paletteBytes,
@@ -436,6 +514,7 @@ public static class DlLevelWadRenderPackageBuilder
         int textureDataOffset,
         IReadOnlyList<DlAssetMipmapDefinition> gsStashDefinitions,
         IReadOnlyList<int> knownAssetOffsets,
+        bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
     {
         foreach (var definition in modelDefinitions)
@@ -458,30 +537,31 @@ public static class DlLevelWadRenderPackageBuilder
                 continue;
             }
 
-            var textureResources = new RenderTextureResources();
-            var relativeTextureIndex = 0;
-            foreach (var textureId in definition.TextureIds)
-            {
-                if (textureId == 0xff || textureId >= textureDefinitions.Count)
-                {
-                    continue;
-                }
-
-                var texture = DlAssetReader.BuildAssetTexture(
-                    "moby",
-                    relativeTextureIndex,
-                    textureDefinitions[textureId],
-                    paletteBytes,
-                    assetBytes,
-                    textureDataOffset,
-                    gsStashDefinitions);
-                AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
-                relativeTextureIndex++;
-            }
-
             GltfExportRoute route;
             try
             {
+                var textureResources = new RenderTextureResources();
+                var relativeTextureIndex = 0;
+                foreach (var textureId in definition.TextureIds)
+                {
+                    if (textureId == 0xff || textureId >= textureDefinitions.Count)
+                    {
+                        continue;
+                    }
+
+                    var texture = DlAssetReader.BuildAssetTexture(
+                        "moby",
+                        relativeTextureIndex,
+                        textureDefinitions[textureId],
+                        paletteBytes,
+                        assetBytes,
+                        textureDataOffset,
+                        gsStashDefinitions,
+                        isSwizzled: textureIsSwizzled);
+                    AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
+                    relativeTextureIndex++;
+                }
+
                 using var input = new MemoryStream(mobyBytes, writable: false);
                 var export = MobyGltfExporter.Export(
                     input,
@@ -489,7 +569,7 @@ public static class DlLevelWadRenderPackageBuilder
                     new MobyGltfExportOptions
                     {
                         SkipAnimationSequences = true,
-                        AnimationFormat = MobyAnimationFormat.Compact,
+                        AnimationFormat = GetMobyAnimationFormat(gameId),
                         LodIndex = options.MobyLodIndex,
                         ExternalTextureUris = textureResources.Uris,
                         ExternalTextureSizes = textureResources.Sizes,
@@ -508,7 +588,7 @@ public static class DlLevelWadRenderPackageBuilder
                     $"{relativeDirectory}/moby.buffer.bin",
                     options.IncludeDiagnostics ? $"{relativeDirectory}/moby.diagnostics.json" : null);
             }
-            catch (Exception ex) when (IsGltfExportFailure(ex))
+            catch (Exception ex) when (IsAssetTextureFailure(ex))
             {
                 route = GltfExportRoute.Failed("moby", definition.ModelId, sourcePath, gltfPath, ex.Message);
             }
@@ -518,7 +598,8 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static IEnumerable<GltfExportRoute> BuildTieGltfs(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         IReadOnlyList<DlAssetModelDefinition> modelDefinitions,
         IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
         byte[] paletteBytes,
@@ -526,6 +607,7 @@ public static class DlLevelWadRenderPackageBuilder
         int textureDataOffset,
         IReadOnlyList<int> knownAssetOffsets,
         Action<string, string, double, string?>? timingSink,
+        bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
     {
         foreach (var definition in modelDefinitions)
@@ -563,7 +645,8 @@ public static class DlLevelWadRenderPackageBuilder
                     textureDefinitions[textureId],
                     paletteBytes,
                     assetBytes,
-                    textureDataOffset);
+                    textureDataOffset,
+                    isSwizzled: textureIsSwizzled);
                 AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
                 relativeTextureIndex++;
             }
@@ -579,7 +662,7 @@ public static class DlLevelWadRenderPackageBuilder
                     {
                         LodIndex = 0,
                         BufferFileName = "tie.buffer.bin",
-                        GameProfile = TieGameProfile.ForGame(GameId.DL),
+                        GameProfile = TieGameProfile.ForGame(gameId),
                         ExternalTextureUris = textureResources.Uris,
                         ExternalTextureSizes = textureResources.Sizes,
                         ExternalTextureAlpha = textureResources.Alpha,
@@ -610,13 +693,15 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static IEnumerable<GltfExportRoute> BuildShrubGltfs(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
+        GameId gameId,
         IReadOnlyList<DlAssetShrubDefinition> shrubDefinitions,
         IReadOnlyList<DlAssetTextureDefinition> textureDefinitions,
         byte[] paletteBytes,
         byte[] assetBytes,
         int textureDataOffset,
         IReadOnlyList<int> knownAssetOffsets,
+        bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
     {
         foreach (var definition in shrubDefinitions)
@@ -654,7 +739,8 @@ public static class DlLevelWadRenderPackageBuilder
                     textureDefinitions[textureId],
                     paletteBytes,
                     assetBytes,
-                    textureDataOffset);
+                    textureDataOffset,
+                    isSwizzled: textureIsSwizzled);
                 AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
                 relativeTextureIndex++;
             }
@@ -681,7 +767,7 @@ public static class DlLevelWadRenderPackageBuilder
                     new ShrubGltfExportOptions
                     {
                         BufferFileName = "shrub.buffer.bin",
-                        GameLabel = GameId.DL.ToString(),
+                        GameLabel = gameId.ToString(),
                         ExternalTextureUris = textureResources.Uris,
                         ExternalTextureSizes = textureResources.Sizes,
                         ExternalTextureAlpha = textureResources.Alpha,
@@ -714,36 +800,60 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static void BuildFxTextures(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         IReadOnlyList<DlFxTextureDefinition> fxDefinitions,
         byte[] assetBytes,
-        int fxTextureDataOffset)
+        int fxTextureDataOffset,
+        bool textureIsSwizzled)
     {
         var textures = new List<object>(fxDefinitions.Count);
+        var errors = new List<object>();
         foreach (var definition in fxDefinitions)
         {
-            var texture = DlAssetReader.BuildFxTexture(definition, assetBytes, fxTextureDataOffset);
-            AddTexture(files, "assets/fx/textures", "textures", texture, null);
-            textures.Add(new
+            try
             {
-                definition.Index,
-                Path = $"fx/textures/tex.{definition.Index:0000}.png",
-                definition.Width,
-                definition.Height,
-                definition.PaletteOffset,
-                definition.TextureOffset
-            });
+                var texture = DlAssetReader.BuildFxTexture(
+                    definition,
+                    assetBytes,
+                    fxTextureDataOffset,
+                    isSwizzled: textureIsSwizzled);
+                AddTexture(files, "assets/fx/textures", "textures", texture, null);
+                textures.Add(new
+                {
+                    definition.Index,
+                    Path = $"fx/textures/tex.{definition.Index:0000}.png",
+                    definition.Width,
+                    definition.Height,
+                    definition.PaletteOffset,
+                    definition.TextureOffset
+                });
+            }
+            catch (Exception ex) when (IsAssetTextureFailure(ex))
+            {
+                errors.Add(new
+                {
+                    definition.Index,
+                    definition.Width,
+                    definition.Height,
+                    definition.PaletteOffset,
+                    definition.TextureOffset,
+                    Error = ex.Message
+                });
+            }
         }
 
         AddJsonFile(files, "assets/fx/manifest.json", new
         {
             TextureCount = fxDefinitions.Count,
-            Textures = textures
+            WrittenTextureCount = textures.Count,
+            ErrorCount = errors.Count,
+            Textures = textures,
+            Errors = errors
         });
     }
 
     private static void BuildWorldInstances(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         byte[] worldBytes,
         IDictionary<string, object?> rootManifest)
     {
@@ -782,7 +892,7 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static void AddWorldChildManifests(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         DlWorldInstances world,
         IReadOnlyList<WorldSlotRoute> slotRoutes)
     {
@@ -901,7 +1011,7 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static RenderTextureResource AddTexture(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         string packageDirectory,
         string gltfTextureDirectory,
         DlNormalizedTexture texture,
@@ -932,6 +1042,23 @@ public static class DlLevelWadRenderPackageBuilder
             metadata.Alpha);
         resources?.Add(resource);
         return resource;
+    }
+
+    private static byte[] ReadAssetRange(
+        byte[] assetBytes,
+        int offset,
+        int endOffset,
+        bool allowZeroOffset = false)
+    {
+        if (offset < 0 || (offset == 0 && !allowZeroOffset) || offset >= assetBytes.Length)
+        {
+            return [];
+        }
+
+        var end = endOffset > offset && endOffset <= assetBytes.Length
+            ? endOffset
+            : assetBytes.Length;
+        return assetBytes.AsSpan(offset, end - offset).ToArray();
     }
 
     private static TextureMetadata ReadPngMetadata(byte[] bytes)
@@ -979,6 +1106,18 @@ public static class DlLevelWadRenderPackageBuilder
         return headerOffset is 0x00 or 0x04 or 0x08 or 0x0c or 0x10 or 0x14 or 0x18 or 0x1c or 0x20;
     }
 
+    private static MobyAnimationFormat GetMobyAnimationFormat(GameId gameId)
+    {
+        return gameId == GameId.DL
+            ? MobyAnimationFormat.Compact
+            : MobyAnimationFormat.Standard;
+    }
+
+    private static bool ShouldSwizzleAssetTextures(GameId gameId)
+    {
+        return gameId == GameId.DL;
+    }
+
     private static bool IsGltfExportFailure(Exception ex)
     {
         return ex is ArgumentException
@@ -987,13 +1126,19 @@ public static class DlLevelWadRenderPackageBuilder
             or NotSupportedException;
     }
 
-    private static void AddJsonFile(List<DlLevelWadFile> files, string path, object value)
+    private static bool IsAssetTextureFailure(Exception ex)
+    {
+        return IsGltfExportFailure(ex)
+            || ex is OverflowException;
+    }
+
+    private static void AddJsonFile(List<PackedFile> files, string path, object value)
     {
         AddFile(files, path, JsonSerializer.SerializeToUtf8Bytes(value, JsonOptions), "application/json");
     }
 
     private static void AddOptionalDiagnostics(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         string path,
         byte[] bytes,
         DlLevelWadRenderPackageBuildOptions options)
@@ -1075,7 +1220,7 @@ public static class DlLevelWadRenderPackageBuilder
     }
 
     private static void AddFile(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         string path,
         byte[] bytes,
         string? contentType = null)
@@ -1085,29 +1230,12 @@ public static class DlLevelWadRenderPackageBuilder
             return;
         }
 
-        files.Add(new DlLevelWadFile(path, bytes, contentType ?? GetContentType(path)));
+        files.Add(new PackedFile(path, bytes, contentType ?? GetContentType(path)));
     }
 
-    private static PackedFilePackage PackFiles(IReadOnlyList<DlLevelWadFile> files)
+    private static PackedFilePackage PackFiles(IReadOnlyList<PackedFile> files)
     {
-        var entries = new PackedFileEntry[files.Count];
-        var totalLength = 0;
-
-        for (var i = 0; i < files.Count; i++)
-        {
-            var file = files[i];
-            entries[i] = new PackedFileEntry(file.Path, totalLength, file.Bytes.Length, file.ContentType);
-            totalLength = checked(totalLength + file.Bytes.Length);
-        }
-
-        var packedBytes = new byte[totalLength];
-        for (var i = 0; i < files.Count; i++)
-        {
-            var file = files[i];
-            file.Bytes.AsSpan().CopyTo(packedBytes.AsSpan(entries[i].Offset, file.Bytes.Length));
-        }
-
-        return new PackedFilePackage(packedBytes, entries);
+        return PackedFilePackageBuilder.Pack(files);
     }
 
     private static string GetContentType(string path)

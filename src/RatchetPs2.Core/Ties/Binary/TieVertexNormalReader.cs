@@ -10,8 +10,13 @@ internal static class TieVertexNormalReader
     private const int VertexNormalRemapNormalIndexMask = 0x3FFF;
     private const int VertexNormalRemapTargetIndexMask = 0x3FFC;
 
-    public static List<TieVertexNormal> Read(byte[] bytes, TieClassHeader header)
+    public static List<TieVertexNormal> Read(
+        byte[] bytes,
+        TieClassHeader header,
+        TieClassReadOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         if (header.VertexNormalsOffset == 0 || header.VertexNormalsCount <= 0)
         {
             return [];
@@ -19,14 +24,20 @@ internal static class TieVertexNormalReader
 
         var count = header.VertexNormalsCount;
         var offset = CheckedOffset(header.VertexNormalsOffset, "vertex normals");
+        var headerSize = options.VertexNormalHeaderSize;
+        if (headerSize < 0)
+        {
+            throw new InvalidDataException($"Vertex normal header size cannot be negative: {headerSize}.");
+        }
+
         EnsureRange(
             bytes,
             offset,
-            VertexNormalHeaderSize + count * VertexNormalRecordSize,
+            headerSize + count * VertexNormalRecordSize,
             "vertex normals");
 
         var normals = new List<TieVertexNormal>(count);
-        var recordOffset = offset + VertexNormalHeaderSize;
+        var recordOffset = offset + headerSize;
         for (var i = 0; i < count; i++)
         {
             var normalOffset = recordOffset + i * VertexNormalRecordSize;
@@ -88,8 +99,13 @@ internal static class TieVertexNormalReader
                 continue;
             }
 
-            var chunkOffset = checked(normalOffset + header.RgbaRemapOffsets[topology.LodIndex]);
-            if (!TryGetNormalRemapChunkSize(bytes, chunkOffset, end, out var payloadSize))
+            if (!TryResolveRgbaRemapChunkOffset(
+                    bytes,
+                    header,
+                    header.RgbaRemapOffsets[topology.LodIndex],
+                    end,
+                    out var chunkOffset)
+                || !TryGetNormalRemapChunkSize(bytes, chunkOffset, end, out var payloadSize))
             {
                 continue;
             }
@@ -123,6 +139,38 @@ internal static class TieVertexNormalReader
         }
 
         return remaps;
+    }
+
+    internal static bool TryResolveRgbaRemapChunkOffset(
+        byte[] bytes,
+        TieClassHeader header,
+        ushort rawOffset,
+        int end,
+        out int chunkOffset)
+    {
+        chunkOffset = 0;
+        if (rawOffset == 0)
+        {
+            return false;
+        }
+
+        var normalOffset = CheckedOffset(header.VertexNormalsOffset, "vertex normals");
+        var relativeOffset = checked(normalOffset + rawOffset);
+        if (TryGetNormalRemapChunkSize(bytes, relativeOffset, end, out _))
+        {
+            chunkOffset = relativeOffset;
+            return true;
+        }
+
+        var absoluteOffset = rawOffset;
+        if (absoluteOffset != relativeOffset
+            && TryGetNormalRemapChunkSize(bytes, absoluteOffset, end, out _))
+        {
+            chunkOffset = absoluteOffset;
+            return true;
+        }
+
+        return false;
     }
 
     private static bool TryGetNormalRemapChunkSize(

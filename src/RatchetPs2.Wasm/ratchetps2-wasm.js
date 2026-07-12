@@ -160,6 +160,57 @@ function toUint8Array(value) {
   throw new TypeError("Expected Uint8Array or ArrayBuffer.");
 }
 
+let assemblyExportsPromise = null;
+
+async function getAssemblyExports() {
+  await ensureStarted();
+
+  if (!assemblyExportsPromise) {
+    const runtime = globalThis.Blazor?.runtime;
+    if (!runtime?.getAssemblyExports) {
+      throw new Error("Blazor runtime does not expose getAssemblyExports.");
+    }
+
+    assemblyExportsPromise = runtime.getAssemblyExports("RatchetPs2.Wasm");
+  }
+
+  return assemblyExportsPromise;
+}
+
+async function invokeRatchetPs2JsExport(methodName, ...args) {
+  const exports = await getAssemblyExports();
+  const method = findExportedMethod(exports, methodName);
+  if (!method) {
+    throw new Error(`RatchetPs2.Wasm JS export '${methodName}' is not available.`);
+  }
+
+  return method(...args);
+}
+
+function findExportedMethod(exports, methodName) {
+  const stack = [exports];
+  const seen = new Set();
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (!value || typeof value !== "object" || seen.has(value)) {
+      continue;
+    }
+
+    seen.add(value);
+    if (typeof value[methodName] === "function") {
+      return value[methodName];
+    }
+
+    for (const child of Object.values(value)) {
+      if (child && typeof child === "object") {
+        stack.push(child);
+      }
+    }
+  }
+
+  return null;
+}
+
 export async function initializeRatchetPs2Wasm(options = {}) {
   configureRatchetPs2Wasm(options);
   await ensureStarted();
@@ -272,6 +323,26 @@ export async function unpackDlLevelWad(levelWadBytes) {
   };
 }
 
+export async function unpackUyaLevelWad(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "UnpackUyaLevelWad",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
 export async function exportMobyGltf(mobyBytes, options = {}) {
   await ensureStarted();
 
@@ -320,6 +391,17 @@ export async function parseDlGameplayMission(gameplayBytes) {
   );
 }
 
+export async function parseUyaGameplayCore(gameplayBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(gameplayBytes);
+  return DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "ParseUyaGameplayCore",
+    input
+  );
+}
+
 export async function buildDlLevelWadRenderPackage(levelWadBytes) {
   await ensureStarted();
 
@@ -338,4 +420,65 @@ export async function buildDlLevelWadRenderPackage(levelWadBytes) {
       contentType: entry.contentType,
     })),
   };
+}
+
+export async function buildDlLevelWadRenderPackageEnvelope(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  return invokeRatchetPs2JsExport("BuildDlLevelWadRenderPackageEnvelope", input);
+}
+
+export async function buildUyaLevelWadRenderPackage(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "BuildUyaLevelWadRenderPackage",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
+export async function buildUyaLevelWadRenderPackageEnvelope(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  return invokeRatchetPs2JsExport("BuildUyaLevelWadRenderPackageEnvelope", input);
+}
+
+export async function buildUyaCustomMapZipRenderPackage(zipBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(zipBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "BuildUyaCustomMapZipRenderPackage",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
+export async function buildUyaCustomMapZipRenderPackageEnvelope(zipBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(zipBytes);
+  return invokeRatchetPs2JsExport("BuildUyaCustomMapZipRenderPackageEnvelope", input);
 }

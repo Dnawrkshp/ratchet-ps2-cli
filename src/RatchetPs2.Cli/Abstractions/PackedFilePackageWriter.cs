@@ -1,4 +1,5 @@
 using System.Text.Json;
+using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
 
 namespace RatchetPs2.Cli.Abstractions;
@@ -13,10 +14,17 @@ internal static class PackedFilePackageWriter
     public static void WriteFiles(DlLevelWadPackage package, DirectoryInfo outputDirectory)
     {
         ArgumentNullException.ThrowIfNull(package);
+
+        WriteFiles(package.Files, outputDirectory);
+    }
+
+    public static void WriteFiles(IReadOnlyList<PackedFile> files, DirectoryInfo outputDirectory)
+    {
+        ArgumentNullException.ThrowIfNull(files);
         ArgumentNullException.ThrowIfNull(outputDirectory);
 
         outputDirectory.Create();
-        foreach (var file in package.Files)
+        foreach (var file in files)
         {
             var outputPath = CombineSafe(outputDirectory.FullName, file.Path);
             Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);

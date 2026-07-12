@@ -429,7 +429,9 @@ internal static class TieGltfDocumentBuilder
                 strip.BestInvertedStrongTriangleCount,
                 strip.BestInvertedAverageDot,
                 strip.UsesDenseSourceNormalRepair,
+                strip.UsesNearDenseSourceNormalRepair,
                 strip.UsesSmallStripSourceNormalRepair,
+                strip.UsesPartialSmallStripSourceNormalRepair,
                 strip.UsesMixedTriangleSourceNormalRepair,
                 strip.ShouldApplyWindingRepair,
                 PhaseVote = strip.PhaseVote.ToString()

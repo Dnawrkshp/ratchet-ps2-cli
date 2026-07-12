@@ -54,15 +54,22 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
     string BestInvertedLayout,
     int BestInvertedStrongTriangleCount,
     float BestInvertedAverageDot,
+    float WindingRepairAverageDot,
+    bool EnablePartialSmallStripWindingRepair,
     TieGltfSourceNormalPhaseVote PhaseVote)
 {
-    private const float WindingRepairAverageDot = 0.72f;
+    private const float PartialSmallStripExactHalfMaximumAverageDot = 0.55f;
+    private const float NearDenseWindingRepairAverageDot = 0.45f;
+    private const int NearDenseWindingRepairMinimumStrongTriangleLead = 6;
 
     public bool ShouldApplyWindingRepair =>
         !UsesPreviousStripReferencePhase
         && (
             PhaseVote == TieGltfSourceNormalPhaseVote.Inverted
-                && (UsesDenseSourceNormalRepair || UsesSmallStripSourceNormalRepair)
+                && (UsesDenseSourceNormalRepair
+                    || UsesNearDenseSourceNormalRepair
+                    || UsesSmallStripSourceNormalRepair
+                    || UsesPartialSmallStripSourceNormalRepair)
             || UsesMixedTriangleSourceNormalRepair);
 
     public bool UsesDenseSourceNormalRepair =>
@@ -70,6 +77,15 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
         && BestInvertedStrongTriangleCount >= Math.Max(2, ScoredTriangleCount / 2)
         && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + 2
         && BestInvertedAverageDot >= WindingRepairAverageDot;
+
+    public bool UsesNearDenseSourceNormalRepair =>
+        !UsesDenseSourceNormalRepair
+        && WindingRepairAverageDot <= 0.5f
+        && ScoredTriangleCount >= 8
+        && BestInvertedStrongTriangleCount >= Math.Max(2, ScoredTriangleCount / 2)
+        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + NearDenseWindingRepairMinimumStrongTriangleLead
+        && BestCurrentAverageDot <= -NearDenseWindingRepairAverageDot
+        && BestInvertedAverageDot >= NearDenseWindingRepairAverageDot;
 
     public bool UsesSmallStripSourceNormalRepair =>
         TriangleCount > 0
@@ -79,6 +95,26 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
         && BestCurrentStrongTriangleCount == 0
         && BestCurrentAverageDot <= -0.5f
         && BestInvertedAverageDot >= WindingRepairAverageDot;
+
+    public bool UsesPartialSmallStripSourceNormalRepair =>
+        EnablePartialSmallStripWindingRepair
+        && !UsesDenseSourceNormalRepair
+        && !UsesSmallStripSourceNormalRepair
+        && PhaseVote == TieGltfSourceNormalPhaseVote.Inverted
+        && TriangleCount > 0
+        && ScoredTriangleCount > 0
+        && ScoredTriangleCount < 8
+        && BestInvertedStrongTriangleCount >= 2
+        && HasPartialSmallStripInvertedMajority
+        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + 2
+        && BestCurrentAverageDot <= -0.5f
+        && BestInvertedAverageDot > WindingRepairAverageDot
+        && TriangleVotes.Any(vote => vote.PrefersPartialStripInvertedWinding);
+
+    private bool HasPartialSmallStripInvertedMajority =>
+        BestInvertedStrongTriangleCount * 2 > ScoredTriangleCount
+        || BestInvertedStrongTriangleCount * 2 == ScoredTriangleCount
+        && BestInvertedAverageDot < PartialSmallStripExactHalfMaximumAverageDot;
 
     public bool UsesMixedTriangleSourceNormalRepair =>
         PhaseVote == TieGltfSourceNormalPhaseVote.Ambiguous
@@ -105,6 +141,14 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
                     .ToArray();
             }
 
+            if (UsesPartialSmallStripSourceNormalRepair)
+            {
+                return TriangleVotes
+                    .Where(vote => vote.PrefersPartialStripInvertedWinding)
+                    .Select(vote => vote.TriangleIndexInStrip)
+                    .ToArray();
+            }
+
             return Enumerable.Range(0, TriangleCount).ToArray();
         }
     }
@@ -125,8 +169,15 @@ internal sealed record TieGltfSourceNormalPhaseTriangleDiagnostic(
     float CurrentAverageDot,
     float InvertedAverageDot)
 {
+    private const float InvertedWindingMinimumAverageDot = 0.5f;
+    private const float PartialStripInvertedWindingMinimumAverageDot = 0.45f;
+
     public bool PrefersInvertedWinding =>
-        InvertedAverageDot >= 0.5f
+        InvertedAverageDot >= InvertedWindingMinimumAverageDot
+        && InvertedAverageDot > CurrentAverageDot;
+
+    public bool PrefersPartialStripInvertedWinding =>
+        InvertedAverageDot >= PartialStripInvertedWindingMinimumAverageDot
         && InvertedAverageDot > CurrentAverageDot;
 }
 

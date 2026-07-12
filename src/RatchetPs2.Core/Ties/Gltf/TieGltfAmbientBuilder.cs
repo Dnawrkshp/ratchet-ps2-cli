@@ -9,6 +9,19 @@ internal static class TieGltfAmbientBuilder
     private const float AmbientNormalSelectionMinimumDot = 0.85f;
     private const float AmbientNormalSelectionTieEpsilon = 0.000001f;
 
+    public static TieGltfAmbientBuildResult Empty { get; } = new(
+        [],
+        [],
+        0,
+        0,
+        VertexNormalHeaderAmbientWordCount,
+        0,
+        0,
+        0,
+        0,
+        [],
+        null);
+
     public static TieGltfAmbientBuildResult BuildIndices(
         TieClass tie,
         TieLodTopology topology,

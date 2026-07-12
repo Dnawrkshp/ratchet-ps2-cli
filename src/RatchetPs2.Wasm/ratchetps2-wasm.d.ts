@@ -3,6 +3,8 @@ export type PngFormat = "rgba32" | "indexed8" | "indexed4";
 
 export type MobyGame = "DL" | "UYA";
 
+export type WasmByteArray = Uint8Array | number[] | string;
+
 export interface ConvertPifToPngOptions {
   pngFormat?: PngFormat;
   doubleAlpha?: boolean;
@@ -174,6 +176,95 @@ export interface DlGameplayBlocks {
   blocks: DlGameplayBlock[];
 }
 
+export type UyaRgb96 = DlRgb96;
+
+export type UyaVector3 = DlVector3;
+
+export type UyaLevelSettingsChunkPlane = DlLevelSettingsChunkPlane;
+
+export type UyaPvarTables = DlPvarTables;
+
+export interface UyaLevelSettings {
+  backgroundColor: UyaRgb96;
+  fogColor: UyaRgb96;
+  fogNearDistance: number;
+  fogFarDistance: number;
+  fogNearIntensity: number;
+  fogFarIntensity: number;
+  deathHeight: number;
+  isSphericalWorld: boolean;
+  sphereCenter: UyaVector3;
+  shipPosition: UyaVector3;
+  shipRotationZ: number;
+  shipPath: number;
+  shipCameraCuboidStart: number;
+  shipCameraCuboidEnd: number;
+  padding58: number;
+  chunkPlanes: UyaLevelSettingsChunkPlane[];
+  coreSoundsCount: number;
+  rac3ThirdPart: number;
+  trailingByteLength: number;
+}
+
+export interface UyaMobyInstance {
+  size: number;
+  mission: number;
+  unknown8: number;
+  unknownC: number;
+  uid: number;
+  bolts: number;
+  unknown18: number;
+  unknown1C: number;
+  unknown20: number;
+  unknown24: number;
+  classId: number;
+  scale: number;
+  drawDistance: number;
+  updateDistance: number;
+  unused38: number;
+  unused3C: number;
+  position: UyaVector3;
+  rotation: UyaVector3;
+  group: number;
+  isRooted: number;
+  rootedDistance: number;
+  unknown64: number;
+  pvarIndex: number;
+  occlusion: number;
+  modeBits: number;
+  color: UyaRgb96;
+  light: number;
+  unknown84: number;
+}
+
+export interface UyaMobyInstances {
+  staticCount: number;
+  spawnableMobyCount: number;
+  pad8: number;
+  padC: number;
+  instances: UyaMobyInstance[];
+  trailingByteLength: number;
+}
+
+export interface UyaGameplayBlock {
+  index: number;
+  headerOffset: number;
+  pointer: number;
+  semanticName: string;
+  payloadLength: number;
+  payloadBytes: Uint8Array;
+  levelSettings: UyaLevelSettings | null;
+  mobyInstances: UyaMobyInstances | null;
+}
+
+export interface UyaGameplayBlocks {
+  kind: string;
+  headerSize: number;
+  headerBytes: Uint8Array;
+  pvarTables: UyaPvarTables | null;
+  blocks: UyaGameplayBlock[];
+}
+
 export interface RatchetPs2WasmInitOptions {
   assetBaseUrl?: string;
 }
@@ -198,10 +289,24 @@ export function convertPifListToPngPackedBlobs(pifImages: Array<Uint8Array | Arr
 
 export function unpackDlLevelWad(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
 
+export function unpackUyaLevelWad(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
 export function exportMobyGltf(mobyBytes: Uint8Array | ArrayBuffer, options?: ExportMobyGltfOptions): Promise<PackedFilePackageResult>;
 
 export function parseDlGameplayCore(gameplayBytes: Uint8Array | ArrayBuffer): Promise<DlGameplayBlocks>;
 
 export function parseDlGameplayMission(gameplayBytes: Uint8Array | ArrayBuffer): Promise<DlGameplayBlocks>;
 
+export function parseUyaGameplayCore(gameplayBytes: Uint8Array | ArrayBuffer): Promise<UyaGameplayBlocks>;
+
 export function buildDlLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function buildDlLevelWadRenderPackageEnvelope(levelWadBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;
+
+export function buildUyaLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function buildUyaLevelWadRenderPackageEnvelope(levelWadBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;
+
+export function buildUyaCustomMapZipRenderPackage(zipBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function buildUyaCustomMapZipRenderPackageEnvelope(zipBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;

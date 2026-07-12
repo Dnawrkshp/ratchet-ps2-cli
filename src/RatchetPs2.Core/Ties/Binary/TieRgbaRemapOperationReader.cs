@@ -25,7 +25,6 @@ internal static class TieRgbaRemapOperationReader
             return [];
         }
 
-        var normalOffset = CheckedOffset(header.VertexNormalsOffset, "vertex normals");
         var end = header.ShadersOffset > 0
             ? Math.Min(CheckedOffset(header.ShadersOffset, "shader table"), bytes.Length)
             : bytes.Length;
@@ -38,8 +37,13 @@ internal static class TieRgbaRemapOperationReader
                 continue;
             }
 
-            var chunkOffset = checked(normalOffset + rgbaRemapOffset);
-            if (chunkOffset < 0 || chunkOffset + RgbaRemapGroupHeaderSize > end)
+            if (!TieVertexNormalReader.TryResolveRgbaRemapChunkOffset(
+                    bytes,
+                    header,
+                    rgbaRemapOffset,
+                    end,
+                    out var chunkOffset)
+                || chunkOffset + RgbaRemapGroupHeaderSize > end)
             {
                 continue;
             }

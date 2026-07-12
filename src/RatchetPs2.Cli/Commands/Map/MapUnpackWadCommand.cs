@@ -2,6 +2,7 @@ using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.UYA.Level;
 using System.CommandLine;
 
 namespace RatchetPs2.Cli.Commands.Map;
@@ -11,7 +12,7 @@ internal static class MapUnpackWadCommand
     public static Command Build()
     {
         var gameOption = CommonOptions.Game();
-        var inputOption = CommonOptions.InputFile("Path to the raw loose DL level WAD.");
+        var inputOption = CommonOptions.InputFile("Path to the raw loose level WAD.");
         var outputOption = new Option<DirectoryInfo>("--output")
         {
             Description = "Directory to write unpacked files or indexed package output.",
@@ -25,7 +26,7 @@ internal static class MapUnpackWadCommand
 
         var command = CliCommandBuilder.Create(
             "unpack-wad",
-            "Unpack a raw loose DL level WAD into files or an IndexedDB-friendly packed index.",
+            "Unpack a raw loose level WAD into files or an IndexedDB-friendly packed index.",
             gameOption,
             inputOption,
             outputOption,
@@ -38,7 +39,7 @@ internal static class MapUnpackWadCommand
             var outputDirectory = parseResult.GetValue(outputOption);
             var format = parseResult.GetValue(formatOption);
 
-            if (!TryValidateDlGame(gameValue, out var error))
+            if (!TryValidateMapGame(gameValue, out var gameId, out var error))
             {
                 Console.Error.WriteLine(error);
                 return 1;
@@ -65,7 +66,28 @@ internal static class MapUnpackWadCommand
 
             try
             {
-                var package = DlLevelWadUnpacker.Unpack(File.ReadAllBytes(inputFile.FullName));
+                var bytes = File.ReadAllBytes(inputFile.FullName);
+
+                if (gameId == GameId.UYA)
+                {
+                    var uyaPackage = UyaLevelWadUnpacker.Unpack(bytes);
+                    if (normalizedFormat == "indexed")
+                    {
+                        PackedFilePackageWriter.WriteIndexed(uyaPackage.ToPackedPackage(), outputDirectory);
+                        Console.WriteLine(
+                            $"Unpacked UYA level WAD '{inputFile.FullName}' to indexed package '{outputDirectory.FullName}' ({uyaPackage.Files.Count} entries).");
+                    }
+                    else
+                    {
+                        PackedFilePackageWriter.WriteFiles(uyaPackage.Files, outputDirectory);
+                        Console.WriteLine(
+                            $"Unpacked UYA level WAD '{inputFile.FullName}' to '{outputDirectory.FullName}' ({uyaPackage.Files.Count} files).");
+                    }
+
+                    return 0;
+                }
+
+                var package = DlLevelWadUnpacker.Unpack(bytes);
                 if (normalizedFormat == "indexed")
                 {
                     PackedFilePackageWriter.WriteIndexed(package.ToPackedPackage(), outputDirectory);
@@ -91,17 +113,19 @@ internal static class MapUnpackWadCommand
         return command;
     }
 
-    private static bool TryValidateDlGame(string? gameValue, out string error)
+    private static bool TryValidateMapGame(string? gameValue, out GameId gameId, out string error)
     {
-        if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
+        gameId = default;
+
+        if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out gameId))
         {
-            error = $"Unsupported --game value '{gameValue}'. Map WAD unpack currently supports DL only.";
+            error = $"Unsupported --game value '{gameValue}'. Map WAD unpack currently supports UYA and DL.";
             return false;
         }
 
-        if (gameId != GameId.DL)
+        if (gameId is not (GameId.UYA or GameId.DL))
         {
-            error = "Map WAD unpack currently supports only --game DL.";
+            error = "Map WAD unpack currently supports only --game UYA or --game DL.";
             return false;
         }
 

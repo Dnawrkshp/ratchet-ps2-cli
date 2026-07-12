@@ -11,6 +11,7 @@ internal static class MapCommand
             "map",
             "Work with full map extraction packages.",
             MapExtractCommand.Build(),
+            MapExtractCustomCommand.Build(),
             MapExtractWadCommand.Build(),
             MapUnpackWadCommand.Build());
     }

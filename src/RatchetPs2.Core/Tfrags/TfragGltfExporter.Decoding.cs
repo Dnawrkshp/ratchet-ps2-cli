@@ -13,9 +13,10 @@ public static partial class TfragGltfExporter
     {
         var meshes = new List<TfragChunkLodMesh>();
         var decodes = new List<TfragChunkLodDecode>();
+        var lodIndices = GetExportLodIndices(options).ToArray();
         foreach (var chunk in terrain.Chunks)
         {
-            for (var lodIndex = 0; lodIndex <= 2; lodIndex++)
+            foreach (var lodIndex in lodIndices)
             {
                 var decode = DecodeChunkLod(terrain, chunk, lodIndex, options);
                 decodes.Add(decode);

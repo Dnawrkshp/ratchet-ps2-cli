@@ -1,8 +1,11 @@
 using Microsoft.JSInterop;
+using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Pif;
+using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.UYA.Level;
 using System.Runtime.Versioning;
 
 namespace RatchetPs2.Wasm;
@@ -66,6 +69,14 @@ public static partial class Exports
         return DlLevelWadUnpacker.UnpackPacked(levelWadBytes);
     }
 
+    [JSInvokable("UnpackUyaLevelWad")]
+    public static PackedFilePackage UnpackUyaLevelWad(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        return UyaLevelWadUnpacker.UnpackPacked(levelWadBytes);
+    }
+
     [JSInvokable("BuildDlLevelWadRenderPackage")]
     public static PackedFilePackage BuildDlLevelWadRenderPackage(byte[] levelWadBytes)
     {
@@ -74,6 +85,43 @@ public static partial class Exports
         return DlLevelWadRenderPackageBuilder.BuildPacked(
             levelWadBytes,
             DlLevelWadRenderPackageBuildOptions.Browser);
+    }
+
+    [JSInvokable("BuildUyaLevelWadRenderPackage")]
+    public static PackedFilePackage BuildUyaLevelWadRenderPackage(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        var package = UyaLevelWadUnpacker.Unpack(levelWadBytes);
+        return BuildUyaRenderPackage(
+            package.LevelWad.Level,
+            package.Files);
+    }
+
+    [JSInvokable("BuildUyaCustomMapZipRenderPackage")]
+    public static PackedFilePackage BuildUyaCustomMapZipRenderPackage(byte[] zipBytes)
+    {
+        ArgumentNullException.ThrowIfNull(zipBytes);
+
+        var package = UyaCustomMapZipUnpacker.Unpack(zipBytes);
+        var renderPackage = BuildUyaRenderPackage(levelIndex: 0, package.Files);
+        return AppendPackedFiles(renderPackage, package.Files.Where(IsUyaGameplayMetadataFile));
+    }
+
+    private static PackedFilePackage BuildUyaRenderPackage(
+        int levelIndex,
+        IReadOnlyList<PackedFile> unpackedFiles)
+    {
+        return UyaLevelWadRenderPackageBuilder.BuildPacked(
+            levelIndex,
+            unpackedFiles,
+            assetFiles => DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+                GameId.UYA,
+                levelIndex,
+                assetFiles.HeaderBytes,
+                assetFiles.PaletteBytes,
+                assetFiles.AssetWadBytes,
+                DlLevelWadRenderPackageBuildOptions.Browser));
     }
 
     [JSInvokable("ExportMobyGltf")]
@@ -94,9 +142,9 @@ public static partial class Exports
             });
 
         return PackFiles(
-            new DlLevelWadFile("moby.gltf", export.GltfBytes, "model/gltf+json"),
-            new DlLevelWadFile("moby.buffer.bin", export.BinBytes, "application/octet-stream"),
-            new DlLevelWadFile("moby.diagnostics.json", export.DiagnosticsBytes, "application/json"));
+            new PackedFile("moby.gltf", export.GltfBytes, "model/gltf+json"),
+            new PackedFile("moby.buffer.bin", export.BinBytes, "application/octet-stream"),
+            new PackedFile("moby.diagnostics.json", export.DiagnosticsBytes, "application/json"));
     }
 
     [JSInvokable("GetApiVersion")]
@@ -123,25 +171,27 @@ public static partial class Exports
         };
     }
 
-    private static PackedFilePackage PackFiles(params DlLevelWadFile[] files)
+    private static PackedFilePackage PackFiles(params PackedFile[] files)
     {
-        var entries = new PackedFileEntry[files.Length];
-        var totalLength = 0;
+        return PackedFilePackageBuilder.Pack(files);
+    }
 
-        for (var i = 0; i < files.Length; i++)
-        {
-            var file = files[i];
-            entries[i] = new PackedFileEntry(file.Path, totalLength, file.Bytes.Length, file.ContentType);
-            totalLength = checked(totalLength + file.Bytes.Length);
-        }
+    private static bool IsUyaGameplayMetadataFile(PackedFile file)
+    {
+        return string.Equals(file.Path, "gameplay/gameplay_core.bin", StringComparison.Ordinal)
+            || file.Path.StartsWith("gameplay/core/", StringComparison.Ordinal);
+    }
 
-        var packedBytes = new byte[totalLength];
-        for (var i = 0; i < files.Length; i++)
-        {
-            var file = files[i];
-            file.Bytes.AsSpan().CopyTo(packedBytes.AsSpan(entries[i].Offset, file.Bytes.Length));
-        }
+    private static PackedFilePackage AppendPackedFiles(PackedFilePackage package, IEnumerable<PackedFile> extraFiles)
+    {
+        var files = package.Entries
+            .Select(entry => new PackedFile(
+                entry.Path,
+                package.PackedBytes.AsSpan(entry.Offset, entry.Length).ToArray(),
+                entry.ContentType))
+            .Concat(extraFiles)
+            .ToArray();
 
-        return new PackedFilePackage(packedBytes, entries);
+        return PackedFilePackageBuilder.Pack(files);
     }
 }

@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Wad;
+using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Gameplay;
 
 namespace RatchetPs2.Games.DL.Level;
@@ -8,7 +9,7 @@ public static class DlLevelWadUnpacker
     public static DlLevelWadPackage Unpack(ReadOnlySpan<byte> levelWadBytes)
     {
         var levelWad = DlLevelWadReader.ReadLevelWad(levelWadBytes);
-        var files = new List<DlLevelWadFile>();
+        var files = new List<PackedFile>();
 
         AddFile(files, "level_wad/header.bin", levelWad.HeaderBytes);
 
@@ -38,7 +39,7 @@ public static class DlLevelWadUnpacker
         return Unpack(levelWadBytes).ToPackedPackage();
     }
 
-    private static void AddMissions(List<DlLevelWadFile> files, ReadOnlySpan<byte> levelWadBytes, DlLevelWad levelWad)
+    private static void AddMissions(List<PackedFile> files, ReadOnlySpan<byte> levelWadBytes, DlLevelWad levelWad)
     {
         for (var i = 0; i < levelWad.GameplayMissionData.Count; i++)
         {
@@ -66,7 +67,7 @@ public static class DlLevelWadUnpacker
         }
     }
 
-    private static void AddMissionPayloads(List<DlLevelWadFile> files, string missionRoot, byte[] missionData)
+    private static void AddMissionPayloads(List<PackedFile> files, string missionRoot, byte[] missionData)
     {
         if (missionData.Length < 0x10)
         {
@@ -97,7 +98,7 @@ public static class DlLevelWadUnpacker
     }
 
     private static byte[] AddPossiblyCompressedMissionBlock(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         string path,
         byte[] source,
         int offset,
@@ -121,7 +122,7 @@ public static class DlLevelWadUnpacker
         return data;
     }
 
-    private static void AddCorePayloads(List<DlLevelWadFile> files, byte[] coreLevelBytes)
+    private static void AddCorePayloads(List<PackedFile> files, byte[] coreLevelBytes)
     {
         var segments = DlCoreLevelSegmentReader.Read(coreLevelBytes);
         foreach (var segment in segments)
@@ -140,7 +141,7 @@ public static class DlLevelWadUnpacker
         }
     }
 
-    private static void AddGameplayBlocks(List<DlLevelWadFile> files, string root, DlGameplayBlocks gameplay)
+    private static void AddGameplayBlocks(List<PackedFile> files, string root, DlGameplayBlocks gameplay)
     {
         AddFile(files, $"{root}/header.bin", gameplay.HeaderBytes);
         foreach (var block in gameplay.Blocks)
@@ -149,7 +150,7 @@ public static class DlLevelWadUnpacker
         }
     }
 
-    private static void AddWorldPayloads(List<DlLevelWadFile> files, byte[] worldBytes)
+    private static void AddWorldPayloads(List<PackedFile> files, byte[] worldBytes)
     {
         var world = DlWorldInstanceReader.Read(worldBytes);
         foreach (var slot in world.Slots)
@@ -203,7 +204,7 @@ public static class DlLevelWadUnpacker
     }
 
     private static byte[] AddSectorFile(
-        List<DlLevelWadFile> files,
+        List<PackedFile> files,
         string path,
         ReadOnlySpan<byte> levelWadBytes,
         DlFileBlock block)
@@ -213,14 +214,14 @@ public static class DlLevelWadUnpacker
         return bytes;
     }
 
-    private static void AddFile(List<DlLevelWadFile> files, string path, byte[] bytes)
+    private static void AddFile(List<PackedFile> files, string path, byte[] bytes)
     {
         if (bytes.Length == 0)
         {
             return;
         }
 
-        files.Add(new DlLevelWadFile(path, bytes, GetContentType(path)));
+        files.Add(new PackedFile(path, bytes, GetContentType(path)));
     }
 
     private static string GetContentType(string path)

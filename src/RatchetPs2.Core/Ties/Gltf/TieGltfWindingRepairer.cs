@@ -18,6 +18,10 @@ internal static class TieGltfWindingRepairer
     private const float LocalInwardComponentMinimumOutwardRatio = 0.65f;
     private const float LocalInwardComponentMaximumInwardRatio = 0.35f;
     private const float LocalInwardTriangleDotThreshold = -0.2f;
+    private const float OpenRadialInwardTriangleDotThreshold = -0.5f;
+    private const float OpenRadialOutwardTriangleDotThreshold = 0.2f;
+    private const float OpenRadialMinimumOutwardRatio = 0.5f;
+    private const float OpenRadialMaximumInwardToOutwardRatio = 0.4f;
     private const float OpposedFaceNormalMinimumDot = -0.75f;
     private const float UpperHorizontalFaceNormalY = 0.75f;
     private const float UpperHorizontalMinimumYRatio = 0.4f;
@@ -36,7 +40,8 @@ internal static class TieGltfWindingRepairer
         List<float> ambientIndices,
         bool includeAmbientIndices,
         IReadOnlyList<PacketIndexGroup> packetIndexGroups,
-        bool enableFlatProfileLocalInwardRepair,
+        bool enableLocalInwardRepair,
+        bool smoothLocalInwardComponentNormals,
         bool enableUpperHorizontalFlatFaceFallback)
     {
         var triangles = BuildConnectedTriangleRefs(positions, packetIndexGroups);
@@ -48,10 +53,9 @@ internal static class TieGltfWindingRepairer
         var triangleIndicesByPosition = BuildTriangleIndexLookup(triangles);
         var visited = new bool[triangles.Count];
         var flippedVertexIndexByOriginal = new Dictionary<uint, uint>();
-        var restoreFlatProfileFaces = enableFlatProfileLocalInwardRepair
-            && TieGltfFlatProfileNormalRepairer.ShouldRestore(positions);
         var invertedComponentTriangleCount = 0;
         var localInwardTriangleCount = 0;
+        var localInwardComponentPositionKeys = new HashSet<TieGltfPositionKey>();
         var opposedNormalTriangleCount = 0;
         var upperHorizontalTriangleCount = 0;
         for (var i = 0; i < triangles.Count; i++)
@@ -75,7 +79,7 @@ internal static class TieGltfWindingRepairer
             triangleIndicesByPosition = BuildTriangleIndexLookup(triangles);
         }
 
-        if (restoreFlatProfileFaces)
+        if (enableLocalInwardRepair)
         {
             visited = new bool[triangles.Count];
             for (var i = 0; i < triangles.Count; i++)
@@ -89,6 +93,11 @@ internal static class TieGltfWindingRepairer
                 if (TryFindLocalInwardTriangles(component, out var inwardTriangles))
                 {
                     localInwardTriangleCount += inwardTriangles.Count;
+                    if (smoothLocalInwardComponentNormals)
+                    {
+                        AddComponentPositionKeys(component, localInwardComponentPositionKeys);
+                    }
+
                     FlipTriangles(inwardTriangles);
                 }
             }
@@ -97,6 +106,10 @@ internal static class TieGltfWindingRepairer
         if (localInwardTriangleCount > 0)
         {
             triangles = BuildConnectedTriangleRefs(positions, packetIndexGroups);
+            if (smoothLocalInwardComponentNormals && localInwardComponentPositionKeys.Count > 0)
+            {
+                RestoreGeneratedNormalsForPositionKeys(triangles, localInwardComponentPositionKeys);
+            }
         }
 
         // GC ties still have primary-write continuation phase cases that are
@@ -288,9 +301,10 @@ internal static class TieGltfWindingRepairer
                 AddEdge(triangle.CKey, triangle.AKey);
             }
 
+            var boundsCenter = (min + max) * 0.5f;
             if (signedVolume <= 0f)
             {
-                return false;
+                return TryFindOpenRadialInwardTriangles(component, boundsCenter, out inwardTriangles);
             }
 
             var extents = max - min;
@@ -298,16 +312,15 @@ internal static class TieGltfWindingRepairer
             if (boundsVolume <= 1e-6f
                 || signedVolume < boundsVolume * LocalInwardComponentMinimumVolumeToBoundsRatio)
             {
-                return false;
+                return TryFindOpenRadialInwardTriangles(component, boundsCenter, out inwardTriangles);
             }
 
             var boundaryEdgeCount = edgeCounts.Count(pair => pair.Value == 1);
             if (boundaryEdgeCount > component.Count * 3f * LocalInwardComponentMaximumBoundaryEdgeRatio)
             {
-                return false;
+                return TryFindOpenRadialInwardTriangles(component, boundsCenter, out inwardTriangles);
             }
 
-            var boundsCenter = (min + max) * 0.5f;
             var directionalTriangleCount = 0;
             var outwardTriangleCount = 0;
             foreach (var triangleIndex in component)
@@ -341,16 +354,126 @@ internal static class TieGltfWindingRepairer
                 }
             }
 
-            return inwardTriangles.Count > 0
+            if (inwardTriangles.Count > 0
                 && directionalTriangleCount >= component.Count * LocalInwardComponentMinimumDirectionalTriangleRatio
                 && outwardTriangleCount >= directionalTriangleCount * LocalInwardComponentMinimumOutwardRatio
-                && inwardTriangles.Count <= directionalTriangleCount * LocalInwardComponentMaximumInwardRatio;
+                && inwardTriangles.Count <= directionalTriangleCount * LocalInwardComponentMaximumInwardRatio)
+            {
+                return true;
+            }
+
+            return TryFindOpenRadialInwardTriangles(component, boundsCenter, out inwardTriangles);
 
             void AddEdge(TieGltfPositionKey a, TieGltfPositionKey b)
             {
                 var key = TieGltfPositionEdgeKey.From(a, b);
                 edgeCounts.TryGetValue(key, out var count);
                 edgeCounts[key] = count + 1;
+            }
+        }
+
+        bool TryFindOpenRadialInwardTriangles(
+            IReadOnlyList<int> component,
+            Vector3 boundsCenter,
+            out List<int> openInwardTriangles)
+        {
+            openInwardTriangles = [];
+            var outwardTriangleCount = 0;
+            foreach (var triangleIndex in component)
+            {
+                var triangle = triangles[triangleIndex];
+                var a = positions[checked((int)triangle.AIndex)];
+                var b = positions[checked((int)triangle.BIndex)];
+                var c = positions[checked((int)triangle.CIndex)];
+                var normal = Vector3.Cross(b - a, c - a);
+                if (normal.LengthSquared() <= 1e-12f)
+                {
+                    continue;
+                }
+
+                var center = (a + b + c) / 3f;
+                var radialVector = new Vector3(center.X - boundsCenter.X, 0f, center.Z - boundsCenter.Z);
+                if (radialVector.LengthSquared() <= 1e-12f)
+                {
+                    continue;
+                }
+
+                var dot = Vector3.Dot(Vector3.Normalize(normal), Vector3.Normalize(radialVector));
+                if (dot > OpenRadialOutwardTriangleDotThreshold)
+                {
+                    outwardTriangleCount++;
+                }
+                else if (dot < OpenRadialInwardTriangleDotThreshold)
+                {
+                    openInwardTriangles.Add(triangleIndex);
+                }
+            }
+
+            return openInwardTriangles.Count > 0
+                && outwardTriangleCount >= component.Count * OpenRadialMinimumOutwardRatio
+                && openInwardTriangles.Count <= outwardTriangleCount * OpenRadialMaximumInwardToOutwardRatio;
+        }
+
+        void AddComponentPositionKeys(
+            IReadOnlyList<int> component,
+            HashSet<TieGltfPositionKey> positionKeys)
+        {
+            foreach (var triangleIndex in component)
+            {
+                var triangle = triangles[triangleIndex];
+                positionKeys.Add(triangle.AKey);
+                positionKeys.Add(triangle.BKey);
+                positionKeys.Add(triangle.CKey);
+            }
+        }
+
+        void RestoreGeneratedNormalsForPositionKeys(
+            IReadOnlyList<TieGltfConnectedTriangleRef> triangleRefs,
+            IReadOnlySet<TieGltfPositionKey> positionKeys)
+        {
+            var normalSumsByPosition = new Dictionary<TieGltfPositionKey, Vector3>();
+            foreach (var triangle in triangleRefs)
+            {
+                if ((!positionKeys.Contains(triangle.AKey)
+                        && !positionKeys.Contains(triangle.BKey)
+                        && !positionKeys.Contains(triangle.CKey))
+                    || !TryGetFaceNormal(triangle, out var faceNormal))
+                {
+                    continue;
+                }
+
+                AddNormal(triangle.AKey, faceNormal);
+                AddNormal(triangle.BKey, faceNormal);
+                AddNormal(triangle.CKey, faceNormal);
+            }
+
+            for (var i = 0; i < positions.Count; i++)
+            {
+                var key = TieGltfPositionKey.From(positions[i]);
+                if (!positionKeys.Contains(key)
+                    || !normalSumsByPosition.TryGetValue(key, out var normal)
+                    || normal.LengthSquared() <= 1e-12f)
+                {
+                    continue;
+                }
+
+                var normalized = Vector3.Normalize(normal);
+                normals[i] = normalized;
+                if (sourceOnlyNormals is not null && i < sourceOnlyNormals.Count)
+                {
+                    sourceOnlyNormals[i] = normalized;
+                }
+            }
+
+            void AddNormal(TieGltfPositionKey key, Vector3 normal)
+            {
+                if (!positionKeys.Contains(key))
+                {
+                    return;
+                }
+
+                normalSumsByPosition.TryGetValue(key, out var sum);
+                normalSumsByPosition[key] = sum + normal;
             }
         }
 

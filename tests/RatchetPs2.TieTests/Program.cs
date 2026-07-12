@@ -40,6 +40,244 @@ Expect(tie.VertexNormalRemaps.Count > 0, "expected decoded vertex normal remaps"
 Expect(
     tie.VertexNormalRemaps.Any(remap => remap.PacketIndex == 0 && remap.VertexRowIndex == 29 && remap.NormalIndex == 42),
     "expected a vertex-normal remap from source normal 42 to packet 0 vertex row 29");
+var uyaTie7539Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "7539", "core.bin");
+if (File.Exists(uyaTie7539Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie7539Input = File.OpenRead(uyaTie7539Path);
+    var uyaTie7539 = TieClassReader.Read(uyaTie7539Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaNormalStart = checked((int)uyaTie7539.Header.VertexNormalsOffset);
+    var uyaNormalEnd = checked(uyaNormalStart + uyaTie7539.Header.VertexNormalsCount * 8);
+    Expect(
+        uyaTie7539.VertexNormals.Count == uyaTie7539.Header.VertexNormalsCount,
+        $"expected UYA 7539 to decode {uyaTie7539.Header.VertexNormalsCount} vertex normal records, got {uyaTie7539.VertexNormals.Count}");
+    Expect(
+        uyaTie7539.VertexNormals[0].Offset == uyaNormalStart,
+        $"expected UYA 7539 vertex normals to start at 0x{uyaNormalStart:X}, got 0x{uyaTie7539.VertexNormals[0].Offset:X}");
+    Expect(
+        uyaTie7539.VertexNormals[^1].Offset + 8 == uyaNormalEnd,
+        $"expected UYA 7539 vertex normals to end at 0x{uyaNormalEnd:X}, got 0x{uyaTie7539.VertexNormals[^1].Offset + 8:X}");
+    Expect(
+        uyaNormalStart + uyaTie7539.Header.RgbaRemapOffsets[0] == uyaNormalEnd,
+        $"expected UYA 7539 first RGBA remap chunk to start after the unpadded normal table at 0x{uyaNormalEnd:X}");
+    Expect(
+        uyaTie7539.FileSections.Any(section => section.Offset == uyaNormalEnd && section.Name.Contains("rgba-remap-0", StringComparison.Ordinal)),
+        "expected UYA 7539 raw sections to label rgba-remap-0 at the resolved normal-table offset");
+}
+var uyaBakisiLampPath = Path.Combine(
+    repoRoot,
+    "test-assets",
+    "extractions_uya",
+    "level41_iso_world01",
+    "assets",
+    "tie",
+    "07496_1D48",
+    "tie.bin");
+if (File.Exists(uyaBakisiLampPath))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaBakisiLampInput = File.OpenRead(uyaBakisiLampPath);
+    var uyaBakisiLamp = TieClassReader.Read(
+        uyaBakisiLampInput,
+        TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaBakisiLampExport = TieGltfExporter.Export(
+        uyaBakisiLamp,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaBakisiLampDiagnosticsDocument = JsonDocument.Parse(uyaBakisiLampExport.DiagnosticsBytes);
+    var uyaBakisiLampDiagnostics = uyaBakisiLampDiagnosticsDocument.RootElement;
+    Expect(
+        uyaBakisiLampDiagnostics.GetProperty("SourceNormalPhaseWindingRepairStripCount").GetInt32() == 11
+        && uyaBakisiLampDiagnostics.GetProperty("SourceNormalPhaseWindingRepairTriangleCount").GetInt32() == 34,
+        "expected UYA Bakisi 07496 to apply packed source-normal phase winding repair");
+}
+var uyaTie6109Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6109", "core.bin");
+if (File.Exists(uyaTie6109Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie6109Input = File.OpenRead(uyaTie6109Path);
+    var uyaTie6109 = TieClassReader.Read(uyaTie6109Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie6109Export = TieGltfExporter.Export(
+        uyaTie6109,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie6109DiagnosticsDocument = JsonDocument.Parse(uyaTie6109Export.DiagnosticsBytes);
+    var uyaTie6109Diagnostics = uyaTie6109DiagnosticsDocument.RootElement;
+    Expect(
+        uyaTie6109Diagnostics.GetProperty("SourceNormalPhaseWindingRepairStripCount").GetInt32() == 6
+        && uyaTie6109Diagnostics.GetProperty("SourceNormalPhaseWindingRepairTriangleCount").GetInt32() == 23,
+        "expected UYA 6109 to include partial short-strip source-normal phase repairs");
+    ExpectUyaPartialRepair(
+        uyaTie6109Diagnostics,
+        "UYA 6109",
+        stripIndex: 6,
+        expectedTriangleIndices: new[] { 1, 2, 3 });
+    ExpectUyaPartialRepair(
+        uyaTie6109Diagnostics,
+        "UYA 6109",
+        stripIndex: 7,
+        expectedTriangleIndices: new[] { 0, 1, 2, 3 });
+    ExpectUyaPartialRepair(
+        uyaTie6109Diagnostics,
+        "UYA 6109",
+        stripIndex: 15,
+        expectedTriangleIndices: new[] { 0, 1 });
+    var uyaTie6109Topology = uyaTie6109.LodTopologies[0];
+    Expect(
+        uyaTie6109.GlowRgbaRemaps.Count == 1
+            && uyaTie6109.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
+            && uyaTie6109.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 2 })
+            && uyaTie6109.GlowRgbaRemaps[0].ResolvedShaderIndex == 1
+            && uyaTie6109.GlowRgbaVertices.Count == 20
+            && uyaTie6109.GlowRgbaVertices.All(vertex =>
+                vertex.StripIndex >= 0
+                && vertex.StripIndex < uyaTie6109Topology.Strips.Count
+                && vertex.PacketIndex == 2
+                && uyaTie6109Topology.Strips[vertex.StripIndex].ShaderIndex == 1)
+            && uyaTie6109Diagnostics.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 20
+            && uyaTie6109Diagnostics.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
+        $"expected UYA 6109 glow marker to resolve to packet 2 shader 1 light panels, got remaps={string.Join("; ", uyaTie6109.GlowRgbaRemaps.Select(remap => $"{remap.Offset:X}/{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={uyaTie6109.GlowRgbaVertices.Count}, export={uyaTie6109Diagnostics.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
+    var uyaTie6109LightPanelMinimumNormalDot = ReadPrimitiveMinimumNormalFaceDot(
+        uyaTie6109Export,
+        packetIndex: 2,
+        shaderIndex: 1);
+    Expect(
+        uyaTie6109LightPanelMinimumNormalDot is >= 0.8f,
+        $"expected UYA 6109 packet 2 shader 1 light-panel normals to agree with exported faces, got minimum dot {uyaTie6109LightPanelMinimumNormalDot}");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie6109Export, packetIndex: 0, shaderIndex: 0) is >= 0.65f,
+        "expected UYA 6109 packet 0 shell normals to avoid the dark side-band source-normal mismatch");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie6109Export, packetIndex: 2, shaderIndex: 2) is >= 0.9f,
+        "expected UYA 6109 packet 2 shader 2 shell normals to avoid the dark side-band source-normal mismatch");
+}
+var uyaTie777Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "777", "core.bin");
+if (File.Exists(uyaTie777Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie777Input = File.OpenRead(uyaTie777Path);
+    var uyaTie777 = TieClassReader.Read(uyaTie777Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie777Export = TieGltfExporter.Export(
+        uyaTie777,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie777Export, packetIndex: 0, shaderIndex: 1) is >= 0.85f,
+        "expected UYA 777 crystal normals to reject mismatched packet-row source normals");
+}
+var uyaTie623Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "623", "core.bin");
+if (File.Exists(uyaTie623Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie623Input = File.OpenRead(uyaTie623Path);
+    var uyaTie623 = TieClassReader.Read(uyaTie623Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie623Export = TieGltfExporter.Export(
+        uyaTie623,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie623Export, packetIndex: 0, shaderIndex: 0) is >= 0.9f,
+        "expected UYA 623 outer arch normals to repair single-corner source-normal outliers");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie623Export, packetIndex: 1, shaderIndex: 0) is >= 0.9f,
+        "expected UYA 623 mirrored outer arch normals to repair single-corner source-normal outliers");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie623Export, packetIndex: 2, shaderIndex: 1) is >= 0.65f,
+        "expected UYA 623 upper arch normals to avoid dark source-normal patches");
+}
+var uyaTie472Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "472", "core.bin");
+if (File.Exists(uyaTie472Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie472Input = File.OpenRead(uyaTie472Path);
+    var uyaTie472 = TieClassReader.Read(uyaTie472Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie472Export = TieGltfExporter.Export(
+        uyaTie472,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie472DiagnosticsDocument = JsonDocument.Parse(uyaTie472Export.DiagnosticsBytes);
+    var uyaTie472Diagnostics = uyaTie472DiagnosticsDocument.RootElement;
+    Expect(
+        uyaTie472Diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 24,
+        "expected UYA 472 open annular shell to repair the strongly inward radial faces");
+    ExpectUyaPartialRepair(
+        uyaTie472Diagnostics,
+        "UYA 472",
+        stripIndex: 3,
+        expectedTriangleIndices: new[] { 16, 17, 18, 19 });
+    ExpectUyaPartialRepair(
+        uyaTie472Diagnostics,
+        "UYA 472",
+        stripIndex: 13,
+        expectedTriangleIndices: new[] { 0, 1 });
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 3, shaderIndex: 2) is >= 0.75f,
+        "expected UYA 472 packet 3 shell normals to repair severe single-corner source-normal outliers");
+    Expect(
+        ReadPrimitiveCopiedNormalMismatchCount(uyaTie472Export, packetIndex: 3, shaderIndex: 2) == 0,
+        "expected UYA 472 packet 3 shell normals to repair copied source-normal panels that disagree with the face");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 15, shaderIndex: 2) is >= 0.84f,
+        "expected UYA 472 lower ring shell normals to avoid dark single-corner source-normal panels");
+    Expect(
+        ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 16, shaderIndex: 2) is >= 0.84f,
+        "expected UYA 472 mirrored lower ring shell normals to avoid dark single-corner source-normal panels");
+}
+var uyaTie491Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "491", "core.bin");
+if (File.Exists(uyaTie491Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie491Input = File.OpenRead(uyaTie491Path);
+    var uyaTie491 = TieClassReader.Read(uyaTie491Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie491Export = TieGltfExporter.Export(
+        uyaTie491,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie491DiagnosticsDocument = JsonDocument.Parse(uyaTie491Export.DiagnosticsBytes);
+    var uyaTie491Diagnostics = uyaTie491DiagnosticsDocument.RootElement;
+    var uyaTie491Strip10 = uyaTie491Diagnostics
+        .GetProperty("SourceNormalPhaseVotes")
+        .EnumerateArray()
+        .FirstOrDefault(vote => vote.GetProperty("StripIndex").GetInt32() == 10);
+    Expect(
+        uyaTie491Strip10.ValueKind != JsonValueKind.Undefined,
+        "expected UYA 491 strip 10 source-normal phase diagnostics");
+    if (uyaTie491Strip10.ValueKind != JsonValueKind.Undefined)
+    {
+        Expect(
+            uyaTie491Strip10.GetProperty("UsesNearDenseSourceNormalRepair").GetBoolean()
+            && uyaTie491Strip10.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
+            "expected UYA 491 strip 10 to use near-dense source-normal phase repair");
+        Expect(
+            uyaTie491Strip10.GetProperty("WindingRepairTriangleIndices")
+                .EnumerateArray()
+                .Select(index => index.GetInt32())
+                .SequenceEqual(Enumerable.Range(0, 20)),
+            "expected UYA 491 strip 10 to repair the full inverted arch strip");
+    }
+}
+var uyaTie6230Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6230", "core.bin");
+if (File.Exists(uyaTie6230Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie6230Input = File.OpenRead(uyaTie6230Path);
+    var uyaTie6230 = TieClassReader.Read(uyaTie6230Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie6230Export = TieGltfExporter.Export(
+        uyaTie6230,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie6230DiagnosticsDocument = JsonDocument.Parse(uyaTie6230Export.DiagnosticsBytes);
+    var uyaTie6230Diagnostics = uyaTie6230DiagnosticsDocument.RootElement;
+    Expect(
+        uyaTie6230Diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 27,
+        "expected UYA 6230 sphere to restore the source-phase inward triangle patches");
+    Expect(
+        ReadMinimumFaceRadialDot(uyaTie6230Export) is >= 0.5f,
+        "expected UYA 6230 sphere faces to point outward after local inward winding repair");
+    Expect(
+        ReadMinimumNormalFaceDot(uyaTie6230Export) is >= 0.95f,
+        "expected UYA 6230 sphere normals to be rebuilt consistently across local inward winding repairs");
+}
 Expect(tie.Header.GlowRgba == unchecked((int)0x803360A3), $"expected glow RGBA 0x803360A3, got 0x{unchecked((uint)tie.Header.GlowRgba):X8}");
 Expect(tie.GlowRgbaRemaps.Count == 1, $"expected one decoded 09907 glow RGBA remap, got {tie.GlowRgbaRemaps.Count}");
 Expect(tie.GlowRgbaRemaps[0].Offset == 0x1150, $"expected 09907 glow RGBA remap offset 0x1150, got 0x{tie.GlowRgbaRemaps[0].Offset:X}");
@@ -844,6 +1082,8 @@ ValidateBroadSparseTableNormalFixture();
 ValidateHighInvertedRatioTableNormalFixture();
 ValidateUpperStrongDownTableNormalFixture();
 ValidatePoorlyAlignedSourceNormalRepairFixture();
+ValidateDlFlatProfileLocalInwardRepairFixture();
+ValidateDlLevel07AmbientRegressionFixture();
 ValidateOrganicDuplicatePositionNormalWeldFixture();
 ValidateLogicalNormalRemapMetadataFixture();
 ValidateInvertedComponentWindingFixture();
@@ -869,6 +1109,36 @@ void Expect(bool condition, string message)
     {
         failures.Add(message);
     }
+}
+
+void ExpectUyaPartialRepair(
+    JsonElement diagnostics,
+    string label,
+    int stripIndex,
+    int[] expectedTriangleIndices)
+{
+    var vote = diagnostics
+        .GetProperty("SourceNormalPhaseVotes")
+        .EnumerateArray()
+        .FirstOrDefault(vote => vote.GetProperty("StripIndex").GetInt32() == stripIndex);
+    Expect(
+        vote.ValueKind != JsonValueKind.Undefined,
+        $"expected {label} strip {stripIndex} source-normal phase diagnostics");
+    if (vote.ValueKind == JsonValueKind.Undefined)
+    {
+        return;
+    }
+
+    Expect(
+        vote.GetProperty("UsesPartialSmallStripSourceNormalRepair").GetBoolean()
+        && vote.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
+        $"expected {label} strip {stripIndex} to use partial short-strip source-normal repair");
+    Expect(
+        vote.GetProperty("WindingRepairTriangleIndices")
+            .EnumerateArray()
+            .Select(index => index.GetInt32())
+            .SequenceEqual(expectedTriangleIndices),
+        $"expected {label} strip {stripIndex} to repair only the source-normal inverted triangles");
 }
 
 void ValidateFixture(string fixturePath)
@@ -2422,6 +2692,110 @@ void ValidatePoorlyAlignedSourceNormalRepairFixture()
     {
         failures.Add($"{relativePath}: {ex.Message}");
         Console.WriteLine($"FAIL DL tie poorly aligned source-normal repair {relativePath}");
+    }
+}
+
+void ValidateDlFlatProfileLocalInwardRepairFixture()
+{
+    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9097", "core.bin");
+    if (!File.Exists(fixturePath))
+    {
+        return;
+    }
+
+    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
+    try
+    {
+        using var input = File.OpenRead(fixturePath);
+        var fixtureTie = TieClassReader.Read(input, TieClassReadOptions.ForGameProfile(dlProfile));
+        var textureResources = BuildFixtureTextureResources(fixturePath);
+        var fixtureExport = TieGltfExporter.Export(
+            fixtureTie,
+            "tie.gltf",
+            new TieGltfExportOptions
+            {
+                BufferFileName = "tie.buffer.bin",
+                GameProfile = dlProfile,
+                ExternalTextureUris = textureResources?.Uris,
+                ExternalTextureSizes = textureResources?.Sizes,
+                ExternalTextureAlpha = textureResources?.Alpha
+            });
+
+        using (var diagnosticsDocument = JsonDocument.Parse(fixtureExport.DiagnosticsBytes))
+        {
+            var diagnostics = diagnosticsDocument.RootElement;
+            Expect(
+                diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 0,
+                $"{relativePath}: expected DL flat-profile normal repair not to run UYA local inward winding flips");
+        }
+
+        var minimumNormalFaceDot = ReadMinimumNormalFaceDot(fixtureExport);
+        Expect(
+            minimumNormalFaceDot is >= 0.6f,
+            $"{relativePath}: expected 9097 normals to stay aligned with final faces, got minimum dot {minimumNormalFaceDot}");
+
+        Console.WriteLine($"PASS DL tie flat-profile local inward guard {relativePath}");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"{relativePath}: {ex.Message}");
+        Console.WriteLine($"FAIL DL tie flat-profile local inward guard {relativePath}");
+    }
+}
+
+void ValidateDlLevel07AmbientRegressionFixture()
+{
+    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9085", "core.bin");
+    if (!File.Exists(fixturePath))
+    {
+        return;
+    }
+
+    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
+    try
+    {
+        using var input = File.OpenRead(fixturePath);
+        var fixtureTie = TieClassReader.Read(input, TieClassReadOptions.ForGameProfile(dlProfile));
+        var textureResources = BuildFixtureTextureResources(fixturePath);
+        var fixtureExport = TieGltfExporter.Export(
+            fixtureTie,
+            "tie.gltf",
+            new TieGltfExportOptions
+            {
+                BufferFileName = "tie.buffer.bin",
+                GameProfile = dlProfile,
+                ExternalTextureUris = textureResources?.Uris,
+                ExternalTextureSizes = textureResources?.Sizes,
+                ExternalTextureAlpha = textureResources?.Alpha
+            });
+
+        using (var diagnosticsDocument = JsonDocument.Parse(fixtureExport.DiagnosticsBytes))
+        {
+            var diagnostics = diagnosticsDocument.RootElement;
+            Expect(
+                diagnostics.GetProperty("AmbientIndexAccessorCount").GetInt32() > 0
+                && diagnostics.GetProperty("ResolvedAmbientIndexVertexCount").GetInt32() > 0
+                && diagnostics.GetProperty("AmbientColorRecipeCount").GetInt32() > 0,
+                $"{relativePath}: expected DL level07 tie ambient color attributes to remain available");
+            Expect(
+                diagnostics.GetProperty("SourcePacketRowNormalVertexCount").GetInt32() == 0,
+                $"{relativePath}: expected DL export not to apply UYA packet-row source normals");
+            Expect(
+                diagnostics.GetProperty("SourceRgbaRecipeNormalVertexCount").GetInt32() == 0,
+                $"{relativePath}: expected DL export not to apply UYA RGBA-recipe source normals");
+        }
+
+        var minimumNormalFaceDot = ReadMinimumNormalFaceDot(fixtureExport);
+        Expect(
+            minimumNormalFaceDot is >= 0.85f,
+            $"{relativePath}: expected 9085 normals to stay aligned with final faces, got minimum dot {minimumNormalFaceDot}");
+
+        Console.WriteLine($"PASS DL tie level07 ambient guard {relativePath}");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"{relativePath}: {ex.Message}");
+        Console.WriteLine($"FAIL DL tie level07 ambient guard {relativePath}");
     }
 }
 
@@ -4785,6 +5159,213 @@ static List<(int PacketIndex, int ShaderIndex, int TriangleCount, string? Materi
     }
 
     return summaries;
+}
+
+static float? ReadPrimitiveMinimumNormalFaceDot(TieGltfExport fixtureExport, int packetIndex, int shaderIndex)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var extras = primitive.GetProperty("extras");
+        if (extras.GetProperty("PacketIndex").GetInt32() != packetIndex
+            || extras.GetProperty("ShaderIndex").GetInt32() != shaderIndex)
+        {
+            continue;
+        }
+
+        var attributes = primitive.GetProperty("attributes");
+        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+        var normals = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("NORMAL").GetInt32());
+        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+        var minimumDot = 1f;
+        var triangleCount = 0;
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var aIndex = indices[i];
+            var bIndex = indices[i + 1];
+            var cIndex = indices[i + 2];
+            if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
+            {
+                continue;
+            }
+
+            minimumDot = MathF.Min(
+                minimumDot,
+                MathF.Min(
+                    NormalDot(Normalize(normals[aIndex]), faceNormal),
+                    MathF.Min(
+                        NormalDot(Normalize(normals[bIndex]), faceNormal),
+                        NormalDot(Normalize(normals[cIndex]), faceNormal))));
+            triangleCount++;
+        }
+
+        return triangleCount > 0 ? minimumDot : null;
+    }
+
+    return null;
+}
+
+static int ReadPrimitiveCopiedNormalMismatchCount(TieGltfExport fixtureExport, int packetIndex, int shaderIndex)
+{
+    const float copiedNormalMinimumDot = 0.999f;
+    const float copiedNormalMaximumAverageFaceDot = 0.93f;
+
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var mismatchCount = 0;
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var extras = primitive.GetProperty("extras");
+        if (extras.GetProperty("PacketIndex").GetInt32() != packetIndex
+            || extras.GetProperty("ShaderIndex").GetInt32() != shaderIndex)
+        {
+            continue;
+        }
+
+        var attributes = primitive.GetProperty("attributes");
+        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+        var normals = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("NORMAL").GetInt32());
+        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var aIndex = indices[i];
+            var bIndex = indices[i + 1];
+            var cIndex = indices[i + 2];
+            var aNormal = Normalize(normals[aIndex]);
+            var bNormal = Normalize(normals[bIndex]);
+            var cNormal = Normalize(normals[cIndex]);
+            if (NormalDot(aNormal, bNormal) < copiedNormalMinimumDot
+                || NormalDot(aNormal, cNormal) < copiedNormalMinimumDot
+                || NormalDot(bNormal, cNormal) < copiedNormalMinimumDot
+                || !TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
+            {
+                continue;
+            }
+
+            var averageFaceDot = (
+                NormalDot(aNormal, faceNormal)
+                + NormalDot(bNormal, faceNormal)
+                + NormalDot(cNormal, faceNormal)) / 3f;
+            if (averageFaceDot < copiedNormalMaximumAverageFaceDot)
+            {
+                mismatchCount++;
+            }
+        }
+    }
+
+    return mismatchCount;
+}
+
+static float? ReadMinimumNormalFaceDot(TieGltfExport fixtureExport)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var minimumDot = 1f;
+    var triangleCount = 0;
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var attributes = primitive.GetProperty("attributes");
+        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+        var normals = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("NORMAL").GetInt32());
+        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var aIndex = indices[i];
+            var bIndex = indices[i + 1];
+            var cIndex = indices[i + 2];
+            if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
+            {
+                continue;
+            }
+
+            minimumDot = MathF.Min(
+                minimumDot,
+                MathF.Min(
+                    NormalDot(Normalize(normals[aIndex]), faceNormal),
+                    MathF.Min(
+                        NormalDot(Normalize(normals[bIndex]), faceNormal),
+                        NormalDot(Normalize(normals[cIndex]), faceNormal))));
+            triangleCount++;
+        }
+    }
+
+    return triangleCount > 0 ? minimumDot : null;
+}
+
+static float? ReadMinimumFaceRadialDot(TieGltfExport fixtureExport)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var primitives = root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray().ToArray();
+    var allPositions = new List<(float X, float Y, float Z)>();
+    foreach (var primitive in primitives)
+    {
+        allPositions.AddRange(ReadExportedVec3Accessor(
+            fixtureExport,
+            root,
+            primitive.GetProperty("attributes").GetProperty("POSITION").GetInt32()));
+    }
+
+    if (allPositions.Count == 0)
+    {
+        return null;
+    }
+
+    var min = allPositions[0];
+    var max = allPositions[0];
+    foreach (var position in allPositions.Skip(1))
+    {
+        min = (
+            MathF.Min(min.X, position.X),
+            MathF.Min(min.Y, position.Y),
+            MathF.Min(min.Z, position.Z));
+        max = (
+            MathF.Max(max.X, position.X),
+            MathF.Max(max.Y, position.Y),
+            MathF.Max(max.Z, position.Z));
+    }
+
+    var center = (
+        (min.X + max.X) * 0.5f,
+        (min.Y + max.Y) * 0.5f,
+        (min.Z + max.Z) * 0.5f);
+    var minimumDot = 1f;
+    var triangleCount = 0;
+    foreach (var primitive in primitives)
+    {
+        var attributes = primitive.GetProperty("attributes");
+        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            var a = positions[indices[i]];
+            var b = positions[indices[i + 1]];
+            var c = positions[indices[i + 2]];
+            if (!TryFaceNormal(a, b, c, out var faceNormal))
+            {
+                continue;
+            }
+
+            var triangleCenter = (
+                X: (a.X + b.X + c.X) / 3f,
+                Y: (a.Y + b.Y + c.Y) / 3f,
+                Z: (a.Z + b.Z + c.Z) / 3f);
+            if (!TryNormalize((
+                    triangleCenter.X - center.Item1,
+                    triangleCenter.Y - center.Item2,
+                    triangleCenter.Z - center.Item3),
+                    out var radialNormal))
+            {
+                continue;
+            }
+
+            minimumDot = MathF.Min(minimumDot, NormalDot(faceNormal, radialNormal));
+            triangleCount++;
+        }
+    }
+
+    return triangleCount > 0 ? minimumDot : null;
 }
 
 static (float X, float Y, float Z) ReadExportedPosition(TieGltfExport fixtureExport, int logicalVertexIndex)

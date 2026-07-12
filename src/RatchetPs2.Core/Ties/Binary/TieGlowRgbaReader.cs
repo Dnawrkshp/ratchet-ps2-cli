@@ -12,10 +12,18 @@ internal static class TieGlowRgbaReader
         IReadOnlyList<TiePacketDataBlock> packetDataBlocks,
         IReadOnlyList<TieLodTopology> lodTopologies)
     {
-        var rgbaRemapOffsets = header.RgbaRemapOffsets
-            .Where(offset => offset > 0)
-            .Select(offset => (int)offset)
-            .ToHashSet();
+        var remapEnd = header.ShadersOffset > 0
+            ? Math.Min(TieBinaryReaderUtils.CheckedOffset(header.ShadersOffset, "shader table"), bytes.Length)
+            : bytes.Length;
+        var rgbaRemapOffsets = new HashSet<int>();
+        foreach (var offset in header.RgbaRemapOffsets.Where(offset => offset > 0))
+        {
+            rgbaRemapOffsets.Add(offset);
+            if (TieVertexNormalReader.TryResolveRgbaRemapChunkOffset(bytes, header, offset, remapEnd, out var resolvedOffset))
+            {
+                rgbaRemapOffsets.Add(resolvedOffset);
+            }
+        }
         var remapOffsets = header.GlowRemapOffsets
             .Select((offset, index) => (Offset: (int)offset, Index: index))
             .Where(item => item.Offset > 0)
@@ -238,6 +246,12 @@ internal static class TieGlowRgbaReader
 
         if (sourcePacket is not null
             && TryResolveGlowRemapScissorFirstShaderRange(range, sourcePacket, lodBlocks, packetsByBlockKey, endOffset))
+        {
+            return;
+        }
+
+        if (sourcePacket is not null
+            && TryResolveGlowRemapNextPacketFirstShaderRange(range, sourcePacket, lodBlocks, packetsByBlockKey, block))
         {
             return;
         }
@@ -633,6 +647,52 @@ internal static class TieGlowRgbaReader
         range.ResolvedVertexRowCount = eligibleRows.Length;
         range.ResolvedBlocks.Add(block);
         range.ResolvedByLocalFirstShaderRange = true;
+        return true;
+    }
+
+    private static bool TryResolveGlowRemapNextPacketFirstShaderRange(
+        GlowRgbaRemapRange range,
+        TiePacket sourcePacket,
+        IReadOnlyList<TiePacketDataBlock> lodBlocks,
+        IReadOnlyDictionary<(int LodIndex, int PacketIndex), TiePacket> packetsByBlockKey,
+        TiePacketDataBlock block)
+    {
+        if (!range.IsRgbaRemapOffset
+            || block.VertexRows.Count == 0
+            || sourcePacket.ShaderReferences.Count != 1)
+        {
+            return false;
+        }
+
+        var vertexRowsStart = block.VertexRows[0].Offset;
+        var vertexRowsEnd = block.VertexRows[^1].Offset + 0x10;
+        if (range.Offset < vertexRowsStart || range.Offset >= vertexRowsEnd)
+        {
+            return false;
+        }
+
+        var sourceShaderIndex = sourcePacket.ShaderReferences[0].ShaderIndex;
+        var nextBlock = lodBlocks
+            .Where(candidate => candidate.LodIndex == block.LodIndex
+                && candidate.Offset > block.Offset
+                && candidate.VertexRows.Count > 0)
+            .OrderBy(candidate => candidate.Offset)
+            .ThenBy(candidate => candidate.PacketIndex)
+            .FirstOrDefault();
+        if (nextBlock is null
+            || !packetsByBlockKey.TryGetValue((nextBlock.LodIndex, nextBlock.PacketIndex), out var nextPacket)
+            || nextPacket.ShaderReferences.Count <= 1)
+        {
+            return false;
+        }
+
+        var targetShaderIndex = nextPacket.ShaderReferences[0].ShaderIndex;
+        if (targetShaderIndex < 0 || targetShaderIndex == sourceShaderIndex)
+        {
+            return false;
+        }
+
+        ApplyShaderRangeResolution(range, targetShaderIndex, [nextBlock]);
         return true;
     }
 

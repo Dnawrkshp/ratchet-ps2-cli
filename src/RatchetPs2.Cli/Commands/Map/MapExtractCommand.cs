@@ -10,10 +10,10 @@ internal static class MapExtractCommand
     public static Command Build()
     {
         var gameOption = CommonOptions.Game();
-        var inputOption = CommonOptions.InputFile("Path to the DL game ISO.");
+        var inputOption = CommonOptions.InputFile("Path to the game ISO.");
         var levelOption = new Option<int>("--level")
         {
-            Description = "DL level index to extract.",
+            Description = "Level index to extract.",
             Required = true
         };
         var outputOption = new Option<DirectoryInfo>("--output")
@@ -24,7 +24,7 @@ internal static class MapExtractCommand
 
         var command = CliCommandBuilder.Create(
             "extract",
-            "Extract a DL map from a game ISO into a rebuild-oriented package.",
+            "Extract a map from a game ISO into a rebuild-oriented package.",
             gameOption,
             inputOption,
             levelOption,
@@ -40,13 +40,13 @@ internal static class MapExtractCommand
             if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out var gameId))
             {
                 Console.Error.WriteLine(
-                    $"Unsupported --game value '{gameValue}'. Map extraction currently supports DL only.");
+                    $"Unsupported --game value '{gameValue}'. Map extraction currently supports UYA and DL.");
                 return 1;
             }
 
-            if (gameId != GameId.DL)
+            if (gameId is not (GameId.DL or GameId.UYA))
             {
-                Console.Error.WriteLine("Map extraction currently supports only --game DL.");
+                Console.Error.WriteLine("Map extraction currently supports only --game UYA or --game DL.");
                 return 1;
             }
 
@@ -64,9 +64,17 @@ internal static class MapExtractCommand
 
             try
             {
-                var summary = DlMapExtractionWriter.Extract(inputFile, level, outputDirectory);
+                if (gameId == GameId.UYA)
+                {
+                    var summary = UyaMapExtractionWriter.Extract(inputFile, level, outputDirectory);
+                    Console.WriteLine(
+                        $"Extracted UYA level {level} to '{summary.OutputDirectory}' ({summary.FileCount} files, {summary.SectorCount} sectors).");
+                    return 0;
+                }
+
+                var dlSummary = DlMapExtractionWriter.Extract(inputFile, level, outputDirectory);
                 Console.WriteLine(
-                    $"Extracted DL level {level} to '{summary.OutputDirectory}' ({summary.CoreSegmentCount} core segments, {summary.TextureCount} textures).");
+                    $"Extracted DL level {level} to '{dlSummary.OutputDirectory}' ({dlSummary.CoreSegmentCount} core segments, {dlSummary.TextureCount} textures).");
                 return 0;
             }
             catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)

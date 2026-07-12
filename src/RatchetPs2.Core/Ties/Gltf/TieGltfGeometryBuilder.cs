@@ -7,8 +7,15 @@ namespace RatchetPs2.Core.Ties;
 internal static class TieGltfGeometryBuilder
 {
     private const float PoorlyAlignedSourceTriangleMinimumAverageDot = 0.6f;
-    private const float PoorlyAlignedSourceTriangleMinimumCornerDot = 0.2f;
+    private const float PoorlyAlignedSourceTriangleMinimumCornerDot = 0.45f;
+    private const float PoorlyAlignedSourceTriangleSingleBadCornerMinimumDot = 0.65f;
+    private const float PoorlyAlignedSourceTriangleMildSingleBadCornerMinimumDot = 0.75f;
+    private const float PoorlyAlignedSourceTriangleMildSingleBadCornerMaximumDot = 0.85f;
+    private const float PoorlyAlignedSourceTriangleMildSingleBadCornerMaximumAverageDot = 0.95f;
+    private const float PoorlyAlignedSourceTriangleCopiedNormalMinimumDot = 0.999f;
+    private const float PoorlyAlignedSourceTriangleCopiedNormalMaximumAverageDot = 0.93f;
     private const int PoorlyAlignedSourceTriangleMinimumBadCornerCount = 2;
+    private const float PoorlyAlignedSourceTriangleSingleBadCornerMinimumGoodDot = 0.6f;
 
     public static GltfGeometry Build(
         IReadOnlyList<TieShader> shaders,
@@ -21,6 +28,7 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
         bool suppressGeneratedNormalFallback,
         bool useGeometryWindingRepair,
+        bool useLocalInwardGeometryWindingRepair,
         IReadOnlyList<Vector2> texCoords,
         IReadOnlyList<Vector2> multipassTexCoords,
         IReadOnlyList<Vector4> glowColors,
@@ -54,6 +62,7 @@ internal static class TieGltfGeometryBuilder
         var enableFlatProfileNormalFallbacks = useGeometryWindingRepair && !suppressGeneratedNormalFallback;
         var restoreFlatProfileFaceNormals = enableFlatProfileNormalFallbacks
             && TieGltfFlatProfileNormalRepairer.ShouldRestore(positions);
+        var enableLocalInwardWindingRepair = useLocalInwardGeometryWindingRepair;
         var expandedPositions = positions.ToList();
         var expandedNormals = normals.ToList();
         var sourceNormalVertexIndexSet = sourceNormalVertexIndices.ToHashSet();
@@ -175,7 +184,8 @@ internal static class TieGltfGeometryBuilder
                 expandedAmbientIndices,
                 includeAmbientIndices,
                 expandedGroups,
-                enableFlatProfileLocalInwardRepair: enableFlatProfileNormalFallbacks,
+                enableLocalInwardRepair: enableLocalInwardWindingRepair,
+                smoothLocalInwardComponentNormals: useLocalInwardGeometryWindingRepair,
                 enableUpperHorizontalFlatFaceFallback: true)
             : TieGltfWindingRepairResult.None;
 
@@ -423,19 +433,31 @@ internal static class TieGltfGeometryBuilder
                     }
 
                     var faceNormal = Vector3.Normalize(normal);
-                    var averageNormal = expandedNormals[aIndex] + expandedNormals[bIndex] + expandedNormals[cIndex];
-                    if (averageNormal.LengthSquared() <= 1e-12f
-                        || Vector3.Dot(faceNormal, Vector3.Normalize(averageNormal))
-                            >= PoorlyAlignedSourceTriangleMinimumAverageDot)
+                    var cornerDots = new[]
                     {
-                        continue;
-                    }
+                        Vector3.Dot(faceNormal, expandedNormals[aIndex]),
+                        Vector3.Dot(faceNormal, expandedNormals[bIndex]),
+                        Vector3.Dot(faceNormal, expandedNormals[cIndex])
+                    };
+                    var averageNormal = expandedNormals[aIndex] + expandedNormals[bIndex] + expandedNormals[cIndex];
+                    var averageNormalDot = averageNormal.LengthSquared() <= 1e-12f
+                        ? 1f
+                        : Vector3.Dot(faceNormal, Vector3.Normalize(averageNormal));
 
                     var badOffsets = new List<int>(3);
                     AddBadSourceOffset(i, aIndex);
                     AddBadSourceOffset(i + 1, bIndex);
                     AddBadSourceOffset(i + 2, cIndex);
-                    if (badOffsets.Count < PoorlyAlignedSourceTriangleMinimumBadCornerCount)
+                    var repairCopiedSourceNormalTriangle = badOffsets.Count == 0 && TryAddCopiedSourceNormalTriangle();
+                    if (!repairCopiedSourceNormalTriangle
+                        && badOffsets.Count >= PoorlyAlignedSourceTriangleMinimumBadCornerCount)
+                    {
+                        if (averageNormalDot >= PoorlyAlignedSourceTriangleMinimumAverageDot)
+                        {
+                            continue;
+                        }
+                    }
+                    else if (!repairCopiedSourceNormalTriangle && !TryAddSingleBadSourceCorner())
                     {
                         continue;
                     }
@@ -454,11 +476,85 @@ internal static class TieGltfGeometryBuilder
                     void AddBadSourceOffset(int indexOffset, int vertexIndex)
                     {
                         if (IsSourceNormalVertex(vertexIndex)
-                            && Vector3.Dot(faceNormal, expandedNormals[vertexIndex])
-                                < PoorlyAlignedSourceTriangleMinimumCornerDot)
+                            && cornerDots[indexOffset - i] < PoorlyAlignedSourceTriangleMinimumCornerDot)
                         {
                             badOffsets.Add(indexOffset);
                         }
+                    }
+
+                    bool TryAddSingleBadSourceCorner()
+                    {
+                        var badCorner = -1;
+                        for (var corner = 0; corner < cornerDots.Length; corner++)
+                        {
+                            var vertexIndex = corner switch
+                            {
+                                0 => aIndex,
+                                1 => bIndex,
+                                _ => cIndex
+                            };
+                            if (IsSourceNormalVertex(vertexIndex)
+                                && IsSingleBadCornerDot(cornerDots[corner]))
+                            {
+                                if (badCorner >= 0)
+                                {
+                                    return false;
+                                }
+
+                                badCorner = corner;
+                            }
+                        }
+
+                        if (badCorner < 0)
+                        {
+                            return false;
+                        }
+
+                        for (var corner = 0; corner < cornerDots.Length; corner++)
+                        {
+                            if (corner != badCorner
+                                && cornerDots[corner] < PoorlyAlignedSourceTriangleSingleBadCornerMinimumGoodDot)
+                            {
+                                return false;
+                            }
+                        }
+
+                        badOffsets.Add(i + badCorner);
+                        return true;
+                    }
+
+                    bool TryAddCopiedSourceNormalTriangle()
+                    {
+                        if (!IsSourceNormalVertex(aIndex)
+                            || !IsSourceNormalVertex(bIndex)
+                            || !IsSourceNormalVertex(cIndex)
+                            || averageNormalDot >= PoorlyAlignedSourceTriangleCopiedNormalMaximumAverageDot
+                            || Vector3.Dot(expandedNormals[aIndex], expandedNormals[bIndex])
+                                < PoorlyAlignedSourceTriangleCopiedNormalMinimumDot
+                            || Vector3.Dot(expandedNormals[aIndex], expandedNormals[cIndex])
+                                < PoorlyAlignedSourceTriangleCopiedNormalMinimumDot
+                            || Vector3.Dot(expandedNormals[bIndex], expandedNormals[cIndex])
+                                < PoorlyAlignedSourceTriangleCopiedNormalMinimumDot)
+                        {
+                            return false;
+                        }
+
+                        badOffsets.Add(i);
+                        badOffsets.Add(i + 1);
+                        badOffsets.Add(i + 2);
+                        return true;
+                    }
+
+                    bool IsSingleBadCornerDot(float dot)
+                    {
+                        if (dot < PoorlyAlignedSourceTriangleSingleBadCornerMinimumDot)
+                        {
+                            return true;
+                        }
+
+                        return averageNormalDot < PoorlyAlignedSourceTriangleMildSingleBadCornerMaximumAverageDot
+                            && dot >= PoorlyAlignedSourceTriangleMildSingleBadCornerMinimumDot
+                            && dot < PoorlyAlignedSourceTriangleMildSingleBadCornerMaximumDot;
                     }
                 }
             }

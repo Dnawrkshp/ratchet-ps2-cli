@@ -70,6 +70,12 @@ public static partial class TfragGltfExporter
             .ToArray();
     }
 
+    private sealed record TfragGltfMesh(
+        string Name,
+        int LodIndex,
+        IReadOnlyList<TfragPrimitiveGroup> Groups,
+        TfragChunkLodMesh? SourceMesh);
+
     private sealed class TfragPrimitiveGroup
     {
         public TfragPrimitiveGroup(

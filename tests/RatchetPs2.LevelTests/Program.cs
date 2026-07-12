@@ -1,16 +1,31 @@
 using System.Buffers.Binary;
+using System.IO.Compression;
 using System.Text.Json;
+using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Wad;
+using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.UYA.Gameplay;
+using RatchetPs2.Games.UYA.Level;
 
 ValidateLevelInfoLookup();
 ValidateLevelWadParsing();
 ValidateLooseLevelWadExtraction();
 ValidateLooseLevelWadUnpacking();
+ValidateUyaLevelInfoLookup();
+ValidateUyaLevelWadParsing();
+ValidateUyaLooseLevelWadExtraction();
+ValidateUyaLooseLevelWadUnpacking();
+ValidateUyaStandaloneLevelDataUnpacking();
+ValidateUyaStandaloneGameplayUnpacking();
+ValidateUyaCustomMapZipUnpacking();
+ValidateUyaGameplayTypedParsing();
+ValidateUyaAssetRenderPackageBuild();
 ValidateLooseLevelWadRenderPackageWhenAvailable();
+ValidateUyaLooseLevelWadRenderPackageWhenAvailable();
 ValidateLooseLevelWadFailures();
 ValidateMissionPlaceholderDetection();
 ValidateLevelSceneWadEmptyDetection();
@@ -24,7 +39,7 @@ ValidateAssetSlicing();
 ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
 
-Console.WriteLine("DL level extraction tests passed.");
+Console.WriteLine("Level extraction tests passed.");
 
 static void ValidateLevelInfoLookup()
 {
@@ -163,6 +178,321 @@ static void ValidateLooseLevelWadUnpacking()
     Expect(packedMissionBytes.SequenceEqual(files["missions/0000/mission.wad"].Bytes), "packed package offsets should round-trip entry bytes");
 }
 
+static void ValidateUyaLevelInfoLookup()
+{
+    var iso = new byte[Math.Max(
+        UyaLevelConstants.RetailLevelInfoTableOffset
+            + (UyaLevelConstants.LevelInfoCount * UyaLevelConstants.LevelInfoSize),
+        UyaLevelConstants.SectorSize * 40)];
+
+    WriteUyaLevelInfoEntry(
+        iso,
+        3,
+        audio: new UyaFileBlock(30, 1),
+        level: new UyaFileBlock(31, 1),
+        scene: new UyaFileBlock(32, 2));
+
+    iso[31 * UyaLevelConstants.SectorSize] = 0x42;
+
+    using var stream = new MemoryStream(iso, writable: false);
+    var levelSet = UyaLevelInfoReader.ReadLevelSet(stream, 3);
+
+    Expect(levelSet.RequestedLevelIndex == 3, "UYA requested level index should be preserved");
+    Expect(levelSet.RequestedLevel.LevelAudioWad == new UyaFileBlock(30, 1), "UYA audio WAD block should be parsed");
+    Expect(levelSet.RequestedLevel.LevelWad == new UyaFileBlock(31, 1), "UYA level WAD block should be parsed");
+    Expect(levelSet.RequestedLevel.LevelSceneWad == new UyaFileBlock(32, 2), "UYA scene WAD block should be parsed");
+
+    stream.Position = 0;
+    var levelWadBytes = UyaLevelInfoReader.ReadSectorBlock(stream, levelSet.RequestedLevel.LevelWad);
+    Expect(levelWadBytes.Length == UyaLevelConstants.SectorSize, "UYA sector block read should return sector-scaled length");
+    Expect(levelWadBytes[0] == 0x42, "UYA sector block read should seek to the requested sector");
+
+    stream.Position = 0;
+    var levelWadHeaderBytes = UyaLevelInfoReader.ReadSectorHeader(stream, levelSet.RequestedLevel.LevelWad, 1);
+    Expect(levelWadHeaderBytes.Length == UyaLevelConstants.SectorSize, "UYA fixed sector header read should ignore fileblock length");
+    Expect(levelWadHeaderBytes[0] == 0x42, "UYA fixed sector header read should seek to the requested sector");
+
+    ExpectThrows<ArgumentOutOfRangeException>(() => UyaLevelInfoReader.ReadSectorHeader(stream, levelSet.RequestedLevel.LevelWad, 0));
+    ExpectThrows<InvalidDataException>(() => UyaLevelInfoReader.ReadSectorHeader(stream, new UyaFileBlock(int.MaxValue, 1), 1));
+    ExpectThrows<ArgumentOutOfRangeException>(() => UyaLevelInfoReader.ReadLevelSet(stream, UyaLevelConstants.LevelInfoCount));
+}
+
+static void ValidateUyaLevelWadParsing()
+{
+    var levelWadBytes = CreateSyntheticUyaLooseLevelWad(payloadBaseSector: 0x1234);
+    var levelWad = UyaLevelWadReader.ReadLevelWad(levelWadBytes);
+
+    Expect(levelWad.HeaderSize == UyaLevelConstants.LevelWadHeaderSize, "UYA level WAD header size should be parsed");
+    Expect(levelWad.Sector == 0x1234, "UYA level WAD sector should be parsed");
+    Expect(levelWad.Level == 7, "UYA level WAD level id should be parsed");
+    Expect(levelWad.ReverbType == 2, "UYA level WAD reverb should be parsed");
+    Expect(levelWad.Data == new UyaFileBlock(3, 2), "UYA level data fileblock should be parsed");
+    Expect(levelWad.SoundBank == new UyaFileBlock(1, 1), "UYA sound bank fileblock should be parsed");
+    Expect(levelWad.Gameplay == new UyaFileBlock(5, 1), "UYA gameplay fileblock should be parsed");
+    Expect(levelWad.Occlusion == new UyaFileBlock(6, 1), "UYA occlusion fileblock should be parsed");
+    Expect(levelWad.Chunks[0] == new UyaFileBlock(7, 1), "UYA first chunk fileblock should be parsed");
+    Expect(levelWad.ChunkBanks[0] == new UyaFileBlock(8, 1), "UYA first chunk bank fileblock should be parsed");
+    Expect(levelWad.HeaderBytes.Length == UyaLevelConstants.LevelWadHeaderSize, "UYA level WAD header bytes should be preserved");
+
+    var soundBank = UyaLevelWadReader.ReadSectorFileBlock(levelWadBytes, levelWad.SoundBank);
+    Expect(soundBank.Length == UyaLevelConstants.SectorSize, "UYA sector fileblock should read sector-scaled length");
+    Expect(soundBank[0] == 0x41, "UYA sector fileblock should read from the requested sector");
+
+    var levelData = UyaLevelWadReader.ReadLevelDataWad(UyaLevelWadReader.ReadSectorFileBlock(levelWadBytes, levelWad.Data));
+    Expect(levelData.HeaderSize == UyaLevelConstants.LevelDataHeaderSize, "UYA level data fixed header size should be reported");
+    Expect(levelData.Overlay == new UyaByteBlock(0x80, 4), "UYA level data overlay byte block should be parsed");
+    Expect(levelData.CoreIndex == new UyaByteBlock(0x90, 4), "UYA level data core index byte block should be parsed");
+    Expect(levelData.GsRam == new UyaByteBlock(0xa0, 4), "UYA level data GS RAM byte block should be parsed");
+    Expect(levelData.HudHeader == new UyaByteBlock(0xb0, 4), "UYA level data HUD header byte block should be parsed");
+    Expect(levelData.HudBanks[0] == new UyaByteBlock(0xc0, 4), "UYA level data first HUD bank byte block should be parsed");
+    Expect(levelData.CoreData == new UyaByteBlock(0xd0, 4), "UYA level data core payload byte block should be parsed");
+    Expect(levelData.TransitionTextures == new UyaByteBlock(0xe0, 4), "UYA level data transition texture byte block should be parsed");
+
+    var code = UyaLevelWadReader.ReadByteFileBlock(UyaLevelWadReader.ReadSectorFileBlock(levelWadBytes, levelWad.Data), levelData.Overlay);
+    Expect(code.SequenceEqual(new byte[] { 0x11, 0x12, 0x13, 0x14 }), "UYA byte fileblock should read exact byte length");
+}
+
+static void ValidateUyaLooseLevelWadExtraction()
+{
+    const int levelIndex = 3;
+    const int headerSector = 20;
+    const int payloadBaseSector = 60;
+    var looseWadBytes = CreateSyntheticUyaLooseLevelWad(payloadBaseSector);
+    var iso = CreateSyntheticUyaIso(levelIndex, headerSector, payloadBaseSector, looseWadBytes);
+
+    using var stream = new MemoryStream(iso, writable: false);
+    var extracted = UyaLooseLevelWadExtractor.ExtractPrimary(stream, levelIndex);
+
+    Expect(extracted.LevelIndex == levelIndex, "UYA loose WAD extraction should preserve requested level index");
+    Expect(extracted.HeaderSector == headerSector, "UYA loose WAD extraction should report the header sector");
+    Expect(extracted.PayloadBaseSector == payloadBaseSector, "UYA loose WAD extraction should report the payload base sector");
+    Expect(extracted.SectorCount == looseWadBytes.Length / UyaLevelConstants.SectorSize, "UYA loose WAD extraction should copy through the last referenced sector");
+    Expect(extracted.Bytes.SequenceEqual(looseWadBytes), "UYA loose WAD extraction should preserve referenced WAD bytes in a self-contained layout");
+}
+
+static void ValidateUyaLooseLevelWadUnpacking()
+{
+    var looseWadBytes = CreateSyntheticUyaLooseLevelWad(payloadBaseSector: 20);
+    var package = UyaLevelWadUnpacker.Unpack(looseWadBytes);
+    var files = package.Files.ToDictionary(file => file.Path);
+
+    Expect(files.ContainsKey("level_wad/header.bin"), "UYA loose WAD unpack should include the level WAD header");
+    Expect(files["level_wad/level_data.wad"].Bytes[0x80] == 0x11, "UYA loose WAD unpack should include level data bytes");
+    Expect(files["level_wad/sound.bnk"].Bytes[0] == 0x41, "UYA loose WAD unpack should include sound bank bytes");
+    Expect(files["gameplay/gameplay.bin"].Bytes[0] == UyaGameplayBlockReader.CoreHeaderSize, "UYA loose WAD unpack should include gameplay bytes");
+    Expect(files["gameplay/gameplay_core.bin"].Bytes.Length >= UyaGameplayBlockReader.CoreHeaderSize, "UYA loose WAD unpack should decompress gameplay bytes");
+    Expect(files["gameplay/core/header.bin"].Bytes.Length == UyaGameplayBlockReader.CoreHeaderSize, "UYA loose WAD unpack should expose the gameplay pointer table");
+    Expect(files["gameplay/core/level_settings.bin"].Bytes.SequenceEqual(new byte[] { 0xA1, 0xA2 }), "UYA loose WAD unpack should split gameplay level settings");
+    Expect(files["gameplay/core/directional_lights.bin"].Bytes.SequenceEqual(new byte[] { 0xB1, 0xB2 }), "UYA loose WAD unpack should split gameplay directional lights");
+    Expect(files["gameplay/core/us_english_strings.bin"].Bytes.SequenceEqual(new byte[] { 0xD1, 0xD2 }), "UYA loose WAD unpack should name language blocks as strings");
+    Expect(files["gameplay/core/splines.bin"].Bytes.SequenceEqual(new byte[] { 0xE1, 0xE2 }), "UYA loose WAD unpack should name path blocks as splines");
+    Expect(files["gameplay/core/grind_splines.bin"].Bytes[..2].SequenceEqual(new byte[] { 0xF1, 0xF2 }), "UYA loose WAD unpack should name grind path blocks as grind splines");
+    Expect(files["gameplay/core/moby_instances.bin"].Bytes[..2].SequenceEqual(new byte[] { 0xC1, 0xC2 }), "UYA loose WAD unpack should split gameplay moby instances");
+    Expect(files["occlusion/occlusion.bin"].Bytes[0] == 0x61, "UYA loose WAD unpack should include occlusion bytes");
+    Expect(files["level_wad/chunks/chunk0.wad"].Bytes[0] == 0x71, "UYA loose WAD unpack should include chunk bytes");
+    Expect(files["level_wad/chunks/chunk0_bank.wad"].Bytes[0] == 0x81, "UYA loose WAD unpack should include chunk bank bytes");
+    Expect(files["code/code.bin"].Bytes.SequenceEqual(new byte[] { 0x11, 0x12, 0x13, 0x14 }), "UYA loose WAD unpack should expose code payload");
+    Expect(files["assets/asset_header.bin"].Bytes.SequenceEqual(new byte[] { 0x21, 0x22, 0x23, 0x24 }), "UYA loose WAD unpack should expose asset header payload");
+    Expect(files["assets/palette.bin"].Bytes.SequenceEqual(new byte[] { 0x31, 0x32, 0x33, 0x34 }), "UYA loose WAD unpack should expose palette payload");
+    Expect(files["hud/header.bin"].Bytes.SequenceEqual(new byte[] { 0x41, 0x42, 0x43, 0x44 }), "UYA loose WAD unpack should expose HUD header payload");
+    Expect(files["hud/bank0.bin"].Bytes.SequenceEqual(new byte[] { 0x51, 0x52, 0x53, 0x54 }), "UYA loose WAD unpack should expose HUD bank payload");
+    Expect(files["assets/asset_wad.bin"].Bytes.SequenceEqual(new byte[] { 0x61, 0x62, 0x63, 0x64 }), "UYA loose WAD unpack should expose asset WAD payload");
+    Expect(files["transition_textures/transition_textures.bin"].Bytes.SequenceEqual(new byte[] { 0x71, 0x72, 0x73, 0x74 }), "UYA loose WAD unpack should expose transition texture payload");
+
+    var packed = package.ToPackedPackage();
+    Expect(packed.Entries.Count == package.Files.Count, "UYA packed package entry count should match loose file count");
+    var packedCodeEntry = packed.Entries.Single(entry => entry.Path == "code/code.bin");
+    var packedCodeBytes = packed.PackedBytes.AsSpan(packedCodeEntry.Offset, packedCodeEntry.Length).ToArray();
+    Expect(packedCodeBytes.SequenceEqual(files["code/code.bin"].Bytes), "UYA packed package offsets should round-trip entry bytes");
+}
+
+static void ValidateUyaStandaloneGameplayUnpacking()
+{
+    var files = UyaLevelWadUnpacker
+        .UnpackGameplay(CreateSyntheticUyaGameplay())
+        .ToDictionary(file => file.Path);
+
+    Expect(files["gameplay/gameplay.bin"].Bytes[0] == UyaGameplayBlockReader.CoreHeaderSize, "UYA standalone gameplay unpack should include raw gameplay bytes");
+    Expect(files["gameplay/gameplay_core.bin"].Bytes.Length >= UyaGameplayBlockReader.CoreHeaderSize, "UYA standalone gameplay unpack should expose core gameplay bytes");
+    Expect(files["gameplay/core/level_settings.bin"].Bytes.SequenceEqual(new byte[] { 0xA1, 0xA2 }), "UYA standalone gameplay unpack should split level settings");
+    Expect(files["gameplay/core/splines.bin"].Bytes.SequenceEqual(new byte[] { 0xE1, 0xE2 }), "UYA standalone gameplay unpack should split splines");
+}
+
+static void ValidateUyaStandaloneLevelDataUnpacking()
+{
+    var files = UyaLevelWadUnpacker
+        .UnpackLevelData(CreateSyntheticUyaLevelData())
+        .ToDictionary(file => file.Path);
+
+    Expect(files["level_wad/level_data.wad"].Bytes[0x80] == 0x11, "UYA standalone level data unpack should include raw level data bytes");
+    Expect(files["code/code.bin"].Bytes.SequenceEqual(new byte[] { 0x11, 0x12, 0x13, 0x14 }), "UYA standalone level data unpack should expose code payload");
+    Expect(files["assets/asset_header.bin"].Bytes.SequenceEqual(new byte[] { 0x21, 0x22, 0x23, 0x24 }), "UYA standalone level data unpack should expose asset header payload");
+    Expect(files["assets/asset_wad.bin"].Bytes.SequenceEqual(new byte[] { 0x61, 0x62, 0x63, 0x64 }), "UYA standalone level data unpack should expose asset WAD payload");
+}
+
+static void ValidateUyaCustomMapZipUnpacking()
+{
+    using var zipStream = new MemoryStream();
+    using (var archive = new ZipArchive(zipStream, ZipArchiveMode.Create, leaveOpen: true))
+    {
+        AddZipEntry(archive, "maps/example.wad", CreateSyntheticUyaLevelData());
+        AddZipEntry(archive, "maps/example.world", CreateSyntheticUyaGameplay());
+    }
+
+    var package = UyaCustomMapZipUnpacker.Unpack(zipStream.ToArray());
+
+    Expect(package.LevelDataWadEntryName == "maps/example.wad", "UYA custom map zip unpack should report the level data entry name");
+    Expect(package.WorldEntryName == "maps/example.world", "UYA custom map zip unpack should report the world entry name");
+    Expect(package.LevelDataFiles.Any(file => file.Path == "assets/asset_header.bin"), "UYA custom map zip unpack should expose level-data files");
+    Expect(package.GameplayFiles.Any(file => file.Path == "gameplay/core/splines.bin"), "UYA custom map zip unpack should expose gameplay files");
+    Expect(package.Files.Count == package.LevelDataFiles.Count + package.GameplayFiles.Count, "UYA custom map zip package should combine level-data and gameplay files");
+}
+
+static void ValidateUyaGameplayTypedParsing()
+{
+    var levelSettingsBytes = new byte[UyaLevelSettingsReader.MinimumSize + 2];
+    WriteInt32(levelSettingsBytes, 0x00, 57);
+    WriteInt32(levelSettingsBytes, 0x04, 65);
+    WriteInt32(levelSettingsBytes, 0x08, 50);
+    WriteInt32(levelSettingsBytes, 0x0c, 40);
+    WriteInt32(levelSettingsBytes, 0x10, 50);
+    WriteInt32(levelSettingsBytes, 0x14, 40);
+    WriteSingle(levelSettingsBytes, 0x18, 61440);
+    WriteSingle(levelSettingsBytes, 0x1c, 179200);
+    WriteSingle(levelSettingsBytes, 0x20, 255);
+    WriteSingle(levelSettingsBytes, 0x24, 63.75f);
+    WriteSingle(levelSettingsBytes, 0x28, -100);
+    WriteInt32(levelSettingsBytes, 0x2c, 1);
+    WriteSingle(levelSettingsBytes, 0x30, 1);
+    WriteSingle(levelSettingsBytes, 0x34, 2);
+    WriteSingle(levelSettingsBytes, 0x38, 3);
+    WriteSingle(levelSettingsBytes, 0x3c, 20);
+    WriteSingle(levelSettingsBytes, 0x40, 21);
+    WriteSingle(levelSettingsBytes, 0x44, 22);
+    WriteSingle(levelSettingsBytes, 0x48, 0.5f);
+    WriteInt32(levelSettingsBytes, 0x4c, -1);
+    WriteInt32(levelSettingsBytes, 0x50, 2);
+    WriteInt32(levelSettingsBytes, 0x54, 3);
+    WriteUInt32(levelSettingsBytes, 0x58, 0x12345678);
+    WriteInt32(levelSettingsBytes, 0x7c, 59);
+    WriteInt32(levelSettingsBytes, 0x80, 1234);
+    levelSettingsBytes[^2] = 0xaa;
+    levelSettingsBytes[^1] = 0xbb;
+
+    var mobyBytes = new byte[UyaMobyInstancesReader.HeaderSize + UyaMobyInstancesReader.RecordSize];
+    WriteInt32(mobyBytes, 0x00, 1);
+    WriteInt32(mobyBytes, 0x04, 400);
+    WriteInt32(mobyBytes, 0x08, 8);
+    WriteInt32(mobyBytes, 0x0c, 9);
+
+    const int mobyOffset = UyaMobyInstancesReader.HeaderSize;
+    WriteInt32(mobyBytes, mobyOffset, UyaMobyInstancesReader.RecordSize);
+    WriteInt32(mobyBytes, mobyOffset + 0x04, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x08, 8);
+    WriteInt32(mobyBytes, mobyOffset + 0x0c, 12);
+    WriteInt32(mobyBytes, mobyOffset + 0x10, 0x78);
+    WriteInt32(mobyBytes, mobyOffset + 0x14, 4);
+    WriteInt32(mobyBytes, mobyOffset + 0x18, 18);
+    WriteInt32(mobyBytes, mobyOffset + 0x1c, 28);
+    WriteInt32(mobyBytes, mobyOffset + 0x20, 32);
+    WriteInt32(mobyBytes, mobyOffset + 0x24, 36);
+    WriteInt32(mobyBytes, mobyOffset + 0x28, 0x107c);
+    WriteSingle(mobyBytes, mobyOffset + 0x2c, 1.5f);
+    WriteInt32(mobyBytes, mobyOffset + 0x30, 64);
+    WriteInt32(mobyBytes, mobyOffset + 0x34, 80);
+    WriteInt32(mobyBytes, mobyOffset + 0x38, 32);
+    WriteInt32(mobyBytes, mobyOffset + 0x3c, 64);
+    WriteSingle(mobyBytes, mobyOffset + 0x40, 10);
+    WriteSingle(mobyBytes, mobyOffset + 0x44, 20);
+    WriteSingle(mobyBytes, mobyOffset + 0x48, 30);
+    WriteSingle(mobyBytes, mobyOffset + 0x4c, 0.25f);
+    WriteSingle(mobyBytes, mobyOffset + 0x50, 0.5f);
+    WriteSingle(mobyBytes, mobyOffset + 0x54, 0.75f);
+    WriteInt32(mobyBytes, mobyOffset + 0x58, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x5c, 1);
+    WriteSingle(mobyBytes, mobyOffset + 0x60, -1);
+    WriteInt32(mobyBytes, mobyOffset + 0x64, 1);
+    WriteInt32(mobyBytes, mobyOffset + 0x68, 10);
+    WriteInt32(mobyBytes, mobyOffset + 0x6c, 1);
+    WriteInt32(mobyBytes, mobyOffset + 0x70, 0x54);
+    WriteInt32(mobyBytes, mobyOffset + 0x74, 86);
+    WriteInt32(mobyBytes, mobyOffset + 0x78, 77);
+    WriteInt32(mobyBytes, mobyOffset + 0x7c, 2);
+    WriteInt32(mobyBytes, mobyOffset + 0x80, 2);
+    WriteInt32(mobyBytes, mobyOffset + 0x84, -1);
+
+    var gameplay = UyaGameplayBlockReader.ReadCore(BuildGameplayData(
+        UyaGameplayBlockReader.CoreHeaderSize,
+        (0x00, levelSettingsBytes),
+        (0x4c, mobyBytes),
+        (0x58, [0x01, 0x02]),
+        (0x5c, [0x00, 0x00, 0x00, 0x00, 0x04, 0x00, 0x00, 0x00]),
+        (0x60, [0xde, 0xad, 0xbe, 0xef]),
+        (0x64, [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff])));
+    var settings = gameplay.Blocks.Single(block => block.SemanticName == "level_settings").LevelSettings;
+    var mobyInstances = gameplay.Blocks.Single(block => block.SemanticName == "moby_instances").MobyInstances;
+
+    Expect(settings is not null, "UYA core level_settings block should be parsed into a typed model");
+    Expect(settings!.BackgroundColor == new UyaRgb96(57, 65, 50), "UYA level settings background color should be parsed");
+    Expect(settings.FogColor == new UyaRgb96(40, 50, 40), "UYA level settings fog color should be parsed");
+    Expect(settings.FogFarDistance == 179200, "UYA level settings fog far distance should be parsed");
+    Expect(settings.IsSphericalWorld, "UYA level settings spherical world flag should be parsed");
+    Expect(settings.SphereCenter == new UyaVector3(1, 2, 3), "UYA level settings sphere center should be parsed");
+    Expect(settings.ShipPosition == new UyaVector3(20, 21, 22), "UYA level settings ship position should use DL axis order");
+    Expect(settings.ShipPath == -1, "UYA level settings ship path should be parsed");
+    Expect(settings.ChunkPlanes.Count == 0, "UYA empty level settings chunk plane terminator should be skipped");
+    Expect(settings.CoreSoundsCount == 59, "UYA level settings core sound count should be parsed");
+    Expect(settings.Rac3ThirdPart == 1234, "UYA level settings R&C3 tail field should be parsed");
+    Expect(settings.TrailingBytes.SequenceEqual(new byte[] { 0xaa, 0xbb }), "UYA level settings trailing bytes should be preserved");
+
+    Expect(mobyInstances is not null, "UYA core moby_instances block should be parsed into a typed model");
+    Expect(mobyInstances!.StaticCount == 1, "UYA moby instance static count should be parsed");
+    Expect(mobyInstances.SpawnableMobyCount == 400, "UYA moby instance spawnable count should be parsed");
+    Expect(mobyInstances.Pad8 == 8 && mobyInstances.PadC == 9, "UYA moby instance header padding should be parsed");
+
+    var moby = mobyInstances.Instances.Single();
+    Expect(moby.Size == UyaMobyInstancesReader.RecordSize, "UYA moby instance size field should be parsed");
+    Expect(moby.Mission == -1, "UYA moby instance mission should be parsed");
+    Expect(moby.Uid == 0x78, "UYA moby instance uid should be parsed");
+    Expect(moby.Bolts == 4, "UYA moby instance bolts should be parsed");
+    Expect(moby.ClassId == 0x107c, "UYA moby instance class id should be parsed");
+    Expect(moby.Scale == 1.5f, "UYA moby instance scale should be parsed");
+    Expect(moby.Position == new UyaVector3(10, 20, 30), "UYA moby instance position should use DL axis order");
+    Expect(moby.Rotation == new UyaVector3(0.25f, 0.5f, 0.75f), "UYA moby instance rotation should use DL axis order");
+    Expect(moby.PvarIndex == 10, "UYA moby instance pvar index should be parsed");
+    Expect(moby.Color == new UyaRgb96(86, 77, 2), "UYA moby instance color should be parsed");
+    Expect(moby.Unknown84 == -1, "UYA moby instance 0x84 field should be parsed");
+    Expect(gameplay.Blocks.Single(block => block.SemanticName == "pvar_data").PayloadBytes.SequenceEqual(new byte[] { 0xde, 0xad, 0xbe, 0xef }), "UYA pvar data payload should be exposed");
+}
+
+static void ValidateUyaAssetRenderPackageBuild()
+{
+    var rawAssetBytes = new byte[] { 0x11, 0x22, 0x33, 0x44 };
+    var compressedAssetBytes = CreateLiteralWad(rawAssetBytes);
+    var files = DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+        GameId.UYA,
+        levelIndex: 41,
+        headerBytes: new byte[0xc0],
+        paletteBytes: [],
+        assetBytes: compressedAssetBytes);
+    var byPath = files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+
+    Expect(byPath.ContainsKey("assets/manifest.json"), "UYA asset render package should include an asset manifest");
+    Expect(byPath.ContainsKey("assets/render_manifest.json"), "UYA asset render package should include a render manifest");
+
+    using var assetManifest = JsonDocument.Parse(byPath["assets/manifest.json"].Bytes);
+    Expect(assetManifest.RootElement.GetProperty("Game").GetString() == "UYA", "UYA asset manifest should preserve the game id");
+    Expect(!assetManifest.RootElement.GetProperty("TextureIsSwizzled").GetBoolean(), "UYA asset textures should be exported without swizzle");
+    Expect(assetManifest.RootElement.GetProperty("GltfExportCount").GetInt32() == 0, "empty UYA asset package should not report written glTFs");
+
+    using var renderManifest = JsonDocument.Parse(byPath["assets/render_manifest.json"].Bytes);
+    Expect(!renderManifest.RootElement.GetProperty("TextureIsSwizzled").GetBoolean(), "UYA render manifest should report unswizzled asset textures");
+    Expect(renderManifest.RootElement.GetProperty("AssetWadWasCompressed").GetBoolean(), "UYA asset render package should decompress compressed asset WAD input");
+    Expect(
+        renderManifest.RootElement.GetProperty("AssetWadPayloadLength").GetInt32() == rawAssetBytes.Length,
+        "UYA asset render package should report the decompressed asset WAD length");
+}
+
 static void ValidateLooseLevelWadRenderPackageWhenAvailable()
 {
     var wadPath = Environment.GetEnvironmentVariable("RATCHET_PS2_DL_LEVEL_WAD")
@@ -211,6 +541,15 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
     Expect(
         performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.tfrag.decode"),
         "render package manifest should include terrain exporter subphase timing");
+    using (var tfragGltf = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["assets/tfrag/tfrag.gltf"])))
+    {
+        Expect(
+            tfragGltf.RootElement.GetProperty("nodes").EnumerateArray().All(node =>
+                !node.TryGetProperty("name", out var name)
+                || name.GetString()?.Contains("lod_1", StringComparison.Ordinal) != true
+                && name.GetString()?.Contains("lod_2", StringComparison.Ordinal) != true),
+            "browser render package terrain glTF should include only LOD0");
+    }
 
     using var assetManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["assets/manifest.json"]));
     var assetHeader = assetManifest.RootElement.GetProperty("Header");
@@ -266,6 +605,42 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
             performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.tie.document"),
             "render package manifest should include aggregated tie document timing when ties are written");
     }
+}
+
+static void ValidateUyaLooseLevelWadRenderPackageWhenAvailable()
+{
+    var wadPath = Environment.GetEnvironmentVariable("RATCHET_PS2_UYA_LEVEL_WAD")
+        ?? Path.Combine("test-assets", "extractions_uya", "level41.wad");
+    if (!File.Exists(wadPath))
+    {
+        return;
+    }
+
+    var package = UyaLevelWadUnpacker.Unpack(File.ReadAllBytes(wadPath));
+    var renderPackage = UyaLevelWadRenderPackageBuilder.BuildPacked(
+        package.LevelWad.Level,
+        package.Files,
+        assetFiles => DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+            GameId.UYA,
+            package.LevelWad.Level,
+            assetFiles.HeaderBytes,
+            assetFiles.PaletteBytes,
+            assetFiles.AssetWadBytes,
+            DlLevelWadRenderPackageBuildOptions.Browser));
+    var entries = renderPackage.Entries.ToDictionary(entry => entry.Path, StringComparer.Ordinal);
+
+    Expect(entries.ContainsKey("manifest.json"), "UYA render package should include the root viewer manifest");
+    Expect(entries.ContainsKey("assets/manifest.json"), "UYA render package should include the asset viewer manifest");
+    Expect(entries.ContainsKey("world/manifest.json"), "UYA render package should include the world viewer manifest");
+    Expect(entries.ContainsKey("world/lighting/directional_lights.bin"), "UYA render package should expose directional lights through the world path");
+    Expect(entries.ContainsKey("world/tie/instances.bin"), "UYA render package should expose tie instances through the world path");
+    Expect(entries.ContainsKey("world/shrub/instances.bin"), "UYA render package should expose shrub instances through the world path");
+
+    using var rootManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["manifest.json"]));
+    Expect(rootManifest.RootElement.GetProperty("Game").GetString() == "UYA", "UYA render package root manifest should preserve the game id");
+
+    using var assetManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["assets/manifest.json"]));
+    Expect(!assetManifest.RootElement.GetProperty("TextureIsSwizzled").GetBoolean(), "UYA render package should keep asset textures unswizzled");
 }
 
 static void ValidateLooseLevelWadFailures()
@@ -923,6 +1298,93 @@ static byte[] CreateSyntheticCoreLevel()
     return data;
 }
 
+static byte[] CreateSyntheticUyaIso(
+    int levelIndex,
+    int headerSector,
+    int payloadBaseSector,
+    byte[] looseWadBytes,
+    bool includePayloads = true)
+{
+    var iso = new byte[Math.Max(
+        UyaLevelConstants.RetailLevelInfoTableOffset + (UyaLevelConstants.LevelInfoCount * UyaLevelConstants.LevelInfoSize),
+        ((includePayloads ? payloadBaseSector : headerSector) * UyaLevelConstants.SectorSize)
+            + (includePayloads ? looseWadBytes.Length : UyaLevelConstants.LevelWadHeaderSectorCount * UyaLevelConstants.SectorSize))];
+
+    WriteUyaLevelInfoEntry(
+        iso,
+        levelIndex,
+        audio: new UyaFileBlock(0, 0),
+        level: new UyaFileBlock(headerSector, 1),
+        scene: new UyaFileBlock(0, 0));
+
+    var headerLength = UyaLevelConstants.LevelWadHeaderSectorCount * UyaLevelConstants.SectorSize;
+    looseWadBytes.AsSpan(0, headerLength).CopyTo(iso.AsSpan(headerSector * UyaLevelConstants.SectorSize));
+    if (includePayloads)
+    {
+        looseWadBytes.CopyTo(iso.AsSpan(payloadBaseSector * UyaLevelConstants.SectorSize));
+    }
+
+    return iso;
+}
+
+static byte[] CreateSyntheticUyaLooseLevelWad(int payloadBaseSector)
+{
+    var data = new byte[UyaLevelConstants.SectorSize * 9];
+    WriteInt32(data, 0x00, UyaLevelConstants.LevelWadHeaderSize);
+    WriteInt32(data, 0x04, payloadBaseSector);
+    WriteInt32(data, 0x08, 7);
+    WriteInt32(data, 0x0c, 2);
+    WriteUyaFileBlock(data, 0x10, new UyaFileBlock(3, 2));
+    WriteUyaFileBlock(data, 0x18, new UyaFileBlock(1, 1));
+    WriteUyaFileBlock(data, 0x20, new UyaFileBlock(5, 1));
+    WriteUyaFileBlock(data, 0x28, new UyaFileBlock(6, 1));
+    WriteUyaFileBlock(data, 0x30, new UyaFileBlock(7, 1));
+    WriteUyaFileBlock(data, 0x48, new UyaFileBlock(8, 1));
+
+    CreateSyntheticUyaLevelData().CopyTo(data.AsSpan(3 * UyaLevelConstants.SectorSize));
+    data[1 * UyaLevelConstants.SectorSize] = 0x41;
+    CreateSyntheticUyaGameplay().CopyTo(data.AsSpan(5 * UyaLevelConstants.SectorSize));
+    data[6 * UyaLevelConstants.SectorSize] = 0x61;
+    data[7 * UyaLevelConstants.SectorSize] = 0x71;
+    data[8 * UyaLevelConstants.SectorSize] = 0x81;
+
+    return data;
+}
+
+static byte[] CreateSyntheticUyaGameplay()
+{
+    return BuildGameplayData(
+        UyaGameplayBlockReader.CoreHeaderSize,
+        (0x00, [0xA1, 0xA2]),
+        (0x04, [0xB1, 0xB2]),
+        (0x10, [0xD1, 0xD2]),
+        (0x4c, [0xC1, 0xC2]),
+        (0x78, [0xE1, 0xE2]),
+        (0x7c, [0xF1, 0xF2]));
+}
+
+static byte[] CreateSyntheticUyaLevelData()
+{
+    var data = new byte[UyaLevelConstants.SectorSize * 2];
+    WriteByteBlock(data, 0x00, new UyaByteBlock(0x80, 4));
+    WriteByteBlock(data, 0x08, new UyaByteBlock(0x90, 4));
+    WriteByteBlock(data, 0x10, new UyaByteBlock(0xa0, 4));
+    WriteByteBlock(data, 0x18, new UyaByteBlock(0xb0, 4));
+    WriteByteBlock(data, 0x20, new UyaByteBlock(0xc0, 4));
+    WriteByteBlock(data, 0x48, new UyaByteBlock(0xd0, 4));
+    WriteByteBlock(data, 0x50, new UyaByteBlock(0xe0, 4));
+
+    new byte[] { 0x11, 0x12, 0x13, 0x14 }.CopyTo(data.AsSpan(0x80));
+    new byte[] { 0x21, 0x22, 0x23, 0x24 }.CopyTo(data.AsSpan(0x90));
+    new byte[] { 0x31, 0x32, 0x33, 0x34 }.CopyTo(data.AsSpan(0xa0));
+    new byte[] { 0x41, 0x42, 0x43, 0x44 }.CopyTo(data.AsSpan(0xb0));
+    new byte[] { 0x51, 0x52, 0x53, 0x54 }.CopyTo(data.AsSpan(0xc0));
+    new byte[] { 0x61, 0x62, 0x63, 0x64 }.CopyTo(data.AsSpan(0xd0));
+    new byte[] { 0x71, 0x72, 0x73, 0x74 }.CopyTo(data.AsSpan(0xe0));
+
+    return data;
+}
+
 static byte[] CreatePalette()
 {
     var palette = new byte[0x400];
@@ -945,7 +1407,27 @@ static void WriteLevelInfoEntry(byte[] data, int levelIndex, DlFileBlock audio, 
     WriteFileBlock(data, offset + 0x10, scene);
 }
 
+static void WriteUyaLevelInfoEntry(byte[] data, int levelIndex, UyaFileBlock audio, UyaFileBlock level, UyaFileBlock scene)
+{
+    var offset = UyaLevelConstants.RetailLevelInfoTableOffset + (levelIndex * UyaLevelConstants.LevelInfoSize);
+    WriteUyaFileBlock(data, offset + 0x00, audio);
+    WriteUyaFileBlock(data, offset + 0x08, level);
+    WriteUyaFileBlock(data, offset + 0x10, scene);
+}
+
 static void WriteFileBlock(byte[] data, int offset, DlFileBlock block)
+{
+    WriteInt32(data, offset, block.Offset);
+    WriteInt32(data, offset + 4, block.Length);
+}
+
+static void WriteUyaFileBlock(byte[] data, int offset, UyaFileBlock block)
+{
+    WriteInt32(data, offset, block.Offset);
+    WriteInt32(data, offset + 4, block.Length);
+}
+
+static void WriteByteBlock(byte[] data, int offset, UyaByteBlock block)
 {
     WriteInt32(data, offset, block.Offset);
     WriteInt32(data, offset + 4, block.Length);
@@ -1006,6 +1488,25 @@ static byte[] BuildGameplayData(int headerSize, params (int HeaderOffset, byte[]
     }
 
     return data;
+}
+
+static byte[] CreateLiteralWad(byte[] payload)
+{
+    var data = new byte[0x10 + 1 + payload.Length];
+    data[0] = 0x57;
+    data[1] = 0x41;
+    data[2] = 0x44;
+    WriteInt32(data, 3, data.Length);
+    data[0x10] = (byte)(payload.Length - 3);
+    payload.CopyTo(data.AsSpan(0x11));
+    return data;
+}
+
+static void AddZipEntry(ZipArchive archive, string path, byte[] bytes)
+{
+    var entry = archive.CreateEntry(path);
+    using var output = entry.Open();
+    output.Write(bytes);
 }
 
 static void Expect(bool condition, string message)

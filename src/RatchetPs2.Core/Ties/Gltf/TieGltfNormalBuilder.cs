@@ -7,6 +7,8 @@ internal static class TieGltfNormalBuilder
     private const float DominantSourceNormalMinimumY = 0.4f;
     private const float DominantSourceFallbackNormalMaximumY = 0.25f;
     private const float CrossLodExactPositionMinimumMissingCoverage = 0.95f;
+    private const float DuplicatePositionExactNormalMinimumGeneratedDot = 0.85f;
+    private const float RgbaRecipeSourceNormalMinimumGeneratedDot = 0.85f;
     private const int RgbaRecipeConstantColorSourceSlot = 0x7FC / sizeof(int);
 
     public static TieGltfNormalBuildResult Build(
@@ -54,32 +56,38 @@ internal static class TieGltfNormalBuilder
             sourceIndexStates,
             profile.UsePackedVertexNormalTableSource,
             sourceNormalPhaseAnalysis.DominantLayout);
-        var rgbaRecipeNormalResult = ApplyRgbaRecipeSourceNormals(
-            tie,
-            topology,
-            tableNormalResult.Selection?.Layout
-                ?? sourceNormalPhaseAnalysis.DominantLayout
-                ?? TieGltfRawSourceNormalLayout.Default,
-            profile.UsePackedVertexNormalTableSource,
-            indexOffsetsByVertex,
-            generatedNormals,
-            generatedIndexNormals,
-            normals,
-            indexNormals,
-            sourceVertexIndices,
-            sourceIndexOffsets,
-            sourceVertexStates,
-            sourceIndexStates);
-        var packetRowNormalVertexCount = ApplyPacketRowNormals(
-            topology,
-            profile.InvertDecodedFatVertexSourceNormals,
-            indexOffsetsByVertex,
-            normals,
-            indexNormals,
-            sourceVertexIndices,
-            sourceIndexOffsets,
-            sourceVertexStates,
-            sourceIndexStates);
+        var rgbaRecipeNormalResult = profile.UseRgbaRecipeSourceNormals
+            ? ApplyRgbaRecipeSourceNormals(
+                tie,
+                topology,
+                tableNormalResult.Selection?.Layout
+                    ?? sourceNormalPhaseAnalysis.DominantLayout
+                    ?? TieGltfRawSourceNormalLayout.Default,
+                profile.UsePackedVertexNormalTableSource,
+                indexOffsetsByVertex,
+                generatedNormals,
+                generatedIndexNormals,
+                normals,
+                indexNormals,
+                sourceVertexIndices,
+                sourceIndexOffsets,
+                sourceVertexStates,
+                sourceIndexStates)
+            : TieGltfRgbaRecipeNormalApplyResult.Empty;
+        var packetRowNormalVertexCount = profile.UsePacketRowSourceNormals
+            ? ApplyPacketRowNormals(
+                topology,
+                profile.InvertDecodedFatVertexSourceNormals,
+                indexOffsetsByVertex,
+                generatedNormals,
+                generatedIndexNormals,
+                normals,
+                indexNormals,
+                sourceVertexIndices,
+                sourceIndexOffsets,
+                sourceVertexStates,
+                sourceIndexStates)
+            : 0;
         var crossLodExactNormalVertexCount = ApplyCrossLodExactPositionNormals(
             tie,
             topology,
@@ -99,6 +107,8 @@ internal static class TieGltfNormalBuilder
         var duplicatePositionExactNormalVertexCount = ApplyDuplicatePositionExactNormals(
             positions,
             indexOffsetsByVertex,
+            generatedNormals,
+            generatedIndexNormals,
             normals,
             indexNormals,
             sourceVertexIndices,
@@ -325,6 +335,8 @@ internal static class TieGltfNormalBuilder
     private static int ApplyDuplicatePositionExactNormals(
         IReadOnlyList<Vector3> positions,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
+        IReadOnlyList<Vector3> generatedNormals,
+        IReadOnlyList<Vector3> generatedIndexNormals,
         Vector3[] normals,
         Vector3[] indexNormals,
         HashSet<int> sourceVertexIndices,
@@ -384,24 +396,26 @@ internal static class TieGltfNormalBuilder
                 continue;
             }
 
-            normals[i] = sourceNormal;
-            sourceVertexIndices.Add(i);
-            sourceVertexStates[i] = TieGltfSourceNormalState.DuplicatePositionExact;
-            if (indexOffsetsByVertex.TryGetValue(i, out var indexOffsets))
+            if (!TieGltfSourceNormalBuilder.TryApplySourceNormal(
+                    i,
+                    sourceNormal,
+                    indexOffsetsByVertex,
+                    generatedNormals,
+                    generatedIndexNormals,
+                    normals,
+                    indexNormals,
+                    DuplicatePositionExactNormalMinimumGeneratedDot,
+                    out var orientedNormal,
+                    sourceIndexOffsets,
+                    sourceIndexStates,
+                    TieGltfSourceNormalState.DuplicatePositionExact))
             {
-                foreach (var indexOffset in indexOffsets)
-                {
-                    if (indexOffset < 0 || indexOffset >= indexNormals.Length)
-                    {
-                        continue;
-                    }
-
-                    indexNormals[indexOffset] = sourceNormal;
-                    sourceIndexOffsets.Add(indexOffset);
-                    sourceIndexStates[indexOffset] = TieGltfSourceNormalState.DuplicatePositionExact;
-                }
+                continue;
             }
 
+            normals[i] = orientedNormal;
+            sourceVertexIndices.Add(i);
+            sourceVertexStates[i] = TieGltfSourceNormalState.DuplicatePositionExact;
             count++;
         }
 
@@ -468,6 +482,8 @@ internal static class TieGltfNormalBuilder
         TieLodTopology topology,
         bool invertDecodedFatVertexSourceNormals,
         IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
+        IReadOnlyList<Vector3> generatedNormals,
+        IReadOnlyList<Vector3> generatedIndexNormals,
         Vector3[] normals,
         Vector3[] indexNormals,
         HashSet<int> sourceVertexIndices,
@@ -499,22 +515,24 @@ internal static class TieGltfNormalBuilder
                 return false;
             }
 
-            normals[logicalVertexIndex] = sourceNormal;
-            if (indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
+            if (!TieGltfSourceNormalBuilder.TryApplySourceNormal(
+                    logicalVertexIndex,
+                    sourceNormal,
+                    indexOffsetsByVertex,
+                    generatedNormals,
+                    generatedIndexNormals,
+                    normals,
+                    indexNormals,
+                    TieGltfSourceNormalBuilder.PacketRowSourceNormalMinimumGeneratedDot,
+                    out var orientedNormal,
+                    sourceIndexOffsets,
+                    sourceIndexStates,
+                    TieGltfSourceNormalState.PacketRowExact))
             {
-                foreach (var indexOffset in indexOffsets)
-                {
-                    if (indexOffset < 0 || indexOffset >= indexNormals.Length)
-                    {
-                        continue;
-                    }
-
-                    indexNormals[indexOffset] = sourceNormal;
-                    sourceIndexOffsets.Add(indexOffset);
-                    sourceIndexStates[indexOffset] = TieGltfSourceNormalState.PacketRowExact;
-                }
+                return false;
             }
 
+            normals[logicalVertexIndex] = orientedNormal;
             sourceVertexIndices.Add(logicalVertexIndex);
             sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.PacketRowExact;
 
@@ -676,43 +694,24 @@ internal static class TieGltfNormalBuilder
             return false;
         }
 
-        if (!indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
-        {
-            normals[logicalVertexIndex] = logicalVertexIndex < generatedNormals.Count
-                ? OrientSourceNormalToReference(sourceNormal, generatedNormals[logicalVertexIndex])
-                : sourceNormal;
-            sourceVertexIndices.Add(logicalVertexIndex);
-            sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.TableExact;
-            return true;
-        }
-
-        var orientedSum = Vector3.Zero;
-        var applied = false;
-        foreach (var indexOffset in indexOffsets)
-        {
-            if (indexOffset < 0 || indexOffset >= indexNormals.Length)
-            {
-                continue;
-            }
-
-            var orientedNormal = indexOffset < generatedIndexNormals.Count
-                ? OrientSourceNormalToReference(sourceNormal, generatedIndexNormals[indexOffset])
-                : sourceNormal;
-            indexNormals[indexOffset] = orientedNormal;
-            sourceIndexOffsets.Add(indexOffset);
-            sourceIndexStates[indexOffset] = TieGltfSourceNormalState.TableExact;
-            orientedSum += orientedNormal;
-            applied = true;
-        }
-
-        if (!applied)
+        if (!TieGltfSourceNormalBuilder.TryApplySourceNormal(
+                logicalVertexIndex,
+                sourceNormal,
+                indexOffsetsByVertex,
+                generatedNormals,
+                generatedIndexNormals,
+                normals,
+                indexNormals,
+                RgbaRecipeSourceNormalMinimumGeneratedDot,
+                out var orientedNormal,
+                sourceIndexOffsets,
+                sourceIndexStates,
+                TieGltfSourceNormalState.TableExact))
         {
             return false;
         }
 
-        normals[logicalVertexIndex] = orientedSum.LengthSquared() <= 1e-12f
-            ? sourceNormal
-            : Vector3.Normalize(orientedSum);
+        normals[logicalVertexIndex] = orientedNormal;
         sourceVertexIndices.Add(logicalVertexIndex);
         sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.TableExact;
         return true;

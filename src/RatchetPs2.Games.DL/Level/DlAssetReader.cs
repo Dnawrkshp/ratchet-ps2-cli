@@ -347,7 +347,8 @@ public static class DlAssetReader
     public static DlNormalizedTexture BuildParticleTexture(
         DlParticleTextureDefinition definition,
         ReadOnlySpan<byte> assetData,
-        int dataOffset)
+        int dataOffset,
+        bool isSwizzled = true)
     {
         var paletteOffset = checked(dataOffset + definition.PaletteOffset);
         var pixelOffset = checked(dataOffset + definition.TextureOffset);
@@ -362,7 +363,7 @@ public static class DlAssetReader
             ReadSlice(assetData, paletteOffset, PaletteBytes, $"particle palette {definition.Index}"),
             ReadSlice(assetData, pixelOffset, checked(size * size), $"particle texture {definition.Index}"),
             [],
-            isSwizzled: true,
+            isSwizzled,
             paletteOffset,
             pixelOffset,
             [],
@@ -373,7 +374,8 @@ public static class DlAssetReader
     public static DlNormalizedTexture BuildFxTexture(
         DlFxTextureDefinition definition,
         ReadOnlySpan<byte> assetData,
-        int dataOffset)
+        int dataOffset,
+        bool isSwizzled = true)
     {
         ValidateDimensions(definition.Width, definition.Height, definition);
         var paletteOffset = checked(dataOffset + definition.PaletteOffset);
@@ -388,7 +390,7 @@ public static class DlAssetReader
             ReadSlice(assetData, paletteOffset, PaletteBytes, $"fx palette {definition.Index}"),
             ReadSlice(assetData, pixelOffset, pixelLength, $"fx texture {definition.Index}"),
             [],
-            isSwizzled: true,
+            isSwizzled,
             paletteOffset,
             pixelOffset,
             [],

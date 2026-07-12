@@ -22,6 +22,7 @@ public sealed record TieClassReadOptions
 
     public bool UseStripTokenReferencesForTopology { get; init; }
     public bool UsePreviousStripReferencePhaseForTopology { get; init; }
+    public int VertexNormalHeaderSize { get; init; } = 0x10;
 
     public static TieClassReadOptions ForGameProfile(TieGameProfile? profile)
     {
@@ -29,7 +30,8 @@ public sealed record TieClassReadOptions
         {
             UseStripTokenReferencesForTopology = profile?.UseStripTokenReferencesForTopology ?? false,
             UsePreviousStripReferencePhaseForTopology =
-                profile?.UsePreviousStripReferencePhaseForTopology ?? false
+                profile?.UsePreviousStripReferencePhaseForTopology ?? false,
+            VertexNormalHeaderSize = profile?.VertexNormalHeaderSize ?? Default.VertexNormalHeaderSize
         };
     }
 }

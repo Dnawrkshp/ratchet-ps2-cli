@@ -33,6 +33,8 @@ public sealed class TfragGltfExportOptions
 
     public GltfExportMetadataMode MetadataMode { get; init; } = GltfExportMetadataMode.Full;
 
+    public int? LodIndex { get; init; }
+
     public Action<string, string, double, string?>? TimingSink { get; init; }
 }
 
@@ -106,7 +108,7 @@ public static partial class TfragGltfExporter
             nodes[0]["extras"] = BuildRootNodeExtras(terrain, options);
         }
 
-        for (var lodIndex = 0; lodIndex <= 2; lodIndex++)
+        foreach (var lodIndex in GetExportLodIndices(options))
         {
             var children = new List<int>();
             lodChildren[lodIndex] = children;
@@ -125,7 +127,8 @@ public static partial class TfragGltfExporter
         }
 
         var geometryWriteStart = Stopwatch.GetTimestamp();
-        foreach (var mesh in decoded.Meshes.OrderBy(mesh => mesh.LodIndex).ThenBy(mesh => mesh.Chunk.Index))
+        var exportMeshes = BuildGltfMeshes(decoded.Meshes, options);
+        foreach (var mesh in exportMeshes)
         {
             var meshIndex = meshes.Count;
             var primitiveDefinitions = new List<Dictionary<string, object>>();
@@ -213,12 +216,12 @@ public static partial class TfragGltfExporter
 
             var meshDefinition = new Dictionary<string, object?>
             {
-                ["name"] = $"chunk_{mesh.Chunk.Index:0000}_lod_{mesh.LodIndex}",
+                ["name"] = mesh.Name,
                 ["primitives"] = primitiveDefinitions
             };
-            if (ShouldWriteFullMetadata(options))
+            if (ShouldWriteFullMetadata(options) && mesh.SourceMesh is { } sourceMesh)
             {
-                meshDefinition["extras"] = BuildChunkLodMeshExtras(mesh);
+                meshDefinition["extras"] = BuildChunkLodMeshExtras(sourceMesh);
             }
 
             meshes.Add(meshDefinition);
@@ -227,12 +230,12 @@ public static partial class TfragGltfExporter
             lodChildren[mesh.LodIndex].Add(nodeIndex);
             var nodeDefinition = new Dictionary<string, object?>
             {
-                ["name"] = $"chunk_{mesh.Chunk.Index:0000}_lod_{mesh.LodIndex}",
+                ["name"] = mesh.Name,
                 ["mesh"] = meshIndex
             };
-            if (ShouldWriteFullMetadata(options))
+            if (ShouldWriteFullMetadata(options) && mesh.SourceMesh is { } nodeSourceMesh)
             {
-                nodeDefinition["extras"] = BuildChunkNodeExtras(mesh);
+                nodeDefinition["extras"] = BuildChunkNodeExtras(nodeSourceMesh);
             }
 
             nodes.Add(nodeDefinition);
@@ -317,11 +320,100 @@ public static partial class TfragGltfExporter
         {
             throw new ArgumentOutOfRangeException(nameof(options.MaxTriangleEdgeLength));
         }
+
+        if (options.LodIndex is < 0 or > 2)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options.LodIndex));
+        }
     }
 
     private static bool ShouldWriteFullMetadata(TfragGltfExportOptions options)
     {
         return options.MetadataMode == GltfExportMetadataMode.Full;
+    }
+
+    private static IEnumerable<int> GetExportLodIndices(TfragGltfExportOptions options)
+    {
+        return options.LodIndex is { } lodIndex
+            ? [lodIndex]
+            : [0, 1, 2];
+    }
+
+    private static IReadOnlyList<TfragGltfMesh> BuildGltfMeshes(
+        IReadOnlyList<TfragChunkLodMesh> meshes,
+        TfragGltfExportOptions options)
+    {
+        if (ShouldWriteFullMetadata(options))
+        {
+            return meshes
+                .OrderBy(mesh => mesh.LodIndex)
+                .ThenBy(mesh => mesh.Chunk.Index)
+                .Select(mesh => new TfragGltfMesh(
+                    $"chunk_{mesh.Chunk.Index:0000}_lod_{mesh.LodIndex}",
+                    mesh.LodIndex,
+                    mesh.Groups,
+                    mesh))
+                .ToArray();
+        }
+
+        return meshes
+            .GroupBy(mesh => mesh.LodIndex)
+            .OrderBy(group => group.Key)
+            .SelectMany(group => group
+                .SelectMany(mesh => mesh.Groups)
+                .GroupBy(primitive => primitive.MaterialKey)
+                .OrderBy(primitiveGroup => primitiveGroup.Key.TextureId)
+                .ThenBy(primitiveGroup => primitiveGroup.Key.ClampU)
+                .ThenBy(primitiveGroup => primitiveGroup.Key.ClampV)
+                .Select((primitiveGroup, index) => new TfragGltfMesh(
+                    $"lod_{group.Key}_material_{index:0000}",
+                    group.Key,
+                    [MergePrimitiveGroups(primitiveGroup)],
+                    SourceMesh: null)))
+            .ToArray();
+    }
+
+    private static TfragPrimitiveGroup MergePrimitiveGroups(IEnumerable<TfragPrimitiveGroup> groups)
+    {
+        using var enumerator = groups.GetEnumerator();
+        if (!enumerator.MoveNext())
+        {
+            throw new InvalidOperationException("Cannot merge an empty tfrag primitive group.");
+        }
+
+        var first = enumerator.Current;
+        var merged = new TfragPrimitiveGroup(
+            first.MaterialKey,
+            first.TopologyPacket,
+            first.TopologyDecode,
+            first.MaterialRange,
+            first.NormalBuildResult);
+        AppendPrimitiveGroup(merged, first);
+        while (enumerator.MoveNext())
+        {
+            AppendPrimitiveGroup(merged, enumerator.Current);
+        }
+
+        return merged;
+    }
+
+    private static void AppendPrimitiveGroup(TfragPrimitiveGroup target, TfragPrimitiveGroup source)
+    {
+        var baseVertex = checked((uint)target.Positions.Count);
+        target.Positions.AddRange(source.Positions);
+        target.Normals.AddRange(source.Normals);
+        target.TexCoords.AddRange(source.TexCoords);
+        target.Colors.AddRange(source.Colors);
+        target.LightSelectors.AddRange(source.LightSelectors);
+        target.LightBaseColors.AddRange(source.LightBaseColors);
+        target.LightNormals.AddRange(source.LightNormals);
+        target.LightPostScales.AddRange(source.LightPostScales);
+        foreach (var index in source.Indices)
+        {
+            target.Indices.Add(checked(baseVertex + index));
+        }
+
+        target.WindingCorrectedTriangleCount += source.WindingCorrectedTriangleCount;
     }
 
     private static void AddTiming(
