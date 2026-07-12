@@ -82,9 +82,11 @@ public static partial class Exports
     {
         ArgumentNullException.ThrowIfNull(levelWadBytes);
 
-        return DlLevelWadRenderPackageBuilder.BuildPacked(
+        var package = DlLevelWadUnpacker.Unpack(levelWadBytes);
+        var renderPackage = DlLevelWadRenderPackageBuilder.BuildPacked(
             levelWadBytes,
             DlLevelWadRenderPackageBuildOptions.Browser);
+        return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
     }
 
     [JSInvokable("BuildUyaLevelWadRenderPackage")]
@@ -93,9 +95,10 @@ public static partial class Exports
         ArgumentNullException.ThrowIfNull(levelWadBytes);
 
         var package = UyaLevelWadUnpacker.Unpack(levelWadBytes);
-        return BuildUyaRenderPackage(
+        var renderPackage = BuildUyaRenderPackage(
             package.LevelWad.Level,
             package.Files);
+        return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
     }
 
     [JSInvokable("BuildUyaCustomMapZipRenderPackage")]
@@ -105,7 +108,7 @@ public static partial class Exports
 
         var package = UyaCustomMapZipUnpacker.Unpack(zipBytes);
         var renderPackage = BuildUyaRenderPackage(levelIndex: 0, package.Files);
-        return AppendPackedFiles(renderPackage, package.Files.Where(IsUyaGameplayMetadataFile));
+        return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
     }
 
     private static PackedFilePackage BuildUyaRenderPackage(
@@ -176,7 +179,7 @@ public static partial class Exports
         return PackedFilePackageBuilder.Pack(files);
     }
 
-    private static bool IsUyaGameplayMetadataFile(PackedFile file)
+    private static bool IsGameplayMetadataFile(PackedFile file)
     {
         return string.Equals(file.Path, "gameplay/gameplay_core.bin", StringComparison.Ordinal)
             || file.Path.StartsWith("gameplay/core/", StringComparison.Ordinal);
