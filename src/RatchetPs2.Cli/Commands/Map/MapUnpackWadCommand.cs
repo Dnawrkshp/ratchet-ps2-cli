@@ -23,6 +23,10 @@ internal static class MapUnpackWadCommand
             Description = "Output format: files or indexed.",
             DefaultValueFactory = _ => "files"
         };
+        var renderOption = new Option<bool>("--render")
+        {
+            Description = "Build the complete render-ready level package, including main and mission mobys. Currently supported for DL."
+        };
 
         var command = CliCommandBuilder.Create(
             "unpack-wad",
@@ -30,7 +34,8 @@ internal static class MapUnpackWadCommand
             gameOption,
             inputOption,
             outputOption,
-            formatOption);
+            formatOption,
+            renderOption);
 
         command.SetAction(parseResult =>
         {
@@ -38,6 +43,7 @@ internal static class MapUnpackWadCommand
             var inputFile = parseResult.GetValue(inputOption);
             var outputDirectory = parseResult.GetValue(outputOption);
             var format = parseResult.GetValue(formatOption);
+            var render = parseResult.GetValue(renderOption);
 
             if (!TryValidateMapGame(gameValue, out var gameId, out var error))
             {
@@ -61,6 +67,11 @@ internal static class MapUnpackWadCommand
             if (normalizedFormat is not "files" and not "indexed")
             {
                 Console.Error.WriteLine($"Unsupported --format value '{format}'. Expected files or indexed.");
+                return 1;
+            }
+            if (render && gameId != GameId.DL)
+            {
+                Console.Error.WriteLine("Render-ready level WAD extraction currently supports only --game DL.");
                 return 1;
             }
 
@@ -87,6 +98,30 @@ internal static class MapUnpackWadCommand
                     return 0;
                 }
 
+                if (render)
+                {
+                    var renderOptions = DlLevelWadRenderPackageBuildOptions.Browser with
+                    {
+                        IncludeDiagnostics = true
+                    };
+                    if (normalizedFormat == "indexed")
+                    {
+                        var renderPackage = DlLevelWadRenderPackageBuilder.BuildPacked(bytes, renderOptions);
+                        PackedFilePackageWriter.WriteIndexed(renderPackage, outputDirectory);
+                        Console.WriteLine(
+                            $"Built DL render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderPackage.Entries.Count} entries).");
+                    }
+                    else
+                    {
+                        var renderFiles = DlLevelWadRenderPackageBuilder.BuildFiles(bytes, renderOptions);
+                        PackedFilePackageWriter.WriteFiles(renderFiles, outputDirectory);
+                        Console.WriteLine(
+                            $"Built DL render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderFiles.Count} files).");
+                    }
+
+                    return 0;
+                }
+
                 var package = DlLevelWadUnpacker.Unpack(bytes);
                 if (normalizedFormat == "indexed")
                 {
@@ -103,7 +138,7 @@ internal static class MapUnpackWadCommand
 
                 return 0;
             }
-            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException)
+            catch (Exception ex) when (ex is IOException or InvalidDataException or ArgumentException or NotSupportedException)
             {
                 Console.Error.WriteLine($"Map WAD unpack failed: {ex.Message}");
                 return 1;

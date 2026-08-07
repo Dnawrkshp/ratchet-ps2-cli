@@ -79,8 +79,7 @@ internal static class TfragExportGltfCommand
             var outputDirectory = outputFile.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory());
             var textureResources = TextureResourcePreparer.PrepareExternalTextures(
                 textureDirectory ?? inputFile.Directory,
-                outputDirectory,
-                normalizePs2FullOpacityAlpha: TfragTextureAlpha.FullOpacityAlpha);
+                outputDirectory);
 
             using var input = inputFile.OpenRead();
             var export = TfragGltfExporter.Export(

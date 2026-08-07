@@ -5,6 +5,7 @@ using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.DL.Moby;
 using RatchetPs2.Games.UYA.Level;
 using System.Runtime.Versioning;
 
@@ -134,16 +135,17 @@ public static partial class Exports
         ArgumentNullException.ThrowIfNull(mobyBytes);
 
         using var input = new MemoryStream(mobyBytes, writable: false);
-        var export = MobyGltfExporter.Export(
-            input,
-            "moby.gltf",
-            new MobyGltfExportOptions
-            {
-                AnimationFormat = ParseMobyAnimationFormat(game),
-                SkipAnimationSequences = skipAnimations,
-                LodIndex = lod,
-                BufferFileName = "moby.buffer.bin"
-            });
+        var animationFormat = ParseMobyAnimationFormat(game);
+        var options = new MobyGltfExportOptions
+        {
+            AnimationFormat = animationFormat,
+            SkipAnimationSequences = skipAnimations,
+            LodIndex = lod,
+            BufferFileName = "moby.buffer.bin"
+        };
+        var export = animationFormat == MobyAnimationFormat.Compact
+            ? DlMobyGltfExporter.Export(input, "moby.gltf", options)
+            : MobyGltfExporter.Export(input, "moby.gltf", options);
 
         return PackFiles(
             new PackedFile("moby.gltf", export.GltfBytes, "model/gltf+json"),

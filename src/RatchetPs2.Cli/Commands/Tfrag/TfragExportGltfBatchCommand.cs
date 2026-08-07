@@ -149,8 +149,7 @@ internal static class TfragExportGltfBatchCommand
                     var terrain = TfragTerrainReader.Read(input);
                     var textureResources = TextureResourcePreparer.PrepareExternalTextures(
                         tfragFile.Directory,
-                        outputDirectory,
-                        normalizePs2FullOpacityAlpha: TfragTextureAlpha.FullOpacityAlpha);
+                        outputDirectory);
                     var export = TfragGltfExporter.Export(
                         terrain,
                         gltfFile.Name,

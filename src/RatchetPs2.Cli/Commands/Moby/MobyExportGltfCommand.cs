@@ -2,6 +2,7 @@ using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Moby;
+using RatchetPs2.Games.DL.Moby;
 using System.CommandLine;
 
 namespace RatchetPs2.Cli.Commands.Moby;
@@ -41,7 +42,7 @@ internal static class MobyExportGltfCommand
 
         var command = CliCommandBuilder.Create(
             "export-gltf",
-            "Export a moby model to glTF geometry.",
+            "Export a moby model to glTF geometry and supported animations.",
             gameOption,
             inputOption,
             outputOption,
@@ -112,28 +113,30 @@ internal static class MobyExportGltfCommand
 
             outputFile.Directory?.Create();
             var outputDirectory = outputFile.Directory ?? new DirectoryInfo(Directory.GetCurrentDirectory());
-            var textureResources = TextureResourcePreparer.PrepareExternalTextures(textureDirectory ?? inputFile.Directory, outputDirectory);
+            var textureResources = TextureResourcePreparer.PrepareExternalTextures(
+                textureDirectory ?? inputFile.Directory,
+                outputDirectory);
             using var input = inputFile.OpenRead();
             var binFile = Path.Combine(
                 outputFile.DirectoryName ?? string.Empty,
                 $"{Path.GetFileNameWithoutExtension(outputFile.Name)}.buffer.bin");
 
-            var export = MobyGltfExporter.Export(
-                input,
-                outputFile.Name,
-                new MobyGltfExportOptions
-                {
-                    IncludeDebugUvColors = debugUvColors,
-                    SkipAnimationSequences = skipAnimations,
-                    LodIndex = lodIndex,
-                    AnimationFormat = MobyGameFormats.Resolve(gameModuleResolver, gameId),
-                    ExternalTextureUris = textureResources?.Uris,
-                    ExternalTextureSizes = textureResources?.Sizes,
-                    ExternalTextureAlpha = textureResources?.Alpha,
-                    LowLodTextureMode = lowLodTextureMode,
-                    MeshTextureOverrides = meshTextureOverrides,
-                    BufferFileName = Path.GetFileName(binFile)
-                });
+            var exportOptions = new MobyGltfExportOptions
+            {
+                IncludeDebugUvColors = debugUvColors,
+                SkipAnimationSequences = skipAnimations,
+                LodIndex = lodIndex,
+                AnimationFormat = MobyGameFormats.Resolve(gameModuleResolver, gameId),
+                ExternalTextureUris = textureResources?.Uris,
+                ExternalTextureSizes = textureResources?.Sizes,
+                ExternalTextureAlpha = textureResources?.Alpha,
+                LowLodTextureMode = lowLodTextureMode,
+                MeshTextureOverrides = meshTextureOverrides,
+                BufferFileName = Path.GetFileName(binFile)
+            };
+            var export = gameId == GameId.DL
+                ? DlMobyGltfExporter.Export(input, outputFile.Name, exportOptions)
+                : MobyGltfExporter.Export(input, outputFile.Name, exportOptions);
 
             var diagnosticsFile = Path.Combine(
                 outputFile.DirectoryName ?? string.Empty,

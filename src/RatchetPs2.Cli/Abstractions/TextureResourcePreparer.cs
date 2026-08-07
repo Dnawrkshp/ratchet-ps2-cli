@@ -7,8 +7,7 @@ internal static class TextureResourcePreparer
     public static TextureResources? PrepareExternalTextures(
         DirectoryInfo? sourceDirectory,
         DirectoryInfo outputDirectory,
-        string? outputSubdirectoryName = "textures",
-        byte? normalizePs2FullOpacityAlpha = null)
+        string? outputSubdirectoryName = "textures")
     {
         ArgumentNullException.ThrowIfNull(outputDirectory);
 
@@ -43,30 +42,7 @@ internal static class TextureResourcePreparer
             var samePath = Path.GetFullPath(sourceFile.FullName).Equals(
                 Path.GetFullPath(destinationFile.FullName),
                 StringComparison.Ordinal);
-            if (normalizePs2FullOpacityAlpha.HasValue
-                && ShouldNormalizePs2Alpha(metadata.Alpha, normalizePs2FullOpacityAlpha.Value))
-            {
-                if (samePath)
-                {
-                    var sourceBytes = File.ReadAllBytes(sourceFile.FullName);
-                    using var normalizedInput = new MemoryStream(sourceBytes);
-                    using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
-                    metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
-                        normalizedInput,
-                        normalizedOutput,
-                        normalizePs2FullOpacityAlpha.Value);
-                }
-                else
-                {
-                    using var normalizedInput = sourceFile.OpenRead();
-                    using var normalizedOutput = destinationFile.Open(FileMode.Create, FileAccess.Write, FileShare.None);
-                    metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(
-                        normalizedInput,
-                        normalizedOutput,
-                        normalizePs2FullOpacityAlpha.Value);
-                }
-            }
-            else if (!samePath)
+            if (!samePath)
             {
                 sourceFile.CopyTo(destinationFile.FullName, overwrite: true);
             }
@@ -95,11 +71,6 @@ internal static class TextureResourcePreparer
     {
         using var textureInput = sourceFile.OpenRead();
         return PngTextureMetadataReader.ReadPng(textureInput);
-    }
-
-    private static bool ShouldNormalizePs2Alpha(TextureAlphaInfo alpha, byte fullOpacityAlpha)
-    {
-        return alpha.HasAlpha && alpha.MaxAlpha <= fullOpacityAlpha;
     }
 
     public static bool TryParseTextureId(string fileName, out int textureId)

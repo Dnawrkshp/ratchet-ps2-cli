@@ -31,6 +31,7 @@ ValidateLooseLevelWadRenderPackageWhenAvailable();
 ValidateUyaLooseLevelWadRenderPackageWhenAvailable();
 ValidateLooseLevelWadFailures();
 ValidateMissionPlaceholderDetection();
+ValidateMissionMobyBankParsing();
 ValidateLevelSceneWadEmptyDetection();
 ValidateCoreLevelSegments();
 ValidateGameplayLevelSettingsParsing();
@@ -765,6 +766,40 @@ static void ValidateMissionPlaceholderDetection()
     WriteInt32(realMissionHeader, 0x08, 0x60);
     WriteInt32(realMissionHeader, 0x0c, 0x10);
     Expect(!DlMissionDataReader.IsPlaceholderMissionData(realMissionHeader), "mission placeholder should reject real mission table headers");
+}
+
+static void ValidateMissionMobyBankParsing()
+{
+    var pif = PifWriter.Write(PifWriter.CreateIndexed8(
+        2,
+        2,
+        new byte[0x400],
+        [0, 1, 2, 3]));
+    var bank = new byte[0x50 + pif.Length];
+    WriteInt32(bank, 0x00, 1);
+    WriteInt32(bank, 0x10, 0x24f9);
+    WriteInt32(bank, 0x14, 0x30);
+    WriteInt32(bank, 0x18, 0x40);
+    for (var i = 0; i < 0x10; i++)
+    {
+        bank[0x30 + i] = (byte)i;
+    }
+    WriteInt32(bank, 0x40, 1);
+    WriteInt32(bank, 0x44, 0x10);
+    pif.CopyTo(bank, 0x50);
+
+    var mission = new byte[0x80 + bank.Length];
+    WriteInt32(mission, 0x00, 0x40);
+    WriteInt32(mission, 0x08, 0x80);
+    WriteInt32(mission, 0x0c, bank.Length);
+    bank.CopyTo(mission, 0x80);
+
+    var mobys = DlMissionMobyBankReader.Read(DlMissionDataReader.ReadClasses(mission));
+    Expect(mobys.Count == 1, "mission moby bank should read its definition count");
+    Expect(mobys[0].Definition.ClassId == 0x24f9, "mission moby bank should read the class id");
+    Expect(mobys[0].ModelBytes.Length == 0x10, "mission moby bank should slice model bytes at the texture boundary");
+    Expect(mobys[0].PifTextures.Count == 1, "mission moby bank should read embedded PIF textures");
+    Expect(mobys[0].PifTextures[0].SequenceEqual(pif), "mission moby bank should preserve the complete PIF payload");
 }
 
 static void ValidateLevelSceneWadEmptyDetection()

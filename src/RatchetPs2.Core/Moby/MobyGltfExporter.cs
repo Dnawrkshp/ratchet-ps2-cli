@@ -9,7 +9,17 @@ namespace RatchetPs2.Core.Moby;
 
 public sealed record MobyGltfExport(byte[] GltfBytes, byte[] BinBytes, byte[] DiagnosticsBytes);
 
-public sealed class MobyGltfExportOptions
+public sealed record MobyGltfAnimationClip(
+    int SourceIndex,
+    string Name,
+    float[] Times,
+    IReadOnlyDictionary<int, Quaternion[]> Rotations,
+    IReadOnlyDictionary<int, Vector3[]> Scales,
+    IReadOnlyDictionary<int, Vector3[]> Translations);
+
+public sealed record MobyGltfAnimationFailure(int SourceIndex, string Reason);
+
+public sealed record MobyGltfExportOptions
 {
     public bool IncludeDebugUvColors { get; init; }
     public bool SkipAnimationSequences { get; init; }
@@ -22,6 +32,12 @@ public sealed class MobyGltfExportOptions
     public MobyGltfLowLodTextureMode LowLodTextureMode { get; init; } = MobyGltfLowLodTextureMode.Rolling;
     public IReadOnlyDictionary<int, int>? MeshTextureOverrides { get; init; }
     public bool InferTextureIdsFromUvTiles { get; init; } = true;
+    public bool RefineSkinFromInfluences { get; init; } = true;
+    public bool HonorSkeletonParentRotationFlags { get; init; } = true;
+    public IReadOnlyList<Matrix4x4>? InverseBindMatrices { get; init; }
+    public IReadOnlyList<MobyGltfAnimationClip>? Animations { get; init; }
+    public IReadOnlyList<MobyGltfAnimationFailure>? AnimationFailures { get; init; }
+    public byte TextureFullOpacityAlpha { get; init; } = byte.MaxValue;
     public string? BufferFileName { get; init; }
 }
 
@@ -77,9 +93,11 @@ public static class MobyGltfExporter
         var textures = new List<object>();
         var materialIndexByTextureId = new Dictionary<int, int>();
         var nodes = new List<object>();
+        var animations = new List<object>();
         var sceneNodes = new List<int>();
         var hierarchy = new GltfNodeHierarchy(nodes, sceneNodes);
         var diagnostics = new List<object>();
+        var animationDiagnostics = new List<object>();
         var modelScale = Math.Abs(model.Scale) > 1e-8f ? model.Scale : 1f;
         var scale = modelScale / 1024f;
         var rollingVertexCache = new Vector3?[512];
@@ -93,7 +111,9 @@ public static class MobyGltfExporter
         using var writer = new BinaryWriter(binStream);
         var skins = new List<object>();
         var skinContext = TryBuildSkinContext(model, scale, nodes, hierarchy, skins, options);
-        var skinAccumulator = skinContext is null ? null : new SkinInfluenceAccumulator(skinContext.JointPaletteIndexByJoint.Length);
+        var skinAccumulator = skinContext is null || !options.RefineSkinFromInfluences
+            ? null
+            : new SkinInfluenceAccumulator(skinContext.JointPaletteIndexByJoint.Length);
         var debugUvMaterialIndex = options.IncludeDebugUvColors
             ? AddDebugUvMaterial(materials)
             : (int?)null;
@@ -414,6 +434,7 @@ public static class MobyGltfExporter
                              options.ExternalTextureUris,
                              options.ExternalTextureSizes,
                              options.ExternalTextureAlpha,
+                             options.TextureFullOpacityAlpha,
                              images,
                              textures,
                              materials,
@@ -469,6 +490,14 @@ public static class MobyGltfExporter
         {
             RefineSkinFromInfluences(skinContext, skinAccumulator);
             WriteInverseBindMatrices(skinContext, writer, bufferViews, accessors);
+            AddAnimations(
+                options,
+                skinContext,
+                writer,
+                bufferViews,
+                accessors,
+                animations,
+                animationDiagnostics);
         }
 
         var binBytes = binStream.ToArray();
@@ -486,6 +515,11 @@ public static class MobyGltfExporter
         if (skins.Count > 0)
         {
             gltf["skins"] = skins;
+        }
+
+        if (animations.Count > 0)
+        {
+            gltf["animations"] = animations;
         }
 
         if (materials.Count > 0)
@@ -509,8 +543,9 @@ public static class MobyGltfExporter
         var diagnosticsBytes = JsonSerializer.SerializeToUtf8Bytes(new
         {
             ExportType = "moby geometry",
-            Note = "Geometry is reconstructed from moby vertex tables and VIF UNPACK_V4_8 topology. Static skeleton skinning is exported when skeleton data is present; animation channels are intentionally omitted. Degenerate strip-control triangles are skipped; true duplicate faces are reported separately as a topology warning.",
-            Meshes = diagnostics
+            Note = "Geometry is reconstructed from moby vertex tables and VIF UNPACK_V4_8 topology. Supplied animation channels are exported when skeleton data are present. Degenerate strip-control triangles are skipped; true duplicate faces are reported separately as a topology warning.",
+            Meshes = diagnostics,
+            Animations = animationDiagnostics
         }, jsonOptions);
 
         return new MobyGltfExport(gltfBytes, binBytes, diagnosticsBytes);
@@ -537,8 +572,11 @@ public static class MobyGltfExporter
         public required int[] JointNodeIndices { get; init; }
         public required int[] ParentByJoint { get; init; }
         public required List<int>[] ChildrenByJoint { get; init; }
+        public required Vector3[] LocalPositions { get; init; }
+        public required Quaternion[] LocalRotations { get; init; }
         public required Vector3[] WorldPositions { get; init; }
         public required Quaternion[] WorldRotations { get; init; }
+        public IReadOnlyList<Matrix4x4>? InverseBindMatrices { get; init; }
         public required Dictionary<string, object>[] JointNodes { get; init; }
         public required Dictionary<string, object> Skin { get; init; }
     }
@@ -599,7 +637,9 @@ public static class MobyGltfExporter
 
         var parentMode = ResolveSkeletonParentMode(model.CommonTransforms, jointCount, options.SkeletonParentMode);
         var parentByJoint = ReadCommonTransformParents(model.CommonTransforms, jointCount, parentMode);
-        var ignoresParentRotation = ReadCommonTransformParentRotationFlags(model.CommonTransforms, jointCount, parentMode);
+        var ignoresParentRotation = options.HonorSkeletonParentRotationFlags
+            ? ReadCommonTransformParentRotationFlags(model.CommonTransforms, jointCount, parentMode)
+            : new bool[jointCount];
         var commonLocalPositions = ReadCommonTransformLocalPositions(model.CommonTransforms, jointCount, scale);
         var worldPositions = new Vector3[jointCount];
         var worldRotations = new Quaternion[jointCount];
@@ -609,6 +649,8 @@ public static class MobyGltfExporter
         }
 
         var jointNodeIndices = new int[jointCount];
+        var exportedLocalPositions = new Vector3[jointCount];
+        var exportedLocalRotations = new Quaternion[jointCount];
         var exportedWorldPositions = new Vector3[jointCount];
         var exportedWorldRotations = new Quaternion[jointCount];
         var jointNodes = new Dictionary<string, object>[jointCount];
@@ -658,6 +700,9 @@ public static class MobyGltfExporter
                 exportedWorldPositions[i] = localPosition;
             }
 
+            exportedLocalPositions[i] = localPosition;
+            exportedLocalRotations[i] = localRotation;
+
             var nodeIndex = nodes.Count;
             jointNodeIndices[i] = nodeIndex;
             var node = new Dictionary<string, object>
@@ -705,8 +750,11 @@ public static class MobyGltfExporter
             JointNodeIndices = jointNodeIndices,
             ParentByJoint = parentByJoint,
             ChildrenByJoint = childrenByJoint,
+            LocalPositions = exportedLocalPositions,
+            LocalRotations = exportedLocalRotations,
             WorldPositions = exportedWorldPositions,
             WorldRotations = exportedWorldRotations,
+            InverseBindMatrices = ResolveInverseBindMatrices(options.InverseBindMatrices, jointCount),
             JointNodes = jointNodes,
             Skin = skin
         };
@@ -817,10 +865,18 @@ public static class MobyGltfExporter
         var inverseBindByteOffset = checked((int)writer.BaseStream.Position);
         for (var i = 0; i < skinContext.WorldPositions.Length; i++)
         {
-            var world = Matrix4x4.CreateFromQuaternion(skinContext.WorldRotations[i]) * Matrix4x4.CreateTranslation(skinContext.WorldPositions[i]);
-            if (!Matrix4x4.Invert(world, out var inverseBind))
+            Matrix4x4 inverseBind;
+            if (skinContext.InverseBindMatrices is not null)
             {
-                inverseBind = Matrix4x4.Identity;
+                inverseBind = skinContext.InverseBindMatrices[i];
+            }
+            else
+            {
+                var world = Matrix4x4.CreateFromQuaternion(skinContext.WorldRotations[i]) * Matrix4x4.CreateTranslation(skinContext.WorldPositions[i]);
+                if (!Matrix4x4.Invert(world, out inverseBind))
+                {
+                    inverseBind = Matrix4x4.Identity;
+                }
             }
 
             WriteMatrix4x4(writer, inverseBind);
@@ -847,6 +903,256 @@ public static class MobyGltfExporter
         skinContext.Skin["inverseBindMatrices"] = inverseBindAccessor;
     }
 
+    private static void AddAnimations(
+        MobyGltfExportOptions options,
+        GltfSkinContext skinContext,
+        BinaryWriter writer,
+        List<object> bufferViews,
+        List<object> accessors,
+        List<object> animations,
+        List<object> diagnostics)
+    {
+        foreach (var failure in options.AnimationFailures ?? [])
+        {
+            diagnostics.Add(new { SequenceIndex = failure.SourceIndex, Exported = false, failure.Reason });
+        }
+
+        if (options.Animations is not { Count: > 0 })
+        {
+            return;
+        }
+
+        foreach (var animation in options.Animations)
+        {
+            if (animation.Times.Length == 0)
+            {
+                diagnostics.Add(new { SequenceIndex = animation.SourceIndex, Exported = false, Reason = "animation has no keyframe times" });
+                continue;
+            }
+            if (animation.Rotations.Values.Any(track => track.Length != animation.Times.Length)
+                || animation.Scales.Values.Any(track => track.Length != animation.Times.Length)
+                || animation.Translations.Values.Any(track => track.Length != animation.Times.Length))
+            {
+                throw new ArgumentException($"Animation {animation.SourceIndex} contains a track with the wrong keyframe count.");
+            }
+
+            var rotationTracks = animation.Rotations
+                .Where(track => ShouldExportRotationTrack(track.Key, track.Value, skinContext))
+                .ToArray();
+            var scaleTracks = animation.Scales
+                .Where(track => ShouldExportVectorTrack(track.Key, track.Value, Vector3.One, skinContext.JointNodeIndices.Length))
+                .ToArray();
+            var translationTracks = animation.Translations
+                .Where(track => track.Key >= 0
+                    && track.Key < skinContext.LocalPositions.Length
+                    && !IsConstant(track.Value, skinContext.LocalPositions[track.Key]))
+                .ToArray();
+            if (rotationTracks.Length + scaleTracks.Length + translationTracks.Length == 0)
+            {
+                var fallbackRotation = animation.Rotations.FirstOrDefault();
+                var fallbackScale = animation.Scales.FirstOrDefault();
+                var fallbackTranslation = animation.Translations.FirstOrDefault();
+                if (fallbackRotation.Value is not null)
+                {
+                    rotationTracks = [fallbackRotation];
+                }
+                else if (fallbackScale.Value is not null)
+                {
+                    scaleTracks = [fallbackScale];
+                }
+                else if (fallbackTranslation.Value is not null)
+                {
+                    translationTracks = [fallbackTranslation];
+                }
+                else
+                {
+                    diagnostics.Add(new { SequenceIndex = animation.SourceIndex, Exported = false, Reason = "animation has no channels" });
+                    continue;
+                }
+            }
+
+            var timeAccessor = WriteFloatAccessor(
+                writer,
+                bufferViews,
+                accessors,
+                animation.Times,
+                "SCALAR",
+                animation.Times.Length,
+                [animation.Times[0]],
+                [animation.Times[^1]]);
+            var samplers = new List<object>();
+            var channels = new List<object>();
+
+            void AddChannel(int joint, string path, IReadOnlyList<float> values, string accessorType)
+            {
+                if (joint < 0 || joint >= skinContext.JointNodeIndices.Length)
+                {
+                    return;
+                }
+                var componentCount = accessorType == "VEC4" ? 4 : 3;
+                if (values.Count != animation.Times.Length * componentCount)
+                {
+                    throw new ArgumentException(
+                        $"Animation {animation.SourceIndex} {path} track {joint} does not match its keyframe count.");
+                }
+
+                var outputAccessor = WriteFloatAccessor(
+                    writer,
+                    bufferViews,
+                    accessors,
+                    values,
+                    accessorType,
+                    animation.Times.Length);
+                var samplerIndex = samplers.Count;
+                samplers.Add(new { input = timeAccessor, output = outputAccessor, interpolation = "LINEAR" });
+                channels.Add(new
+                {
+                    sampler = samplerIndex,
+                    target = new { node = skinContext.JointNodeIndices[joint], path }
+                });
+            }
+
+            foreach (var (joint, track) in rotationTracks)
+            {
+                var values = new float[animation.Times.Length * 4];
+                var previous = track[0];
+                for (var frame = 0; frame < animation.Times.Length; frame++)
+                {
+                    var rotation = track[frame];
+                    if (Quaternion.Dot(previous, rotation) < 0f)
+                    {
+                        rotation = new Quaternion(-rotation.X, -rotation.Y, -rotation.Z, -rotation.W);
+                    }
+
+                    var offset = frame * 4;
+                    values[offset] = rotation.X;
+                    values[offset + 1] = rotation.Y;
+                    values[offset + 2] = rotation.Z;
+                    values[offset + 3] = rotation.W;
+                    previous = rotation;
+                }
+                AddChannel(joint, "rotation", values, "VEC4");
+            }
+
+            foreach (var (joint, track) in scaleTracks)
+            {
+                AddChannel(joint, "scale", Flatten(track), "VEC3");
+            }
+            foreach (var (joint, track) in translationTracks)
+            {
+                AddChannel(joint, "translation", Flatten(track), "VEC3");
+            }
+
+            animations.Add(new
+            {
+                name = animation.Name,
+                samplers,
+                channels
+            });
+            diagnostics.Add(new
+            {
+                SequenceIndex = animation.SourceIndex,
+                Exported = true,
+                FrameCount = animation.Times.Length - 1,
+                RotationChannels = rotationTracks.Length,
+                ScaleChannels = scaleTracks.Length,
+                TranslationChannels = translationTracks.Length
+            });
+        }
+    }
+
+    private static bool ShouldExportRotationTrack(
+        int joint,
+        IReadOnlyList<Quaternion> values,
+        GltfSkinContext skinContext)
+    {
+        return joint >= 0
+            && joint < skinContext.LocalRotations.Length
+            && !IsConstant(values, skinContext.LocalRotations[joint]);
+    }
+
+    private static bool ShouldExportVectorTrack(
+        int joint,
+        IReadOnlyList<Vector3> values,
+        Vector3 bindValue,
+        int jointCount)
+    {
+        return joint >= 0 && joint < jointCount && !IsConstant(values, bindValue);
+    }
+
+    private static bool IsConstant(IReadOnlyList<Vector3> values, Vector3 bindValue)
+    {
+        return values.Count > 0
+            && Vector3.DistanceSquared(values[0], bindValue) < 1e-10f
+            && values.All(value => Vector3.DistanceSquared(value, values[0]) < 1e-10f);
+    }
+
+    private static bool IsConstant(IReadOnlyList<Quaternion> values, Quaternion bindValue)
+    {
+        return values.Count > 0
+            && MathF.Abs(Quaternion.Dot(values[0], bindValue)) > 0.999999f
+            && values.All(value => MathF.Abs(Quaternion.Dot(value, values[0])) > 0.999999f);
+    }
+
+    private static float[] Flatten(IReadOnlyList<Vector3> values)
+    {
+        var flattened = new float[values.Count * 3];
+        for (var i = 0; i < values.Count; i++)
+        {
+            flattened[i * 3] = values[i].X;
+            flattened[i * 3 + 1] = values[i].Y;
+            flattened[i * 3 + 2] = values[i].Z;
+        }
+        return flattened;
+    }
+
+    private static int WriteFloatAccessor(
+        BinaryWriter writer,
+        List<object> bufferViews,
+        List<object> accessors,
+        IReadOnlyList<float> values,
+        string type,
+        int count,
+        float[]? min = null,
+        float[]? max = null)
+    {
+        Align(writer, 4);
+        var byteOffset = checked((int)writer.BaseStream.Position);
+        foreach (var value in values)
+        {
+            writer.Write(value);
+        }
+
+        var bufferView = bufferViews.Count;
+        bufferViews.Add(new
+        {
+            buffer = 0,
+            byteOffset,
+            byteLength = values.Count * sizeof(float)
+        });
+
+        var accessor = new Dictionary<string, object>
+        {
+            ["bufferView"] = bufferView,
+            ["byteOffset"] = 0,
+            ["componentType"] = 5126,
+            ["count"] = count,
+            ["type"] = type
+        };
+        if (min is not null)
+        {
+            accessor["min"] = min;
+        }
+        if (max is not null)
+        {
+            accessor["max"] = max;
+        }
+
+        var accessorIndex = accessors.Count;
+        accessors.Add(accessor);
+        return accessorIndex;
+    }
+
     private static MobyGltfSkeletonParentMode ResolveSkeletonParentMode(
         byte[]? commonTransforms,
         int jointCount,
@@ -866,6 +1172,25 @@ public static class MobyGltfExporter
         return sevenBitScore > sixBitScore
             ? MobyGltfSkeletonParentMode.SevenBitLow
             : MobyGltfSkeletonParentMode.SixBitShifted;
+    }
+
+    private static IReadOnlyList<Matrix4x4>? ResolveInverseBindMatrices(
+        IReadOnlyList<Matrix4x4>? inverseBindMatrices,
+        int jointCount)
+    {
+        if (inverseBindMatrices is null)
+        {
+            return null;
+        }
+
+        if (inverseBindMatrices.Count < jointCount)
+        {
+            throw new ArgumentException(
+                $"Expected at least {jointCount} inverse bind matrices, got {inverseBindMatrices.Count}.",
+                nameof(MobyGltfExportOptions.InverseBindMatrices));
+        }
+
+        return inverseBindMatrices;
     }
 
     private static int ScoreCommonTransformParentMode(
@@ -1639,8 +1964,7 @@ public static class MobyGltfExporter
         else
         {
             StoreSkinBlend(rollingBlendCache, vertex[3], new SkinBlend(1, bits9To15, 0, 0, 255, 0, 0));
-            blend = LoadSkinBlend(rollingBlendCache, vertex[2]);
-            if (blend.Count == 1 && blend.Joint0 == 0 && bits9To15 != 0)
+            if (!TryLoadSkinBlend(rollingBlendCache, vertex[2], out blend))
             {
                 blend = new SkinBlend(1, bits9To15, 0, 0, 255, 0, 0);
             }
@@ -1650,17 +1974,24 @@ public static class MobyGltfExporter
     }
 
     private static SkinBlend LoadSkinBlend(SkinBlend?[] rollingBlendCache, byte vu0Address)
+        => TryLoadSkinBlend(rollingBlendCache, vu0Address, out var blend)
+            ? blend
+            : new SkinBlend(1, 0, 0, 0, 255, 0, 0);
+
+    private static bool TryLoadSkinBlend(SkinBlend?[] rollingBlendCache, byte vu0Address, out SkinBlend blend)
     {
         if (vu0Address % 4 == 0)
         {
             var slot = vu0Address / 4;
             if (slot >= 0 && slot < rollingBlendCache.Length && rollingBlendCache[slot].HasValue)
             {
-                return rollingBlendCache[slot]!.Value;
+                blend = rollingBlendCache[slot]!.Value;
+                return true;
             }
         }
 
-        return new SkinBlend(1, 0, 0, 0, 255, 0, 0);
+        blend = default;
+        return false;
     }
 
     private static void StoreSkinBlend(SkinBlend?[] rollingBlendCache, byte vu0Address, SkinBlend blend)
@@ -2110,6 +2441,7 @@ public static class MobyGltfExporter
         IReadOnlyDictionary<int, string>? textureUris,
         IReadOnlyDictionary<int, TextureSize>? textureSizes,
         IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha,
+        byte textureFullOpacityAlpha,
         List<object> images,
         List<object> textures,
         List<object> materials,
@@ -2177,7 +2509,8 @@ public static class MobyGltfExporter
                 alpha.GltfAlphaMode,
                 alpha.MinAlpha,
                 alpha.MaxAlpha,
-                alpha.UsesBinaryAlpha
+                alpha.UsesBinaryAlpha,
+                TextureFullOpacityAlpha = textureFullOpacityAlpha
             }
         };
         if (alpha.GltfAlphaMode is { } alphaMode)

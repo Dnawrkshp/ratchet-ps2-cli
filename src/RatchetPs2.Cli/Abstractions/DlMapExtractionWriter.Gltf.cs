@@ -3,6 +3,8 @@ using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Ties;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.DL.Moby;
+
 namespace RatchetPs2.Cli.Abstractions;
 
 internal static partial class DlMapExtractionWriter
@@ -89,8 +91,7 @@ internal static partial class DlMapExtractionWriter
             var diagnosticsFile = Path.Combine(outputDirectoryInfo.FullName, "tfrag.diagnostics.json");
             var textureResources = TextureResourcePreparer.PrepareExternalTextures(
                 textureDirectory,
-                outputDirectoryInfo,
-                normalizePs2FullOpacityAlpha: TfragTextureAlpha.FullOpacityAlpha);
+                outputDirectoryInfo);
 
             using var input = inputFile.OpenRead();
             var export = TfragGltfExporter.Export(
@@ -229,12 +230,11 @@ internal static partial class DlMapExtractionWriter
                 outputDirectoryInfo);
 
             using var input = inputFile.OpenRead();
-            var export = MobyGltfExporter.Export(
+            var export = DlMobyGltfExporter.Export(
                 input,
                 outputFile.Name,
                 new MobyGltfExportOptions
                 {
-                    SkipAnimationSequences = true,
                     AnimationFormat = MobyAnimationFormat.Compact,
                     ExternalTextureUris = textureResources?.Uris,
                     ExternalTextureSizes = textureResources?.Sizes,

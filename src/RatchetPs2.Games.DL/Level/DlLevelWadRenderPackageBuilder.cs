@@ -1,17 +1,20 @@
 using System.Diagnostics;
 using System.Globalization;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.IO;
 using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Shrubs;
 using RatchetPs2.Core.Skyboxes;
+using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Ties;
 using RatchetPs2.Core.Wad;
 using RatchetPs2.Core.Wad.Models;
+using RatchetPs2.Games.DL.Moby;
 
 namespace RatchetPs2.Games.DL.Level;
 
@@ -47,6 +50,13 @@ public static class DlLevelWadRenderPackageBuilder
     };
 
     public static PackedFilePackage BuildPacked(
+        ReadOnlySpan<byte> levelWadBytes,
+        DlLevelWadRenderPackageBuildOptions? options = null)
+    {
+        return PackFiles(BuildFiles(levelWadBytes, options));
+    }
+
+    public static IReadOnlyList<PackedFile> BuildFiles(
         ReadOnlySpan<byte> levelWadBytes,
         DlLevelWadRenderPackageBuildOptions? options = null)
     {
@@ -91,7 +101,7 @@ public static class DlLevelWadRenderPackageBuilder
         }
 
         var assetsStart = Stopwatch.GetTimestamp();
-        BuildAssets(
+        var mobyEntries = BuildAssets(
             files,
             GameId.DL,
             levelWad.Level,
@@ -102,6 +112,21 @@ public static class DlLevelWadRenderPackageBuilder
             timings,
             options,
             ReadChunkWads(levelWadBytes, levelWad.Chunks));
+
+        for (var missionIndex = 0; missionIndex < levelWad.GameplayMissionData.Count; missionIndex++)
+        {
+            var missionData = DlLevelWadReader.ReadSectorFileBlock(
+                levelWadBytes,
+                levelWad.GameplayMissionData[missionIndex]);
+            var classes = DlMissionDataReader.ReadClasses(missionData);
+            if (classes.Length > 0)
+            {
+                BuildMissionMobyGltfs(files, mobyEntries, missionIndex, classes, options);
+            }
+        }
+        manifest["Mobys"] = mobyEntries;
+        manifest["MobyExportCount"] = mobyEntries.Count(entry => entry.Status == "written");
+        manifest["MobyExportFailureCount"] = mobyEntries.Count(entry => entry.Status == "error");
         AddTiming(
             timings,
             "managed.assets-total",
@@ -133,7 +158,7 @@ public static class DlLevelWadRenderPackageBuilder
             $"{files.Count} files");
         manifest["PerformanceTimings"] = timings;
         AddJsonFile(files, "manifest.json", manifest);
-        return PackFiles(files);
+        return files;
     }
 
     public static IReadOnlyList<PackedFile> BuildAssetFiles(
@@ -168,7 +193,7 @@ public static class DlLevelWadRenderPackageBuilder
         var timings = new List<RenderPackageTiming>();
         var assetsStart = Stopwatch.GetTimestamp();
 
-        BuildAssets(
+        var mobyEntries = BuildAssets(
             files,
             gameId,
             levelIndex,
@@ -179,6 +204,7 @@ public static class DlLevelWadRenderPackageBuilder
             timings,
             options,
             chunkWads);
+        manifest["Mobys"] = mobyEntries;
 
         AddTiming(
             timings,
@@ -191,7 +217,7 @@ public static class DlLevelWadRenderPackageBuilder
         return files;
     }
 
-    private static void BuildAssets(
+    private static List<MobyExportManifestEntry> BuildAssets(
         List<PackedFile> files,
         GameId gameId,
         int levelIndex,
@@ -277,8 +303,7 @@ public static class DlLevelWadRenderPackageBuilder
         timings.AddRange(tfragTimings);
 
         var mobyStart = Stopwatch.GetTimestamp();
-        var mobyRouteStart = gltfExports.Count;
-        gltfExports.AddRange(BuildMobyGltfs(
+        var mobyRoutes = BuildMobyGltfs(
             files,
             gameId,
             mobyDefinitions,
@@ -289,13 +314,15 @@ public static class DlLevelWadRenderPackageBuilder
             gsStashDefinitions,
             knownAssetOffsets,
             textureIsSwizzled,
-            options));
+            options).ToArray();
+        gltfExports.AddRange(mobyRoutes);
+        var mobyEntries = CreateMobyManifestEntries("main", "assets", mobyRoutes).ToList();
         AddTiming(
             timings,
             "managed.assets.mobys",
             "Moby glTF exports",
             mobyStart,
-            SummarizeRoutes(gltfExports.Skip(mobyRouteStart)));
+            SummarizeRoutes(mobyRoutes));
 
         var tieStart = Stopwatch.GetTimestamp();
         var tieRouteStart = gltfExports.Count;
@@ -373,6 +400,7 @@ public static class DlLevelWadRenderPackageBuilder
                 FxTextureDefinitions = fxDefinitions
             },
             ["GltfExports"] = gltfExports,
+            ["Mobys"] = mobyEntries,
             ["GltfExportCount"] = gltfExports.Count(export => export.Status == "written"),
             ["GltfExportFailureCount"] = gltfExports.Count(export => export.Status == "error")
         };
@@ -380,6 +408,7 @@ public static class DlLevelWadRenderPackageBuilder
         AddJsonFile(files, "assets/manifest.json", assetManifest);
         rootManifest["AssetHeader"] = header;
         rootManifest["TextureIsSwizzled"] = textureIsSwizzled;
+        return mobyEntries;
     }
 
     private static GltfExportRoute BuildTfrag(
@@ -466,7 +495,7 @@ public static class DlLevelWadRenderPackageBuilder
                 assetBytes,
                 header.TextureDataOffset,
                 isSwizzled: textureIsSwizzled);
-            AddTexture(files, "assets/tfrag/textures", "textures", texture, textureResources, TfragTextureAlpha.FullOpacityAlpha);
+            AddTexture(files, "assets/tfrag/textures", "textures", texture, textureResources);
         }
 
         return textureResources;
@@ -641,35 +670,40 @@ public static class DlLevelWadRenderPackageBuilder
                         textureDataOffset,
                         gsStashDefinitions,
                         isSwizzled: textureIsSwizzled);
-                    AddTexture(files, $"{packageRoot}/textures", "textures", texture, textureResources);
+                    AddTexture(
+                        files,
+                        $"{packageRoot}/textures",
+                        "textures",
+                        texture,
+                        textureResources);
                     relativeTextureIndex++;
                 }
 
-                using var input = new MemoryStream(mobyBytes, writable: false);
-                var export = MobyGltfExporter.Export(
-                    input,
-                    "moby.gltf",
+                var stats = WriteMobyGltfFiles(
+                    files,
+                    gameId,
+                    mobyBytes,
+                    packageRoot,
                     new MobyGltfExportOptions
                     {
-                        SkipAnimationSequences = true,
+                        SkipAnimationSequences = gameId != GameId.DL,
                         AnimationFormat = GetMobyAnimationFormat(gameId),
                         LodIndex = options.MobyLodIndex,
                         ExternalTextureUris = textureResources.Uris,
                         ExternalTextureSizes = textureResources.Sizes,
                         ExternalTextureAlpha = textureResources.Alpha,
                         BufferFileName = "moby.buffer.bin"
-                    });
+                    },
+                    options);
 
-                AddFile(files, $"{packageRoot}/moby.gltf", export.GltfBytes, "model/gltf+json");
-                AddFile(files, $"{packageRoot}/moby.buffer.bin", export.BinBytes);
-                AddOptionalDiagnostics(files, $"{packageRoot}/moby.diagnostics.json", export.DiagnosticsBytes, options);
                 route = GltfExportRoute.Written(
                     "moby",
                     definition.ModelId,
                     sourcePath,
                     gltfPath,
                     $"{relativeDirectory}/moby.buffer.bin",
-                    options.IncludeDiagnostics ? $"{relativeDirectory}/moby.diagnostics.json" : null);
+                    options.IncludeDiagnostics ? $"{relativeDirectory}/moby.diagnostics.json" : null,
+                    stats);
             }
             catch (Exception ex) when (IsAssetTextureFailure(ex))
             {
@@ -678,6 +712,181 @@ public static class DlLevelWadRenderPackageBuilder
 
             yield return route;
         }
+    }
+
+    private static void BuildMissionMobyGltfs(
+        List<PackedFile> files,
+        List<MobyExportManifestEntry> entries,
+        int missionIndex,
+        byte[] classes,
+        DlLevelWadRenderPackageBuildOptions options)
+    {
+        var group = $"mission_{missionIndex}";
+        foreach (var moby in DlMissionMobyBankReader.Read(classes))
+        {
+            var name = moby.Definition.ClassId.ToString("x4", CultureInfo.InvariantCulture);
+            var packageRoot = $"missions/{group}/moby/{name}";
+            var gltfPath = $"{packageRoot}/moby.gltf";
+            if (options.IncludeSourceFiles)
+            {
+                AddFile(files, $"{packageRoot}/moby.bin", moby.ModelBytes);
+            }
+
+            if (moby.ModelBytes.Length == 0)
+            {
+                entries.Add(MobyExportManifestEntry.Empty(group, name, moby.Definition.ClassId));
+                continue;
+            }
+
+            try
+            {
+                var textures = new RenderTextureResources();
+                for (var textureIndex = 0; textureIndex < moby.PifTextures.Count; textureIndex++)
+                {
+                    var texture = PifAssetExporter.Export(moby.PifTextures[textureIndex]);
+                    var normalized = new DlNormalizedTexture(
+                        textureIndex,
+                        "mission_moby",
+                        texture.PifBytes,
+                        texture.PngBytes,
+                        new DlNormalizedTextureMetadata(
+                            "mission_moby",
+                            textureIndex,
+                            texture.Texture.Header.USize,
+                            texture.Texture.Header.VSize,
+                            texture.Texture.IsSwizzled,
+                            0,
+                            0,
+                            texture.Texture.PixelData.Length,
+                            [],
+                            [],
+                            moby.Definition));
+                    AddTexture(
+                        files,
+                        $"{packageRoot}/textures",
+                        "textures",
+                        normalized,
+                        textures);
+                }
+
+                var stats = WriteMobyGltfFiles(
+                    files,
+                    GameId.DL,
+                    moby.ModelBytes,
+                    packageRoot,
+                    new MobyGltfExportOptions
+                    {
+                        AnimationFormat = MobyAnimationFormat.Compact,
+                        LodIndex = options.MobyLodIndex,
+                        ExternalTextureUris = textures.Uris,
+                        ExternalTextureSizes = textures.Sizes,
+                        ExternalTextureAlpha = textures.Alpha,
+                        BufferFileName = "moby.buffer.bin"
+                    },
+                    options);
+                entries.Add(MobyExportManifestEntry.Written(
+                    group,
+                    name,
+                    moby.Definition.ClassId,
+                    gltfPath,
+                    stats));
+            }
+            catch (Exception ex) when (IsAssetTextureFailure(ex))
+            {
+                entries.Add(MobyExportManifestEntry.Failed(group, name, moby.Definition.ClassId, ex.Message));
+            }
+        }
+    }
+
+    private static IEnumerable<MobyExportManifestEntry> CreateMobyManifestEntries(
+        string group,
+        string pathPrefix,
+        IEnumerable<GltfExportRoute> routes)
+    {
+        foreach (var route in routes)
+        {
+            var name = route.SourcePath.Split('/')[1];
+            if (route.Status != "written")
+            {
+                yield return route.Status == "empty"
+                    ? MobyExportManifestEntry.Empty(group, name, route.ModelId ?? 0)
+                    : MobyExportManifestEntry.Failed(group, name, route.ModelId ?? 0, route.Error ?? "Export failed.");
+                continue;
+            }
+
+            yield return MobyExportManifestEntry.Written(
+                group,
+                name,
+                route.ModelId ?? 0,
+                $"{pathPrefix}/{route.GltfPath}",
+                route.Stats ?? throw new InvalidDataException($"Written moby route '{route.GltfPath}' has no export statistics."));
+        }
+    }
+
+    private static MobyExportStats WriteMobyGltfFiles(
+        List<PackedFile> files,
+        GameId gameId,
+        byte[] mobyBytes,
+        string packageRoot,
+        MobyGltfExportOptions exportOptions,
+        DlLevelWadRenderPackageBuildOptions buildOptions)
+    {
+        var export = ExportMobyGltf(gameId, mobyBytes, "moby.gltf", exportOptions);
+        AddFile(files, $"{packageRoot}/moby.gltf", export.GltfBytes, "model/gltf+json");
+        AddFile(files, $"{packageRoot}/moby.buffer.bin", export.BinBytes);
+        AddOptionalDiagnostics(files, $"{packageRoot}/moby.diagnostics.json", export.DiagnosticsBytes, buildOptions);
+        return ReadMobyExportStats(export.GltfBytes, export.DiagnosticsBytes);
+    }
+
+    private static MobyGltfExport ExportMobyGltf(
+        GameId gameId,
+        byte[] mobyBytes,
+        string gltfFileName,
+        MobyGltfExportOptions options)
+    {
+        using var input = new MemoryStream(mobyBytes, writable: false);
+        return gameId == GameId.DL
+            ? DlMobyGltfExporter.Export(input, gltfFileName, options)
+            : MobyGltfExporter.Export(input, gltfFileName, options);
+    }
+
+    private static MobyExportStats ReadMobyExportStats(byte[] gltfBytes, byte[] diagnosticsBytes)
+    {
+        using var gltf = JsonDocument.Parse(gltfBytes);
+        var root = gltf.RootElement;
+        var accessors = root.GetProperty("accessors");
+        var meshes = root.GetProperty("meshes");
+        var vertices = 0;
+        var triangles = 0;
+        foreach (var mesh in meshes.EnumerateArray())
+        {
+            foreach (var primitive in mesh.GetProperty("primitives").EnumerateArray())
+            {
+                var positionAccessor = primitive.GetProperty("attributes").GetProperty("POSITION").GetInt32();
+                var indexAccessor = primitive.GetProperty("indices").GetInt32();
+                vertices += accessors[positionAccessor].GetProperty("count").GetInt32();
+                triangles += accessors[indexAccessor].GetProperty("count").GetInt32() / 3;
+            }
+        }
+
+        var invalid = 0;
+        if (diagnosticsBytes.Length > 0)
+        {
+            using var diagnostics = JsonDocument.Parse(diagnosticsBytes);
+            invalid = diagnostics.RootElement.GetProperty("Meshes").EnumerateArray().Count(mesh =>
+                mesh.TryGetProperty("InvalidVertexCount", out var invalidVertices)
+                    && invalidVertices.GetInt32() > 0
+                || mesh.TryGetProperty("Detail", out var detail)
+                    && detail.TryGetProperty("RejectedInvalidTriangles", out var invalidTriangles)
+                    && invalidTriangles.GetInt32() > 0);
+        }
+
+        return new MobyExportStats(
+            meshes.GetArrayLength(),
+            vertices,
+            triangles,
+            invalid,
+            root.TryGetProperty("images", out var images) ? images.GetArrayLength() : 0);
     }
 
     private static IEnumerable<GltfExportRoute> BuildTieGltfs(
@@ -1116,23 +1325,11 @@ public static class DlLevelWadRenderPackageBuilder
         string gltfTextureDirectory,
         DlNormalizedTexture texture,
         RenderTextureResources? resources,
-        byte? normalizePs2FullOpacityAlpha = null,
         string? outputFileName = null)
     {
         var fileName = outputFileName ?? $"tex.{texture.Index:0000}.png";
-        var pngBytes = texture.PngBytes;
-        var metadata = ReadPngMetadata(pngBytes);
-        if (normalizePs2FullOpacityAlpha.HasValue
-            && metadata.Alpha.HasAlpha
-            && metadata.Alpha.MaxAlpha <= normalizePs2FullOpacityAlpha.Value)
-        {
-            using var input = new MemoryStream(pngBytes, writable: false);
-            using var output = new MemoryStream();
-            metadata = PngAlphaNormalizer.WriteWithPs2AlphaNormalized(input, output, normalizePs2FullOpacityAlpha.Value);
-            pngBytes = output.ToArray();
-        }
-
-        AddFile(files, $"{packageDirectory}/{fileName}", pngBytes, "image/png");
+        var metadata = ReadPngMetadata(texture.PngBytes);
+        AddFile(files, $"{packageDirectory}/{fileName}", texture.PngBytes, "image/png");
 
         var uri = $"{gltfTextureDirectory.Trim().Trim('/')}/{fileName}";
         var resource = new RenderTextureResource(
@@ -1358,11 +1555,12 @@ public static class DlLevelWadRenderPackageBuilder
         string? BufferPath,
         string? DiagnosticsPath,
         string Status,
-        string? Error)
+        string? Error,
+        [property: JsonIgnore] MobyExportStats? Stats)
     {
         public static GltfExportRoute Empty(string family, int? modelId, string sourcePath, string gltfPath)
         {
-            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, null, null, "empty", null);
+            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, null, null, "empty", null, null);
         }
 
         public static GltfExportRoute Written(
@@ -1371,14 +1569,15 @@ public static class DlLevelWadRenderPackageBuilder
             string sourcePath,
             string gltfPath,
             string bufferPath,
-            string? diagnosticsPath)
+            string? diagnosticsPath,
+            MobyExportStats? stats = null)
         {
-            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, bufferPath, diagnosticsPath, "written", null);
+            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, bufferPath, diagnosticsPath, "written", null, stats);
         }
 
         public static GltfExportRoute Failed(string family, int? modelId, string sourcePath, string gltfPath, string error)
         {
-            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, null, null, "error", error);
+            return new GltfExportRoute(family, modelId, sourcePath, gltfPath, null, null, "error", error, null);
         }
     }
 
@@ -1439,6 +1638,58 @@ public static class DlLevelWadRenderPackageBuilder
         string Label,
         double DurationMs,
         string? Detail);
+
+    private sealed record MobyExportStats(
+        int Meshes,
+        int Vertices,
+        int Triangles,
+        int InvalidMeshRecords,
+        int Images);
+
+    private sealed record MobyExportManifestEntry(
+        string Group,
+        string Name,
+        int ClassId,
+        string? Gltf,
+        string Status,
+        string? Error,
+        int Meshes,
+        int Vertices,
+        int Triangles,
+        int InvalidMeshRecords,
+        int Images)
+    {
+        public static MobyExportManifestEntry Written(
+            string group,
+            string name,
+            int classId,
+            string gltf,
+            MobyExportStats stats)
+        {
+            return new MobyExportManifestEntry(
+                group,
+                name,
+                classId,
+                gltf,
+                "written",
+                null,
+                stats.Meshes,
+                stats.Vertices,
+                stats.Triangles,
+                stats.InvalidMeshRecords,
+                stats.Images);
+        }
+
+        public static MobyExportManifestEntry Empty(string group, string name, int classId)
+        {
+            return new MobyExportManifestEntry(group, name, classId, null, "empty", null, 0, 0, 0, 0, 0);
+        }
+
+        public static MobyExportManifestEntry Failed(string group, string name, int classId, string error)
+        {
+            return new MobyExportManifestEntry(group, name, classId, null, "error", error, 0, 0, 0, 0, 0);
+        }
+    }
 
     private sealed class TimingAggregate(string key, string label)
     {
