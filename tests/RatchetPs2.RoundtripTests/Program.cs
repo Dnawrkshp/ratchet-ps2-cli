@@ -30,6 +30,17 @@ try
     var failures = new List<string>();
     try
     {
+        ValidateUyaAnimationExport(cases);
+        Console.WriteLine("PASS UYA standard animation export");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"UYA standard animation export: {ex.Message}");
+        Console.WriteLine("FAIL UYA standard animation export");
+    }
+
+    try
+    {
         ValidateDlAnimationExport(cases);
         Console.WriteLine("PASS DL compact animation export");
     }
@@ -94,6 +105,105 @@ try
 finally
 {
     Directory.Delete(tempRoot, recursive: true);
+}
+
+static void ValidateUyaAnimationExport(IReadOnlyList<RoundtripCase> cases)
+{
+    var testCase = cases.FirstOrDefault(test =>
+        test.Game == "UYA"
+        && test.MobyPath.Contains("04220_107C", StringComparison.OrdinalIgnoreCase));
+    if (testCase is null)
+    {
+        throw new InvalidDataException("The 04220_107C standard animation fixture is missing.");
+    }
+
+    using var input = File.OpenRead(testCase.MobyPath);
+    var export = ExportMobyGltf(input, "moby-uya-animation.gltf");
+    using var gltf = JsonDocument.Parse(export.GltfBytes);
+    var root = gltf.RootElement;
+    var animations = root.GetProperty("animations");
+    if (animations.GetArrayLength() != 1)
+    {
+        throw new InvalidDataException($"expected 1 animation, found {animations.GetArrayLength()}.");
+    }
+
+    var animation = animations[0];
+    var timeAccessor = root.GetProperty("accessors")[animation.GetProperty("samplers")[0].GetProperty("input").GetInt32()];
+    var duration = timeAccessor.GetProperty("max")[0].GetSingle();
+    if (timeAccessor.GetProperty("count").GetInt32() != 52 || Math.Abs(duration - 1.7f) > 0.000001f)
+    {
+        throw new InvalidDataException($"animation duration was {duration}; expected 52 keys over 1.7 seconds.");
+    }
+
+    var bone3 = root.GetProperty("nodes")
+        .EnumerateArray()
+        .Single(node => node.TryGetProperty("name", out var name) && name.GetString() == "bone_0003");
+    var bone3Translation = bone3.GetProperty("translation");
+    if (Math.Abs(bone3Translation[0].GetSingle()) > 0.000001f
+        || Math.Abs(bone3Translation[1].GetSingle() - 0.4160785f) > 0.000001f
+        || Math.Abs(bone3Translation[2].GetSingle()) > 0.000001f)
+    {
+        throw new InvalidDataException("standard animation bind translations were refined away from the source common transforms.");
+    }
+
+    var bone11Node = root.GetProperty("nodes")
+        .EnumerateArray()
+        .Select((node, index) => (Node: node, Index: index))
+        .Single(item => item.Node.TryGetProperty("name", out var name) && name.GetString() == "bone_0011")
+        .Index;
+    var rotationChannel = animation.GetProperty("channels")
+        .EnumerateArray()
+        .Single(channel =>
+            channel.GetProperty("target").GetProperty("node").GetInt32() == bone11Node
+            && channel.GetProperty("target").GetProperty("path").GetString() == "rotation");
+    var rotationSampler = animation.GetProperty("samplers")[rotationChannel.GetProperty("sampler").GetInt32()];
+    var rotationAccessor = root.GetProperty("accessors")[rotationSampler.GetProperty("output").GetInt32()];
+    var rotationView = root.GetProperty("bufferViews")[rotationAccessor.GetProperty("bufferView").GetInt32()];
+    var rotationOffset = rotationView.GetProperty("byteOffset").GetInt32()
+        + (rotationAccessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0);
+    var actual = new[]
+    {
+        BitConverter.ToSingle(export.BinBytes, rotationOffset),
+        BitConverter.ToSingle(export.BinBytes, rotationOffset + 4),
+        BitConverter.ToSingle(export.BinBytes, rotationOffset + 8),
+        BitConverter.ToSingle(export.BinBytes, rotationOffset + 12)
+    };
+    var expected = new[] { -0.04412901f, -0.04412901f, -0.70572847f, 0.70572847f };
+    if (actual.Zip(expected).Any(pair => Math.Abs(pair.First - pair.Second) > 0.000001f))
+    {
+        throw new InvalidDataException($"bone 11 rotation was ({string.Join(", ", actual)}); expected the standard inverse rotation convention.");
+    }
+
+    var scaledBindCase = cases.Single(test =>
+        test.Game == "UYA"
+        && test.MobyPath.Contains("05916_171C", StringComparison.OrdinalIgnoreCase));
+    using var scaledBindInput = File.OpenRead(scaledBindCase.MobyPath);
+    var scaledBindExport = ExportMobyGltf(scaledBindInput, "moby-uya-scaled-bind.gltf");
+    using var scaledBindGltf = JsonDocument.Parse(scaledBindExport.GltfBytes);
+    var scaledBindRoot = scaledBindGltf.RootElement;
+    var skin = scaledBindRoot.GetProperty("skins")[0];
+    var inverseBindAccessor = scaledBindRoot.GetProperty("accessors")[skin.GetProperty("inverseBindMatrices").GetInt32()];
+    var inverseBindView = scaledBindRoot.GetProperty("bufferViews")[inverseBindAccessor.GetProperty("bufferView").GetInt32()];
+    var inverseBindOffset = inverseBindView.GetProperty("byteOffset").GetInt32()
+        + (inverseBindAccessor.TryGetProperty("byteOffset", out var inverseBindAccessorOffset) ? inverseBindAccessorOffset.GetInt32() : 0)
+        + 13 * 16 * sizeof(float);
+    var m11 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset);
+    var m12 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 4);
+    var m13 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 8);
+    var m21 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 16);
+    var m22 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 20);
+    var m23 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 24);
+    var m31 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 32);
+    var m32 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 36);
+    var m33 = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 40);
+    var determinant = m11 * (m22 * m33 - m23 * m32)
+        - m12 * (m21 * m33 - m23 * m31)
+        + m13 * (m21 * m32 - m22 * m31);
+    var translationX = BitConverter.ToSingle(scaledBindExport.BinBytes, inverseBindOffset + 48);
+    if (Math.Abs(determinant - 1.6666667f) > 0.00001f || Math.Abs(translationX + 0.9320556f) > 0.000001f)
+    {
+        throw new InvalidDataException("standard animation export discarded a non-rigid source inverse bind matrix.");
+    }
 }
 
 static void ValidateDlAnimationExport(IReadOnlyList<RoundtripCase> cases)

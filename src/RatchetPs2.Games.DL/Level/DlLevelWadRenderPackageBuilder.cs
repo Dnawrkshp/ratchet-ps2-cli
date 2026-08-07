@@ -686,7 +686,6 @@ public static class DlLevelWadRenderPackageBuilder
                     packageRoot,
                     new MobyGltfExportOptions
                     {
-                        SkipAnimationSequences = gameId != GameId.DL,
                         AnimationFormat = GetMobyAnimationFormat(gameId),
                         LodIndex = options.MobyLodIndex,
                         ExternalTextureUris = textureResources.Uris,

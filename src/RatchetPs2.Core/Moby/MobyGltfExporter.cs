@@ -81,6 +81,26 @@ public static class MobyGltfExporter
         ArgumentNullException.ThrowIfNull(model);
         options ??= new MobyGltfExportOptions();
         ValidateLodIndex(options.LodIndex);
+        var modelScale = Math.Abs(model.Scale) > 1e-8f ? model.Scale : 1f;
+
+        if (!options.SkipAnimationSequences
+            && options.AnimationFormat == MobyAnimationFormat.Standard
+            && options.Animations is null)
+        {
+            var decoded = MobyStandardAnimationDecoder.Decode(model);
+            var jointCount = Math.Min(model.JointCount, model.Skeleton?.Bones.Count ?? 0);
+            options = options with
+            {
+                RefineSkinFromInfluences = false,
+                InverseBindMatrices = options.InverseBindMatrices
+                    ?? model.Skeleton?.Bones
+                        .Take(jointCount)
+                        .Select(bone => DecodeStandardInverseBindMatrix(bone, modelScale / 1024f))
+                        .ToArray(),
+                Animations = decoded.Animations,
+                AnimationFailures = decoded.Failures
+            };
+        }
 
         var binFileName = string.IsNullOrWhiteSpace(options.BufferFileName)
             ? $"{Path.GetFileNameWithoutExtension(gltfFileName)}.buffer.bin"
@@ -98,7 +118,6 @@ public static class MobyGltfExporter
         var hierarchy = new GltfNodeHierarchy(nodes, sceneNodes);
         var diagnostics = new List<object>();
         var animationDiagnostics = new List<object>();
-        var modelScale = Math.Abs(model.Scale) > 1e-8f ? model.Scale : 1f;
         var scale = modelScale / 1024f;
         var rollingVertexCache = new Vector3?[512];
         var rollingJointCache = new ushort[512][];
@@ -1309,6 +1328,29 @@ public static class MobyGltfExporter
         var sourceY = bone.Row4.Y * scale;
         var sourceZ = bone.Row4.Z * scale;
         return (new Vector3(sourceX, -sourceZ, -sourceY), rotation);
+    }
+
+    private static Matrix4x4 DecodeStandardInverseBindMatrix(MobyMatrix4 bone, float scale)
+    {
+        var basis = new Matrix4x4(
+            1f, 0f, 0f, 0f,
+            0f, 0f, 1f, 0f,
+            0f, -1f, 0f, 0f,
+            0f, 0f, 0f, 1f);
+        var source = new Matrix4x4(
+            bone.Row1.X, bone.Row1.Y, bone.Row1.Z, 0f,
+            bone.Row2.X, bone.Row2.Y, bone.Row2.Z, 0f,
+            bone.Row3.X, bone.Row3.Y, bone.Row3.Z, 0f,
+            0f, 0f, 0f, 1f);
+        var mapped = basis * source * Matrix4x4.Transpose(basis);
+        var translation = GltfCoordinateBasis.FromPs2Position(
+            bone.Row4.X * scale,
+            bone.Row4.Y * scale,
+            bone.Row4.Z * scale);
+        mapped.M41 = translation.X;
+        mapped.M42 = translation.Y;
+        mapped.M43 = translation.Z;
+        return mapped;
     }
 
     private static void WriteMatrix4x4(BinaryWriter writer, Matrix4x4 matrix)

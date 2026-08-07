@@ -1,6 +1,7 @@
 using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
 using RatchetPs2.Games.UYA.Level;
 using System.CommandLine;
@@ -25,7 +26,7 @@ internal static class MapUnpackWadCommand
         };
         var renderOption = new Option<bool>("--render")
         {
-            Description = "Build the complete render-ready level package, including main and mission mobys. Currently supported for DL."
+            Description = "Build the complete render-ready level package, including mobys."
         };
 
         var command = CliCommandBuilder.Create(
@@ -69,12 +70,6 @@ internal static class MapUnpackWadCommand
                 Console.Error.WriteLine($"Unsupported --format value '{format}'. Expected files or indexed.");
                 return 1;
             }
-            if (render && gameId != GameId.DL)
-            {
-                Console.Error.WriteLine("Render-ready level WAD extraction currently supports only --game DL.");
-                return 1;
-            }
-
             try
             {
                 var bytes = File.ReadAllBytes(inputFile.FullName);
@@ -82,7 +77,44 @@ internal static class MapUnpackWadCommand
                 if (gameId == GameId.UYA)
                 {
                     var uyaPackage = UyaLevelWadUnpacker.Unpack(bytes);
-                    if (normalizedFormat == "indexed")
+                    if (render)
+                    {
+                        var renderOptions = DlLevelWadRenderPackageBuildOptions.Browser with
+                        {
+                            IncludeDiagnostics = true
+                        };
+                        IReadOnlyList<PackedFile> BuildAssetFiles(UyaLevelAssetSourceFiles assetFiles) =>
+                            DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+                                GameId.UYA,
+                                uyaPackage.LevelWad.Level,
+                                assetFiles.HeaderBytes,
+                                assetFiles.PaletteBytes,
+                                assetFiles.AssetWadBytes,
+                                renderOptions,
+                                assetFiles.ChunkWads);
+
+                        if (normalizedFormat == "indexed")
+                        {
+                            var renderPackage = UyaLevelWadRenderPackageBuilder.BuildPacked(
+                                uyaPackage.LevelWad.Level,
+                                uyaPackage.Files,
+                                BuildAssetFiles);
+                            PackedFilePackageWriter.WriteIndexed(renderPackage, outputDirectory);
+                            Console.WriteLine(
+                                $"Built UYA render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderPackage.Entries.Count} entries).");
+                        }
+                        else
+                        {
+                            var renderFiles = UyaLevelWadRenderPackageBuilder.BuildFiles(
+                                uyaPackage.LevelWad.Level,
+                                uyaPackage.Files,
+                                BuildAssetFiles);
+                            PackedFilePackageWriter.WriteFiles(renderFiles, outputDirectory);
+                            Console.WriteLine(
+                                $"Built UYA render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderFiles.Count} files).");
+                        }
+                    }
+                    else if (normalizedFormat == "indexed")
                     {
                         PackedFilePackageWriter.WriteIndexed(uyaPackage.ToPackedPackage(), outputDirectory);
                         Console.WriteLine(

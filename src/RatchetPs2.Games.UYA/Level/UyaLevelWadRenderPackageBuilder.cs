@@ -17,6 +17,14 @@ public static class UyaLevelWadRenderPackageBuilder
         IReadOnlyList<PackedFile> unpackedFiles,
         Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles)
     {
+        return PackedFilePackageBuilder.Pack(BuildFiles(levelIndex, unpackedFiles, buildAssetFiles));
+    }
+
+    public static IReadOnlyList<PackedFile> BuildFiles(
+        int levelIndex,
+        IReadOnlyList<PackedFile> unpackedFiles,
+        Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles)
+    {
         ArgumentNullException.ThrowIfNull(unpackedFiles);
         ArgumentNullException.ThrowIfNull(buildAssetFiles);
 
@@ -34,11 +42,13 @@ public static class UyaLevelWadRenderPackageBuilder
         };
 
         var assetsStart = Stopwatch.GetTimestamp();
-        files.AddRange(buildAssetFiles(new UyaLevelAssetSourceFiles(
+        var assetFiles = buildAssetFiles(new UyaLevelAssetSourceFiles(
             RequireSourceFile(sourceFiles, "assets/asset_header.bin").Bytes,
             RequireSourceFile(sourceFiles, "assets/palette.bin").Bytes,
             RequireSourceFile(sourceFiles, "assets/asset_wad.bin").Bytes,
-            CollectChunkWads(sourceFiles))));
+            CollectChunkWads(sourceFiles)));
+        files.AddRange(assetFiles);
+        AddMobyManifest(manifest, assetFiles);
         AddTiming(
             timings,
             "managed.assets-total",
@@ -63,7 +73,24 @@ public static class UyaLevelWadRenderPackageBuilder
             $"{files.Count} files");
         manifest["PerformanceTimings"] = timings;
         AddJsonFile(files, "manifest.json", manifest);
-        return PackedFilePackageBuilder.Pack(files);
+        return files;
+    }
+
+    private static void AddMobyManifest(
+        IDictionary<string, object?> manifest,
+        IReadOnlyList<PackedFile> assetFiles)
+    {
+        var assetManifest = assetFiles.FirstOrDefault(file => file.Path == "assets/render_manifest.json");
+        if (assetManifest is null)
+        {
+            return;
+        }
+
+        using var document = JsonDocument.Parse(assetManifest.Bytes);
+        if (document.RootElement.TryGetProperty("Mobys", out var mobys))
+        {
+            manifest["Mobys"] = mobys.Clone();
+        }
     }
 
     private static void BuildWorldFiles(

@@ -235,6 +235,7 @@ public sealed class MobyAnimationJoint
 public sealed class MobySequence
 {
     public MobyAnimationFormat Format { get; set; } = MobyAnimationFormat.Standard;
+    public bool HasSpecialFrameData { get; set; }
     public byte[]? RawData { get; set; }
     public MobyBoundingSphere BoundingSphere { get; set; } = new();
     public byte FrameCount { get; set; }

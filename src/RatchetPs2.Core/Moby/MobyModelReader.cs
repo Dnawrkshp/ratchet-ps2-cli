@@ -255,6 +255,7 @@ public static class MobyModelReader
         {
             sequence.FrameOffsets.Add(reader.ReadUInt32());
         }
+        sequence.HasSpecialFrameData = sequence.FrameOffsets.Any(offset => (offset & 0xF0000000) != 0);
 
         for (var i = 0; i < sequence.TriggerCount; i++)
         {
@@ -263,6 +264,11 @@ public static class MobyModelReader
                 Unknown00 = reader.ReadInt16(),
                 Unknown02 = reader.ReadInt16()
             });
+        }
+
+        if (sequence.HasSpecialFrameData)
+        {
+            return sequence;
         }
 
         foreach (var frameOffset in sequence.FrameOffsets)
