@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Numerics;
 using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Games.DL.Moby;
@@ -48,6 +49,28 @@ try
     {
         failures.Add($"DL compact animation export: {ex.Message}");
         Console.WriteLine("FAIL DL compact animation export");
+    }
+
+    try
+    {
+        ValidateDlAnimationPacking(cases);
+        Console.WriteLine("PASS DL compact animation packing");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"DL compact animation packing: {ex.Message}");
+        Console.WriteLine("FAIL DL compact animation packing");
+    }
+
+    try
+    {
+        ValidateUyaToDlConversion(cases);
+        Console.WriteLine("PASS UYA 0x171C to DL conversion");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"UYA 0x171C to DL conversion: {ex.Message}");
+        Console.WriteLine("FAIL UYA 0x171C to DL conversion");
     }
 
     try
@@ -451,6 +474,257 @@ static void ValidateDlAnimationExport(IReadOnlyList<RoundtripCase> cases)
     }
 }
 
+static void ValidateDlAnimationPacking(IReadOnlyList<RoundtripCase> cases)
+{
+    foreach (var compactCase in cases.Where(test => test.Game == "DL"))
+    {
+        var sourceBytes = File.ReadAllBytes(compactCase.MobyPath);
+        MobyModel parsed;
+        using (var input = new MemoryStream(sourceBytes, writable: false))
+        {
+            parsed = MobyModelReader.Read(input, new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact });
+        }
+        foreach (var sequence in parsed.Sequences)
+        {
+            sequence.RawData = null;
+        }
+        var structuredBytes = MobyModelPacker.Build(parsed);
+        if (FindFirstMismatch(sourceBytes, structuredBytes) is { } structuredMismatch)
+        {
+            throw new InvalidDataException(
+                $"{Path.GetRelativePath(FindRepoRoot(AppContext.BaseDirectory), compactCase.MobyPath)} parsed compact sequence packing differs at 0x{structuredMismatch.Offset:X}.");
+        }
+    }
+
+    var testCase = cases.Single(test =>
+        test.Game == "DL"
+        && test.MobyPath.Contains("09500_251C", StringComparison.OrdinalIgnoreCase));
+    var originalBytes = File.ReadAllBytes(testCase.MobyPath);
+
+    MobyGltfExport export;
+    using (var input = new MemoryStream(originalBytes, writable: false))
+    {
+        export = DlMobyGltfExporter.Export(
+            input,
+            "moby-packing.gltf",
+            new MobyGltfExportOptions
+            {
+                AnimationFormat = MobyAnimationFormat.Compact,
+                BufferFileName = "moby-packing.buffer.bin"
+            });
+    }
+
+    var corruptTemplate = (byte[])originalBytes.Clone();
+    var sequenceOffset = BitConverter.ToInt32(corruptTemplate, 0x48);
+    var frameDataOffset = BitConverter.ToInt32(corruptTemplate, sequenceOffset + 0x1C);
+    corruptTemplate[sequenceOffset + frameDataOffset + 0x10] ^= 0x40;
+    var restored = ImportDl(corruptTemplate, export.GltfBytes, export.BinBytes);
+    var restoredBytes = MobyModelPacker.Build(restored.Model);
+    if (FindFirstMismatch(originalBytes, restoredBytes) is { } restoredMismatch)
+    {
+        throw new InvalidDataException(
+            $"embedded compact source restoration differs at 0x{restoredMismatch.Offset:X}.");
+    }
+
+    using var gltf = JsonDocument.Parse(export.GltfBytes);
+    var root = gltf.RootElement;
+    const int editedAnimationIndex = 7;
+    var animation = root.GetProperty("animations")[editedAnimationIndex];
+    var expectedScale = ReadAnimationVector3(root, export.BinBytes, animation, "scale", 1);
+    var expectedTranslation = ReadAnimationVector3(root, export.BinBytes, animation, "translation", 1);
+    var rotationChannel = animation.GetProperty("channels").EnumerateArray()
+        .First(channel => channel.GetProperty("target").GetProperty("path").GetString() == "rotation");
+    var sampler = animation.GetProperty("samplers")[rotationChannel.GetProperty("sampler").GetInt32()];
+    var accessor = root.GetProperty("accessors")[sampler.GetProperty("output").GetInt32()];
+    var view = root.GetProperty("bufferViews")[accessor.GetProperty("bufferView").GetInt32()];
+    var outputOffset = view.GetProperty("byteOffset").GetInt32()
+        + (accessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0);
+    var editedBuffer = (byte[])export.BinBytes.Clone();
+    var edited = Quaternion.Normalize(new Quaternion(
+        BitConverter.ToSingle(editedBuffer, outputOffset + 0x10) + 0.01f,
+        BitConverter.ToSingle(editedBuffer, outputOffset + 0x14),
+        BitConverter.ToSingle(editedBuffer, outputOffset + 0x18),
+        BitConverter.ToSingle(editedBuffer, outputOffset + 0x1C)));
+    BitConverter.GetBytes(edited.X).CopyTo(editedBuffer, outputOffset + 0x10);
+    BitConverter.GetBytes(edited.Y).CopyTo(editedBuffer, outputOffset + 0x14);
+    BitConverter.GetBytes(edited.Z).CopyTo(editedBuffer, outputOffset + 0x18);
+    BitConverter.GetBytes(edited.W).CopyTo(editedBuffer, outputOffset + 0x1C);
+
+    var packed = ImportDl(originalBytes, export.GltfBytes, editedBuffer);
+    if (packed.Model.Sequences[editedAnimationIndex].RawData is not null)
+    {
+        throw new InvalidDataException("edited glTF animation reused its embedded compact source payload.");
+    }
+
+    var packedBytes = MobyModelPacker.Build(packed.Model);
+    MobyGltfExport packedExport;
+    using (var input = new MemoryStream(packedBytes, writable: false))
+    {
+        packedExport = DlMobyGltfExporter.Export(
+            input,
+            "moby-packed.gltf",
+            new MobyGltfExportOptions
+            {
+                AnimationFormat = MobyAnimationFormat.Compact,
+                BufferFileName = "moby-packed.buffer.bin"
+            });
+    }
+    using var packedGltf = JsonDocument.Parse(packedExport.GltfBytes);
+    var packedRoot = packedGltf.RootElement;
+    var packedAnimation = packedRoot.GetProperty("animations")[editedAnimationIndex];
+    var packedRotationChannel = packedAnimation.GetProperty("channels").EnumerateArray()
+        .First(channel => channel.GetProperty("target").GetProperty("path").GetString() == "rotation");
+    var packedSampler = packedAnimation.GetProperty("samplers")[packedRotationChannel.GetProperty("sampler").GetInt32()];
+    var packedAccessor = packedRoot.GetProperty("accessors")[packedSampler.GetProperty("output").GetInt32()];
+    var packedView = packedRoot.GetProperty("bufferViews")[packedAccessor.GetProperty("bufferView").GetInt32()];
+    var packedOffset = packedView.GetProperty("byteOffset").GetInt32()
+        + (packedAccessor.TryGetProperty("byteOffset", out var packedAccessorOffset) ? packedAccessorOffset.GetInt32() : 0)
+        + 0x10;
+    var actual = new Quaternion(
+        BitConverter.ToSingle(packedExport.BinBytes, packedOffset),
+        BitConverter.ToSingle(packedExport.BinBytes, packedOffset + 4),
+        BitConverter.ToSingle(packedExport.BinBytes, packedOffset + 8),
+        BitConverter.ToSingle(packedExport.BinBytes, packedOffset + 12));
+    if (MathF.Abs(Quaternion.Dot(edited, actual)) < 0.99999f)
+    {
+        throw new InvalidDataException("edited compact rotation did not survive glTF packing.");
+    }
+    var actualScale = ReadAnimationVector3(packedRoot, packedExport.BinBytes, packedAnimation, "scale", 1);
+    var actualTranslation = ReadAnimationVector3(packedRoot, packedExport.BinBytes, packedAnimation, "translation", 1);
+    if (Vector3.Distance(expectedScale, actualScale) > 0.0003f
+        || Vector3.Distance(expectedTranslation, actualTranslation) > 0.00001f)
+    {
+        throw new InvalidDataException("compact scale or translation tracks did not survive glTF packing.");
+    }
+}
+
+static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
+{
+    var testCase = cases.Single(test =>
+        test.Game == "UYA"
+        && test.MobyPath.Contains("05916_171C", StringComparison.OrdinalIgnoreCase));
+    MobyModel model;
+    using (var input = File.OpenRead(testCase.MobyPath))
+    {
+        model = MobyModelReader.Read(
+            input,
+            new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Standard });
+    }
+
+    var sourceAnimations = MobyStandardAnimationDecoder.Decode(model).Animations;
+    var sourceMeshData = model.MeshTable!.Entries
+        .Select(entry => (Vif: entry.VifData, Vertex: entry.VertexData, Texture: entry.VifTextureData))
+        .ToArray();
+    DlMobyConverter.ConvertFromUya(model);
+    if (model.Sequences.Count != 69
+        || model.Sequences.Any(sequence => sequence.Format != MobyAnimationFormat.Compact)
+        || model.Sequences.Any(sequence => sequence.Padding != 0)
+        || model.SkeletonFormat != MobyAnimationFormat.Compact)
+    {
+        throw new InvalidDataException("0x171C did not produce loadable compact DL animations and skeleton.");
+    }
+    if (sourceMeshData.Where((payload, index) =>
+            !payload.Vif.SequenceEqual(model.MeshTable.Entries[index].VifData)
+            || !payload.Vertex.SequenceEqual(model.MeshTable.Entries[index].VertexData)
+            || !(payload.Texture ?? []).SequenceEqual(model.MeshTable.Entries[index].VifTextureData ?? []))
+        .Any())
+    {
+        throw new InvalidDataException("0x171C mesh payload changed during animation conversion.");
+    }
+
+    var bytes = MobyModelPacker.Build(model);
+    MobyModel packed;
+    using (var input = new MemoryStream(bytes, writable: false))
+    {
+        packed = MobyModelReader.Read(
+            input,
+            new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact });
+    }
+
+    for (var i = 0; i < sourceAnimations.Count; i++)
+    {
+        if (!DlCompactAnimationDecoder.TryDecode(
+                packed.Sequences[i], i, packed.JointCount, packed.Scale,
+                out var converted, out var error))
+        {
+            throw new InvalidDataException($"0x171C compact animation {i} did not decode: {error}.");
+        }
+        RequireMatchingAnimation(sourceAnimations[i], converted);
+    }
+}
+
+static void RequireMatchingAnimation(MobyGltfAnimationClip source, MobyGltfAnimationClip converted)
+{
+    if (!source.Times.SequenceEqual(converted.Times)
+        || !source.Rotations.Keys.SequenceEqual(converted.Rotations.Keys)
+        || !source.Scales.Keys.SequenceEqual(converted.Scales.Keys)
+        || !source.Translations.Keys.SequenceEqual(converted.Translations.Keys))
+    {
+        throw new InvalidDataException($"Animation {source.SourceIndex} track layout or timing changed during DL conversion.");
+    }
+
+    foreach (var joint in source.Rotations.Keys)
+    {
+        if (source.Rotations[joint].Zip(converted.Rotations[joint])
+            .Any(pair => MathF.Abs(Quaternion.Dot(pair.First, pair.Second)) < 0.99999f))
+        {
+            throw new InvalidDataException($"Animation {source.SourceIndex} joint {joint} rotation changed during DL conversion.");
+        }
+    }
+    foreach (var joint in source.Scales.Keys)
+    {
+        if (source.Scales[joint].Zip(converted.Scales[joint])
+            .Any(pair => Vector3.Distance(pair.First, pair.Second) > 0.0003f))
+        {
+            throw new InvalidDataException($"Animation {source.SourceIndex} joint {joint} scale changed during DL conversion.");
+        }
+    }
+    foreach (var joint in source.Translations.Keys)
+    {
+        if (source.Translations[joint].Zip(converted.Translations[joint])
+            .Any(pair => Vector3.Distance(pair.First, pair.Second) > 0.0003f))
+        {
+            throw new InvalidDataException($"Animation {source.SourceIndex} joint {joint} translation changed during DL conversion.");
+        }
+    }
+}
+
+static Vector3 ReadAnimationVector3(
+    JsonElement root,
+    byte[] buffer,
+    JsonElement animation,
+    string path,
+    int keyIndex)
+{
+    var channel = animation.GetProperty("channels").EnumerateArray()
+        .First(item => item.GetProperty("target").GetProperty("path").GetString() == path);
+    var sampler = animation.GetProperty("samplers")[channel.GetProperty("sampler").GetInt32()];
+    var accessor = root.GetProperty("accessors")[sampler.GetProperty("output").GetInt32()];
+    var view = root.GetProperty("bufferViews")[accessor.GetProperty("bufferView").GetInt32()];
+    var offset = view.GetProperty("byteOffset").GetInt32()
+        + (accessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0)
+        + keyIndex * 3 * sizeof(float);
+    return new Vector3(
+        BitConverter.ToSingle(buffer, offset),
+        BitConverter.ToSingle(buffer, offset + 4),
+        BitConverter.ToSingle(buffer, offset + 8));
+}
+
+static MobyGltfImportResult ImportDl(byte[] templateBytes, byte[] gltfBytes, byte[] bufferBytes)
+{
+    using var template = new MemoryStream(templateBytes, writable: false);
+    using var gltf = new MemoryStream(gltfBytes, writable: false);
+    return DlMobyGltfImporter.ImportWithDiagnostics(
+        template,
+        gltf,
+        _ => new MemoryStream(bufferBytes, writable: false),
+        new MobyGltfImportOptions
+        {
+            AnimationFormat = MobyAnimationFormat.Compact,
+            PacketMode = MobyGltfImportPacketMode.Passthrough
+        });
+}
+
 static void ValidateLod0Export(IReadOnlyList<RoundtripCase> cases)
 {
     foreach (var testCase in cases)
@@ -653,15 +927,16 @@ static void Roundtrip(RoundtripCase testCase, string tempRoot)
     using (var template = File.OpenRead(testCase.MobyPath))
     using (var gltf = File.OpenRead(gltfPath))
     {
-        result = MobyGltfImporter.ImportWithDiagnostics(
-            template,
-            gltf,
-            bufferName => File.OpenRead(Path.Combine(caseDirectory, Uri.UnescapeDataString(bufferName))),
-            new MobyGltfImportOptions
-            {
-                AnimationFormat = testCase.Format,
-                PacketMode = MobyGltfImportPacketMode.Passthrough
-            });
+        var options = new MobyGltfImportOptions
+        {
+            AnimationFormat = testCase.Format,
+            PacketMode = MobyGltfImportPacketMode.Passthrough
+        };
+        Func<string, Stream> openBuffer = bufferName =>
+            File.OpenRead(Path.Combine(caseDirectory, Uri.UnescapeDataString(bufferName)));
+        result = testCase.Format == MobyAnimationFormat.Compact
+            ? DlMobyGltfImporter.ImportWithDiagnostics(template, gltf, openBuffer, options)
+            : MobyGltfImporter.ImportWithDiagnostics(template, gltf, openBuffer, options);
     }
 
     var roundtripBytes = MobyModelPacker.Build(result.Model);

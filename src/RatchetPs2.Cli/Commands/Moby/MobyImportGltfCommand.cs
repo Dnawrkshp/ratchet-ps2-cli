@@ -2,6 +2,7 @@ using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Moby;
+using RatchetPs2.Games.DL.Moby;
 using System.CommandLine;
 using System.Globalization;
 using System.Numerics;
@@ -724,7 +725,7 @@ internal static class MobyImportGltfCommand
 
         var command = CliCommandBuilder.Create(
             "import-gltf",
-            "Import glTF geometry into a template moby model.",
+            "Import glTF geometry and DL compact animations into a template moby model.",
             gameOption,
             templateOption,
             profileOption,
@@ -1424,6 +1425,14 @@ internal static class MobyImportGltfCommand
                 },
                 rigSourceStream,
                 skinReferenceStream);
+            if (gameId == GameId.DL)
+            {
+                gltfStream.Position = 0;
+                DlMobyGltfImporter.ApplyAnimations(
+                    result.Model,
+                    gltfStream,
+                    bufferName => File.OpenRead(Path.Combine(inputDirectory, Uri.UnescapeDataString(bufferName))));
+            }
 
             var bytes = MobyModelPacker.Build(result.Model);
 

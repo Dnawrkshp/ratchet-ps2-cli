@@ -178,7 +178,40 @@ public static class MobyModelReader
             });
         }
 
+        if (sequence.TriggerCount > 0)
+        {
+            EnsureCompactRange(rawData, sequence.CompactTriggerOffset, sequence.TriggerCount * 0x04, "trigger table");
+            reader.BaseStream.Seek(startOffset + sequence.CompactTriggerOffset, SeekOrigin.Begin);
+            for (var i = 0; i < sequence.TriggerCount; i++)
+            {
+                sequence.Triggers.Add(new MobyAnimationTrigger
+                {
+                    Unknown00 = reader.ReadInt16(),
+                    Unknown02 = reader.ReadInt16()
+                });
+            }
+        }
+
+        if (sequence.CompactAnimDataOffset < 0
+            || sequence.CompactFrameDataOffset < sequence.CompactAnimDataOffset
+            || sequence.CompactFrameDataOffset > rawData.Length)
+        {
+            throw new InvalidDataException("Compact animation data offsets are out of bounds.");
+        }
+
+        sequence.CompactAnimInfoData = rawData[
+            sequence.CompactAnimDataOffset..sequence.CompactFrameDataOffset];
+        sequence.CompactFrameData = rawData[sequence.CompactFrameDataOffset..];
+
         return sequence;
+    }
+
+    private static void EnsureCompactRange(byte[] data, int offset, int length, string section)
+    {
+        if (offset < 0 || length < 0 || offset > data.Length - length)
+        {
+            throw new InvalidDataException($"Compact animation {section} is out of bounds.");
+        }
     }
 
     private static long FindNextSequenceEndOffset(

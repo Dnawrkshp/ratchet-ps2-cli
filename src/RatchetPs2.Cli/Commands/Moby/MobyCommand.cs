@@ -13,6 +13,7 @@ internal static class MobyCommand
             "Work with moby model files.",
             MobyAnalyzeSkinCommand.Build(gameModuleResolver),
             MobyAnalyzeVertexControlCommand.Build(gameModuleResolver),
+            MobyConvertToDlCommand.Build(),
             MobyCopyAnimationCommand.Build(gameModuleResolver),
             MobyDebugSkinTransferCommand.Build(gameModuleResolver),
             MobyDefaultAnimationCommand.Build(gameModuleResolver),

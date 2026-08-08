@@ -56,6 +56,25 @@ public static class GltfAccessorReader
         return result;
     }
 
+    public static List<float> ReadScalarFloatAccessor(
+        int accessorIndex,
+        JsonElement accessors,
+        JsonElement bufferViews,
+        IReadOnlyList<byte[]> buffers)
+    {
+        var accessor = accessors[accessorIndex];
+        RequireAccessor(accessor, componentType: 5126, type: "SCALAR");
+        var (buffer, offset, stride) = GetAccessorBuffer(accessor, bufferViews, buffers, 4);
+        var count = accessor.GetProperty("count").GetInt32();
+        var result = new List<float>(count);
+        for (var i = 0; i < count; i++)
+        {
+            result.Add(BitConverter.ToSingle(buffer, offset + i * stride));
+        }
+
+        return result;
+    }
+
     public static List<Vector2> ReadVec2Accessor(
         int accessorIndex,
         JsonElement accessors,

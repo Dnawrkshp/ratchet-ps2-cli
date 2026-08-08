@@ -11,6 +11,7 @@ public static class MobyModelPacker
     public static byte[] Build(MobyModel model)
     {
         ArgumentNullException.ThrowIfNull(model);
+        model.AnimationCount = checked((byte)model.Sequences.Count);
 
         using var stream = new MemoryStream();
         using var writer = new BinaryWriter(stream);
@@ -152,11 +153,12 @@ public static class MobyModelPacker
             return;
         }
 
+        sequence.FrameCount = checked((byte)sequence.Frames.Count);
+        sequence.TriggerCount = checked((byte)sequence.Triggers.Count);
         sequence.WriteHeader(writer);
         var frameListOffset = checked((int)writer.BaseStream.Position);
         writer.Write(new byte[sequence.Frames.Count * 0x04]);
 
-        sequence.TriggerCount = checked((byte)sequence.Triggers.Count);
         foreach (var trigger in sequence.Triggers)
         {
             trigger.Write(writer);

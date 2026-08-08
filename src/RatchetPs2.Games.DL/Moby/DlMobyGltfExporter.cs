@@ -73,6 +73,10 @@ public static class DlMobyGltfExporter
             InverseBindMatrices = inverseBindMatrices,
             Animations = animations,
             AnimationFailures = failures,
+            CompactAnimationSourceData = model.Sequences
+                .Select((sequence, index) => (sequence.RawData, Index: index))
+                .Where(item => item.RawData is { Length: > 0 })
+                .ToDictionary(item => item.Index, item => item.RawData!),
             TextureFullOpacityAlpha = Ps2Color.FullOpacityAlpha
         };
         return MobyGltfExporter.Export(model, gltfFileName, dlOptions);

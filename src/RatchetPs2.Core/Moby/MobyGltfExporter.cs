@@ -37,6 +37,7 @@ public sealed record MobyGltfExportOptions
     public IReadOnlyList<Matrix4x4>? InverseBindMatrices { get; init; }
     public IReadOnlyList<MobyGltfAnimationClip>? Animations { get; init; }
     public IReadOnlyList<MobyGltfAnimationFailure>? AnimationFailures { get; init; }
+    public IReadOnlyDictionary<int, byte[]>? CompactAnimationSourceData { get; init; }
     public byte TextureFullOpacityAlpha { get; init; } = byte.MaxValue;
     public string? BufferFileName { get; init; }
 }
@@ -990,6 +991,17 @@ public static class MobyGltfExporter
                 }
             }
 
+            var continuousRotationTracks = rotationTracks.ToDictionary(
+                track => track.Key,
+                track => MakeContinuous(track.Value));
+            var exportedAnimation = new MobyGltfAnimationClip(
+                animation.SourceIndex,
+                animation.Name,
+                animation.Times,
+                continuousRotationTracks,
+                scaleTracks.ToDictionary(track => track.Key, track => track.Value),
+                translationTracks.ToDictionary(track => track.Key, track => track.Value));
+
             var timeAccessor = WriteFloatAccessor(
                 writer,
                 bufferViews,
@@ -1031,24 +1043,17 @@ public static class MobyGltfExporter
                 });
             }
 
-            foreach (var (joint, track) in rotationTracks)
+            foreach (var (joint, track) in continuousRotationTracks)
             {
                 var values = new float[animation.Times.Length * 4];
-                var previous = track[0];
                 for (var frame = 0; frame < animation.Times.Length; frame++)
                 {
                     var rotation = track[frame];
-                    if (Quaternion.Dot(previous, rotation) < 0f)
-                    {
-                        rotation = new Quaternion(-rotation.X, -rotation.Y, -rotation.Z, -rotation.W);
-                    }
-
                     var offset = frame * 4;
                     values[offset] = rotation.X;
                     values[offset + 1] = rotation.Y;
                     values[offset + 2] = rotation.Z;
                     values[offset + 3] = rotation.W;
-                    previous = rotation;
                 }
                 AddChannel(joint, "rotation", values, "VEC4");
             }
@@ -1062,12 +1067,31 @@ public static class MobyGltfExporter
                 AddChannel(joint, "translation", Flatten(track), "VEC3");
             }
 
-            animations.Add(new
+            var gltfAnimation = new Dictionary<string, object>
             {
-                name = animation.Name,
-                samplers,
-                channels
-            });
+                ["name"] = animation.Name,
+                ["samplers"] = samplers,
+                ["channels"] = channels
+            };
+            if (options.AnimationFormat == MobyAnimationFormat.Compact
+                && options.CompactAnimationSourceData?.TryGetValue(animation.SourceIndex, out var sourceData) == true)
+            {
+                gltfAnimation["extras"] = new
+                {
+                    RatchetPs2 = new
+                    {
+                        mobyAnimation = new
+                        {
+                            kind = "compactAnimation",
+                            version = 1,
+                            sourceIndex = animation.SourceIndex,
+                            sourceFingerprint = MobyGltfAnimationFingerprint.Compute(exportedAnimation),
+                            sequenceBase64 = Convert.ToBase64String(sourceData)
+                        }
+                    }
+                };
+            }
+            animations.Add(gltfAnimation);
             diagnostics.Add(new
             {
                 SequenceIndex = animation.SourceIndex,
@@ -1078,6 +1102,25 @@ public static class MobyGltfExporter
                 TranslationChannels = translationTracks.Length
             });
         }
+    }
+
+    private static Quaternion[] MakeContinuous(IReadOnlyList<Quaternion> track)
+    {
+        var result = new Quaternion[track.Count];
+        var previous = track[0];
+        for (var i = 0; i < track.Count; i++)
+        {
+            var value = track[i];
+            if (Quaternion.Dot(previous, value) < 0f)
+            {
+                value = new Quaternion(-value.X, -value.Y, -value.Z, -value.W);
+            }
+
+            result[i] = value;
+            previous = value;
+        }
+
+        return result;
     }
 
     private static bool ShouldExportRotationTrack(

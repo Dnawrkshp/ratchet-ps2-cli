@@ -4,7 +4,7 @@ using RatchetPs2.Core.Gltf;
 
 namespace RatchetPs2.Core.Moby;
 
-internal static class MobyStandardAnimationDecoder
+public static class MobyStandardAnimationDecoder
 {
     private const float TimestampTicksPerSecond = 8f * 60f;
 

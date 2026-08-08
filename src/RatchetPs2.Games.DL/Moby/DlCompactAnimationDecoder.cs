@@ -5,7 +5,7 @@ using RatchetPs2.Core.Moby;
 
 namespace RatchetPs2.Games.DL.Moby;
 
-internal static class DlCompactAnimationDecoder
+public static class DlCompactAnimationDecoder
 {
     private const float GameTicksPerSecond = 60f;
 
