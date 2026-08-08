@@ -500,6 +500,17 @@ static void ValidateDlAnimationPacking(IReadOnlyList<RoundtripCase> cases)
         test.Game == "DL"
         && test.MobyPath.Contains("09500_251C", StringComparison.OrdinalIgnoreCase));
     var originalBytes = File.ReadAllBytes(testCase.MobyPath);
+    const int editedAnimationIndex = 7;
+    var editedSequenceOffset = BitConverter.ToInt32(originalBytes, 0x48 + editedAnimationIndex * 0x04);
+    var editedAnimInfoOffset = BitConverter.ToInt32(originalBytes, editedSequenceOffset + 0x18);
+    originalBytes[editedSequenceOffset + editedAnimInfoOffset] = 0x5A;
+    MobyModel originalModel;
+    using (var input = new MemoryStream(originalBytes, writable: false))
+    {
+        originalModel = MobyModelReader.Read(
+            input,
+            new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact });
+    }
 
     MobyGltfExport export;
     using (var input = new MemoryStream(originalBytes, writable: false))
@@ -528,7 +539,6 @@ static void ValidateDlAnimationPacking(IReadOnlyList<RoundtripCase> cases)
 
     using var gltf = JsonDocument.Parse(export.GltfBytes);
     var root = gltf.RootElement;
-    const int editedAnimationIndex = 7;
     var animation = root.GetProperty("animations")[editedAnimationIndex];
     var expectedScale = ReadAnimationVector3(root, export.BinBytes, animation, "scale", 1);
     var expectedTranslation = ReadAnimationVector3(root, export.BinBytes, animation, "translation", 1);
@@ -554,6 +564,11 @@ static void ValidateDlAnimationPacking(IReadOnlyList<RoundtripCase> cases)
     if (packed.Model.Sequences[editedAnimationIndex].RawData is not null)
     {
         throw new InvalidDataException("edited glTF animation reused its embedded compact source payload.");
+    }
+    if (!packed.Model.Sequences[editedAnimationIndex].CompactAnimInfoData.SequenceEqual(
+            originalModel.Sequences[editedAnimationIndex].CompactAnimInfoData))
+    {
+        throw new InvalidDataException("edited glTF animation discarded its compact metadata.");
     }
 
     var packedBytes = MobyModelPacker.Build(packed.Model);
@@ -603,8 +618,9 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
     var testCase = cases.Single(test =>
         test.Game == "UYA"
         && test.MobyPath.Contains("05916_171C", StringComparison.OrdinalIgnoreCase));
+    var sourceBytes = File.ReadAllBytes(testCase.MobyPath);
     MobyModel model;
-    using (var input = File.OpenRead(testCase.MobyPath))
+    using (var input = new MemoryStream(sourceBytes, writable: false))
     {
         model = MobyModelReader.Read(
             input,
@@ -631,8 +647,18 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
     {
         throw new InvalidDataException("0x171C mesh payload changed during animation conversion.");
     }
+    if (!model.Sequences.Any(sequence => UsesCompactOpcode(sequence, 0x00))
+        || !model.Sequences.Any(sequence => UsesCompactOpcode(sequence, 0x30)))
+    {
+        throw new InvalidDataException("0x171C conversion did not use compact base and delta animation calls.");
+    }
 
     var bytes = MobyModelPacker.Build(model);
+    if (bytes.Length >= sourceBytes.Length)
+    {
+        throw new InvalidDataException(
+            $"0x171C compact output was {bytes.Length} bytes; expected less than the {sourceBytes.Length}-byte UYA source.");
+    }
     MobyModel packed;
     using (var input = new MemoryStream(bytes, writable: false))
     {
@@ -651,6 +677,21 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
         }
         RequireMatchingAnimation(sourceAnimations[i], converted);
     }
+}
+
+static bool UsesCompactOpcode(MobySequence sequence, byte expectedOpcode)
+{
+    var data = sequence.CompactFrameData;
+    if (data.Length < 0x10)
+    {
+        return false;
+    }
+
+    var pairCount = data[8] + data[9] + data[10];
+    var opcodeStart = 0x10 + data[3] * 0x10 + pairCount * 0x08;
+    var callCount = pairCount + 2;
+    return opcodeStart + callCount <= data.Length
+        && data.AsSpan(opcodeStart, callCount).Contains(expectedOpcode);
 }
 
 static void RequireMatchingAnimation(MobyGltfAnimationClip source, MobyGltfAnimationClip converted)

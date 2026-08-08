@@ -9,6 +9,9 @@ namespace RatchetPs2.Games.DL.Moby;
 public static class DlMobyGltfImporter
 {
     private const float GameTicksPerSecond = 60f;
+    private const byte BaseOpcode = 0x00;
+    private const byte FullOpcode = 0x18;
+    private const byte DeltaOpcode = 0x30;
 
     public static MobyModel Import(
         Stream templateMoby,
@@ -314,7 +317,9 @@ public static class DlMobyGltfImporter
             BoundingSphere = Clone(template?.BoundingSphere ?? model.BoundingSphere),
             Sound = template?.Sound ?? byte.MaxValue,
             Padding = 0,
-            CompactAnimInfoData = new byte[0x08]
+            CompactAnimInfoData = template?.Format == MobyAnimationFormat.Compact
+                ? (byte[])template.CompactAnimInfoData.Clone()
+                : new byte[0x08]
         };
         if (template is not null)
         {
@@ -442,16 +447,65 @@ public static class DlMobyGltfImporter
             throw new InvalidDataException($"DL animation {animation.SourceIndex} has too many transform tracks.");
         }
 
-        var staticLength = Align(0x10 + pairCount * 0x08 + callCount, 0x10);
-        var perFrameLength = callCount * 0x10;
+        var orderedRotations = rotations.OrderBy(track => track.Key).Select(track => track.Value).ToArray();
+        var pairs = new List<CompactPair>(pairCount);
+        for (var pair = 0; pair < rotationPairCount; pair++)
+        {
+            pairs.Add(BuildPair(
+                frameCount,
+                frame => Combine(
+                    EncodeRotation(orderedRotations[pair * 2][frame]),
+                    EncodeRotation(orderedRotations[Math.Min(pair * 2 + 1, orderedRotations.Length - 1)][frame]))));
+        }
+        for (var pair = 0; pair < scalePairCount; pair++)
+        {
+            pairs.Add(BuildVectorPair(scaleTracks, pair, frameCount, EncodeScale));
+        }
+        for (var pair = 0; pair < translationPairCount; pair++)
+        {
+            pairs.Add(BuildVectorPair(
+                translationTracks,
+                pair,
+                frameCount,
+                value => EncodeTranslation(value, modelScale)));
+        }
+
+        var basePairCount = pairs.Count(pair => pair.Opcode != FullOpcode);
+        var staticLength = GetStaticLength(basePairCount, pairCount, callCount);
+        for (var pair = pairs.Count - 1; staticLength / 0x10 > byte.MaxValue && pair >= 0; pair--)
+        {
+            if (pairs[pair].Opcode == FullOpcode)
+            {
+                continue;
+            }
+
+            pairs[pair] = pairs[pair] with { Opcode = FullOpcode };
+            basePairCount--;
+            staticLength = GetStaticLength(basePairCount, pairCount, callCount);
+        }
+
+        var opcodes = new byte[callCount];
+        opcodes[0] = FullOpcode;
+        opcodes[1] = FullOpcode;
+        for (var pair = 0; pair < pairs.Count; pair++)
+        {
+            opcodes[pair + 2] = pairs[pair].Opcode;
+        }
+
+        var basePairs = pairs.Where(pair => pair.Opcode != FullOpcode).ToArray();
+        var fullPairs = pairs.Where(pair => pair.Opcode == FullOpcode).ToArray();
+        var deltaPairs = pairs.Where(pair => pair.Opcode == DeltaOpcode).ToArray();
+        var fullCallCount = fullPairs.Length + 2;
+        var deltaCallCount = deltaPairs.Length;
+        var perFrameLength = Align(fullCallCount * 0x10 + deltaCallCount * 0x08, 0x10);
         using var stream = new MemoryStream(staticLength + frameCount * perFrameLength);
         using var writer = new BinaryWriter(stream);
         writer.Write((byte)2);
         writer.Write(checked((byte)(staticLength / 0x10)));
         writer.Write(checked((byte)(perFrameLength / 0x10)));
-        writer.Write((byte)0);
+        writer.Write(checked((byte)basePairCount));
         writer.Write(checked((byte)pairCount));
-        writer.Write(checked((byte)callCount));
+        writer.Write(checked((byte)fullCallCount));
         writer.Write((byte)0);
         writer.Write(checked((byte)rotations.Count));
         writer.Write(checked((byte)rotationPairCount));
@@ -459,10 +513,26 @@ public static class DlMobyGltfImporter
         writer.Write(checked((byte)translationPairCount));
         writer.Write(new byte[5]);
 
+        foreach (var pair in basePairs)
+        {
+            WriteShorts(writer, pair.BaseValues);
+        }
+
+        Span<int> destinations = stackalloc int[] { -0x20, -0x1f, -0x1e };
+        // The two leading full calls consume destinations before the first transform pair.
+        destinations[2] += 0x40;
         for (var pair = 0; pair < pairCount; pair++)
         {
             var call = pair + 2;
-            var destination = (2 + call * 0x20) & 0x7f;
+            var family = opcodes[call] switch
+            {
+                BaseOpcode => 0,
+                DeltaOpcode => 1,
+                FullOpcode => 2,
+                _ => throw new InvalidDataException($"Unsupported generated DL compact opcode 0x{opcodes[call]:X2}.")
+            };
+            destinations[family] += 0x20;
+            var destination = destinations[family] & 0x7f;
             var first = (0x80 + destination) & 0xff;
             Span<byte> route =
             [
@@ -487,46 +557,83 @@ public static class DlMobyGltfImporter
             writer.Write(route);
         }
 
-        // ponytail: full-frame calls trade file size for a small, loss-minimizing encoder; add base/delta packing if size becomes limiting.
-        writer.Write(Enumerable.Repeat((byte)0x18, callCount).ToArray());
+        writer.Write(opcodes);
+        writer.Write((byte)0);
         writer.Write(new byte[checked((int)(staticLength - writer.BaseStream.Position))]);
 
-        var orderedRotations = rotations.OrderBy(track => track.Key).Select(track => track.Value).ToArray();
         for (var frame = 0; frame < frameCount; frame++)
         {
+            var frameStart = writer.BaseStream.Position;
             writer.Write(new byte[0x20]);
-            for (var pair = 0; pair < rotationPairCount; pair++)
+            foreach (var pair in fullPairs)
             {
-                WriteRotationPair(writer, orderedRotations, pair, frame);
+                WriteShorts(writer, pair.Frames[frame]);
             }
-            for (var pair = 0; pair < scalePairCount; pair++)
+            foreach (var pair in deltaPairs)
             {
-                WriteVectorPair(writer, scaleTracks, pair, frame, EncodeScale);
+                foreach (var delta in pair.Deltas[frame])
+                {
+                    writer.Write(delta);
+                }
             }
-            for (var pair = 0; pair < translationPairCount; pair++)
-            {
-                WriteVectorPair(writer, translationTracks, pair, frame, value => EncodeTranslation(value, modelScale));
-            }
+            writer.Write(new byte[checked((int)(perFrameLength - (writer.BaseStream.Position - frameStart)))]);
         }
 
         return stream.ToArray();
     }
 
-    private static void WriteRotationPair(BinaryWriter writer, Quaternion[][] tracks, int pair, int frame)
-    {
-        WriteShorts(writer, EncodeRotation(tracks[pair * 2][frame]));
-        WriteShorts(writer, EncodeRotation(tracks[Math.Min(pair * 2 + 1, tracks.Length - 1)][frame]));
-    }
-
-    private static void WriteVectorPair(
-        BinaryWriter writer,
+    private static CompactPair BuildVectorPair(
         IReadOnlyList<KeyValuePair<int, Vector3[]>> tracks,
         int pair,
-        int frame,
+        int frameCount,
         Func<Vector3, short[]> encode)
     {
-        WriteShorts(writer, encode(tracks[pair * 2].Value[frame]));
-        WriteShorts(writer, encode(tracks[Math.Min(pair * 2 + 1, tracks.Count - 1)].Value[frame]));
+        return BuildPair(
+            frameCount,
+            frame => Combine(
+                encode(tracks[pair * 2].Value[frame]),
+                encode(tracks[Math.Min(pair * 2 + 1, tracks.Count - 1)].Value[frame])));
+    }
+
+    private static CompactPair BuildPair(int frameCount, Func<int, short[]> encodeFrame)
+    {
+        var frames = Enumerable.Range(0, frameCount).Select(encodeFrame).ToArray();
+        if (frames.Skip(1).All(frame => frame.SequenceEqual(frames[0])))
+        {
+            return new CompactPair(BaseOpcode, frames[0], frames, []);
+        }
+
+        var baseValues = new short[8];
+        for (var component = 0; component < baseValues.Length; component++)
+        {
+            var minimum = frames.Min(frame => (int)frame[component]);
+            var maximum = frames.Max(frame => (int)frame[component]);
+            if (maximum - minimum > 1020
+                || frames.Any(frame => (frame[component] - frames[0][component]) % 4 != 0))
+            {
+                return new CompactPair(FullOpcode, [], frames, []);
+            }
+
+            baseValues[component] = checked((short)Math.Clamp(frames[0][component], maximum - 508, minimum + 512));
+        }
+
+        var deltas = frames
+            .Select(frame => frame.Zip(baseValues, (value, baseValue) => checked((sbyte)((value - baseValue) / 4))).ToArray())
+            .ToArray();
+        return new CompactPair(DeltaOpcode, baseValues, frames, deltas);
+    }
+
+    private static short[] Combine(short[] first, short[] second)
+    {
+        var result = new short[first.Length + second.Length];
+        first.CopyTo(result, 0);
+        second.CopyTo(result, first.Length);
+        return result;
+    }
+
+    private static int GetStaticLength(int basePairCount, int pairCount, int callCount)
+    {
+        return Align(0x10 + basePairCount * 0x10 + pairCount * 0x08 + callCount + 1, 0x10);
     }
 
     private static short[] EncodeRotation(Quaternion value)
@@ -649,4 +756,6 @@ public static class DlMobyGltfImporter
         MobyGltfAnimationClip Clip,
         string? SourceFingerprint,
         byte[]? RawSequence);
+
+    private sealed record CompactPair(byte Opcode, short[] BaseValues, short[][] Frames, sbyte[][] Deltas);
 }
