@@ -145,7 +145,10 @@ public static class MobyModelUnpacker
             return cornCob.RawData[offset..end];
         }
 
-        var kernel = kernelIndex < cornCob.Kernels.Count ? cornCob.Kernels[kernelIndex] : null;
+        var bangleIndex = kernelIndex - 1;
+        var kernel = bangleIndex >= 0 && bangleIndex < cornCob.Kernels.Count
+            ? cornCob.Kernels[bangleIndex]
+            : null;
         return kernel is null ? [] : MobyModelWriter.WriteCornKernel(kernel);
     }
 

@@ -245,7 +245,7 @@ public static class MobyLooseModelReader
                 FrameCount = reader.ReadByte(),
                 Sound = reader.ReadByte(),
                 TriggerCount = reader.ReadByte(),
-                Padding = reader.ReadByte(),
+                FormatMarker = reader.ReadByte(),
                 Unknown14 = reader.ReadInt32(),
                 Unknown18 = reader.ReadInt32()
             };

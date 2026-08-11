@@ -1,3 +1,5 @@
+using System.Buffers.Binary;
+
 namespace RatchetPs2.Core.Moby;
 
 public static class MobyModelPacker
@@ -183,6 +185,8 @@ public static class MobyModelPacker
     private static void WriteCompactSequence(BinaryWriter writer, MobySequence sequence)
     {
         var startOffset = checked((int)writer.BaseStream.Position);
+        var oldAnimDataOffset = sequence.CompactAnimDataOffset;
+        var oldFrameDataOffset = sequence.CompactFrameDataOffset;
         sequence.TriggerCount = checked((byte)sequence.Triggers.Count);
         sequence.FrameCount = checked((byte)sequence.CompactFrames.Count);
 
@@ -206,7 +210,12 @@ public static class MobyModelPacker
         }
 
         sequence.CompactAnimDataOffset = checked((int)(writer.BaseStream.Position - startOffset));
-        writer.Write(sequence.CompactAnimInfoData.Length == 0 ? new byte[0x08] : sequence.CompactAnimInfoData);
+        sequence.CompactAnimInfoData = RebaseCompactAnimInfoPointers(
+            sequence.CompactAnimInfoData.Length == 0 ? new byte[0x08] : sequence.CompactAnimInfoData,
+            oldAnimDataOffset,
+            oldFrameDataOffset,
+            sequence.CompactAnimDataOffset);
+        writer.Write(sequence.CompactAnimInfoData);
         Align(writer, 0x10);
 
         sequence.CompactFrameDataOffset = checked((int)(writer.BaseStream.Position - startOffset));
@@ -218,13 +227,39 @@ public static class MobyModelPacker
         writer.BaseStream.Seek(endOffset, SeekOrigin.Begin);
     }
 
+    private static byte[] RebaseCompactAnimInfoPointers(
+        byte[] source,
+        int oldAnimDataOffset,
+        int oldFrameDataOffset,
+        int newAnimDataOffset)
+    {
+        var result = (byte[])source.Clone();
+        if (result.Length < 0x08 || oldAnimDataOffset <= 0 || oldFrameDataOffset <= oldAnimDataOffset)
+        {
+            return result;
+        }
+
+        for (var offset = 0; offset < 0x08; offset += sizeof(int))
+        {
+            var pointer = BinaryPrimitives.ReadInt32LittleEndian(result.AsSpan(offset, sizeof(int)));
+            if (pointer >= oldAnimDataOffset && pointer < oldFrameDataOffset)
+            {
+                BinaryPrimitives.WriteInt32LittleEndian(
+                    result.AsSpan(offset, sizeof(int)),
+                    checked(newAnimDataOffset + pointer - oldAnimDataOffset));
+            }
+        }
+
+        return result;
+    }
+
     private static void WriteCompactSequenceHeader(BinaryWriter writer, MobySequence sequence)
     {
         sequence.BoundingSphere.Write(writer);
         writer.Write(sequence.FrameCount);
         writer.Write(sequence.Sound);
         writer.Write(sequence.TriggerCount);
-        writer.Write(sequence.Padding);
+        writer.Write(sequence.FormatMarker);
         writer.Write(sequence.CompactTriggerOffset);
         writer.Write(sequence.CompactAnimDataOffset);
         writer.Write(sequence.CompactFrameDataOffset);

@@ -316,7 +316,13 @@ public static class DlMobyGltfImporter
             Format = MobyAnimationFormat.Compact,
             BoundingSphere = Clone(template?.BoundingSphere ?? model.BoundingSphere),
             Sound = template?.Sound ?? byte.MaxValue,
-            Padding = 0,
+            FormatMarker = 0,
+            CompactAnimDataOffset = template?.Format == MobyAnimationFormat.Compact
+                ? template.CompactAnimDataOffset
+                : 0,
+            CompactFrameDataOffset = template?.Format == MobyAnimationFormat.Compact
+                ? template.CompactFrameDataOffset
+                : 0,
             CompactAnimInfoData = template?.Format == MobyAnimationFormat.Compact
                 ? (byte[])template.CompactAnimInfoData.Clone()
                 : new byte[0x08]
@@ -723,7 +729,7 @@ public static class DlMobyGltfImporter
             FrameCount = reader.ReadByte(),
             Sound = reader.ReadByte(),
             TriggerCount = reader.ReadByte(),
-            Padding = reader.ReadByte(),
+            FormatMarker = reader.ReadByte(),
             CompactTriggerOffset = reader.ReadInt32(),
             CompactAnimDataOffset = reader.ReadInt32(),
             CompactFrameDataOffset = reader.ReadInt32()

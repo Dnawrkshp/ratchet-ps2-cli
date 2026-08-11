@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.Text.Json;
 using System.Numerics;
 using RatchetPs2.Core.Moby;
@@ -65,12 +66,34 @@ try
     try
     {
         ValidateDlBangleTable(cases);
-        Console.WriteLine("PASS DL bangle table layout");
+        Console.WriteLine("PASS DL bangle and corncob table layout");
     }
     catch (Exception ex)
     {
-        failures.Add($"DL bangle table layout: {ex.Message}");
-        Console.WriteLine("FAIL DL bangle table layout");
+        failures.Add($"DL bangle and corncob table layout: {ex.Message}");
+        Console.WriteLine("FAIL DL bangle and corncob table layout");
+    }
+
+    try
+    {
+        ValidateCommonTransformSizing(repoRoot);
+        Console.WriteLine("PASS common transform sizing");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"Common transform sizing: {ex.Message}");
+        Console.WriteLine("FAIL common transform sizing");
+    }
+
+    try
+    {
+        ValidateCompactSequenceMetadata(repoRoot);
+        Console.WriteLine("PASS compact sequence pointers and format marker");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"Compact sequence pointers and format marker: {ex.Message}");
+        Console.WriteLine("FAIL compact sequence pointers and format marker");
     }
 
     try
@@ -664,7 +687,7 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
     DlMobyConverter.ConvertFromUya(model);
     if (model.Sequences.Count != 69
         || model.Sequences.Any(sequence => sequence.Format != MobyAnimationFormat.Compact)
-        || model.Sequences.Any(sequence => sequence.Padding != 0)
+        || model.Sequences.Any(sequence => sequence.FormatMarker != 0)
         || model.SkeletonFormat != MobyAnimationFormat.Compact)
     {
         throw new InvalidDataException("0x171C did not produce loadable compact DL animations and skeleton.");
@@ -753,6 +776,94 @@ static void ValidateDlBangleTable(IReadOnlyList<RoundtripCase> cases)
         || table.DataList.Count != expectedEntries.Length)
     {
         throw new InvalidDataException("native DL player bangle metadata was decoded incorrectly.");
+    }
+
+    var cornCob = model.CornCob ?? throw new InvalidDataException("the native DL player has no corncob table.");
+    if (cornCob.KernelOffsets.Length != 0x10
+        || cornCob.KernelOffsets[0] != 0xff
+        || cornCob.Kernels.Count != 15
+        || cornCob.Kernels[0] is null)
+    {
+        throw new InvalidDataException("native DL player corncob indices were decoded incorrectly.");
+    }
+}
+
+static void ValidateCommonTransformSizing(string repoRoot)
+{
+    var path = Path.Combine(repoRoot, "test-assets", "Gleeman Vox", "moby.bin");
+    using var input = File.OpenRead(path);
+    var model = MobyModelReader.Read(input, new MobyModelReadOptions { SkipAnimationSequences = true });
+    if (model.CommonTransforms?.Length != 0x170)
+    {
+        throw new InvalidDataException(
+            $"static moby common transforms consumed 0x{model.CommonTransforms?.Length ?? 0:X} bytes; expected 0x170.");
+    }
+}
+
+static void ValidateCompactSequenceMetadata(string repoRoot)
+{
+    var path = Path.Combine(
+        repoRoot,
+        "test-assets",
+        "extractions",
+        "level07_iso_world01",
+        "assets",
+        "moby",
+        "08353_20A1",
+        "moby.bin");
+    using var input = File.OpenRead(path);
+    var source = MobyModelReader.Read(
+        input,
+        new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact });
+    var sequence = source.Sequences.First(item =>
+    {
+        if (item.CompactAnimInfoData.Length < 0x08)
+        {
+            return false;
+        }
+
+        var first = BinaryPrimitives.ReadInt32LittleEndian(item.CompactAnimInfoData);
+        var second = BinaryPrimitives.ReadInt32LittleEndian(item.CompactAnimInfoData.AsSpan(sizeof(int)));
+        return first >= item.CompactAnimDataOffset
+            && first < item.CompactFrameDataOffset
+            && second >= item.CompactAnimDataOffset
+            && second < item.CompactFrameDataOffset;
+    });
+    var oldAnimDataOffset = sequence.CompactAnimDataOffset;
+    var oldPointers = new[]
+    {
+        BinaryPrimitives.ReadInt32LittleEndian(sequence.CompactAnimInfoData),
+        BinaryPrimitives.ReadInt32LittleEndian(sequence.CompactAnimInfoData.AsSpan(sizeof(int)))
+    };
+    sequence.RawData = null;
+    sequence.Triggers.Add(new MobyAnimationTrigger());
+
+    var model = new MobyModel { AnimationFormat = MobyAnimationFormat.Compact };
+    model.Sequences.Add(sequence);
+    var packed = MobyModelPacker.Build(model);
+    var sequenceOffset = BinaryPrimitives.ReadInt32LittleEndian(packed.AsSpan(0x48));
+    var newAnimDataOffset = BinaryPrimitives.ReadInt32LittleEndian(packed.AsSpan(sequenceOffset + 0x18));
+    if (newAnimDataOffset == oldAnimDataOffset)
+    {
+        throw new InvalidDataException("compact pointer regression did not move the animation info block.");
+    }
+    for (var i = 0; i < oldPointers.Length; i++)
+    {
+        var actual = BinaryPrimitives.ReadInt32LittleEndian(
+            packed.AsSpan(sequenceOffset + newAnimDataOffset + i * sizeof(int)));
+        var expected = oldPointers[i] + newAnimDataOffset - oldAnimDataOffset;
+        if (actual != expected)
+        {
+            throw new InvalidDataException(
+                $"compact animation info pointer {i} was 0x{actual:X}; expected 0x{expected:X}.");
+        }
+    }
+
+    var fallback = new MobyModel();
+    MobyAnimationSlicer.ReplaceWithDefaultAnimation(fallback, MobyAnimationFormat.Compact);
+    if (packed[sequenceOffset + 0x13] != 0 || fallback.Sequences[0].FormatMarker != 0)
+    {
+        throw new InvalidDataException("compact animation format marker was not zero.");
     }
 }
 

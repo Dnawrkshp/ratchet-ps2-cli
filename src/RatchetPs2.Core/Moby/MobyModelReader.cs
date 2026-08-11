@@ -163,7 +163,7 @@ public static class MobyModelReader
             FrameCount = reader.ReadByte(),
             Sound = reader.ReadByte(),
             TriggerCount = reader.ReadByte(),
-            Padding = reader.ReadByte(),
+            FormatMarker = reader.ReadByte(),
             CompactTriggerOffset = reader.ReadInt32(),
             CompactAnimDataOffset = reader.ReadInt32(),
             CompactFrameDataOffset = reader.ReadInt32()
@@ -279,7 +279,7 @@ public static class MobyModelReader
             FrameCount = reader.ReadByte(),
             Sound = reader.ReadByte(),
             TriggerCount = reader.ReadByte(),
-            Padding = reader.ReadByte(),
+            FormatMarker = reader.ReadByte(),
             Unknown14 = reader.ReadInt32(),
             Unknown18 = reader.ReadInt32()
         };
@@ -434,12 +434,6 @@ public static class MobyModelReader
             return model.AnimationJointsOffset - model.CommonTransOffset;
         }
 
-        var nextSectionOffset = FindNextSectionOffset(reader, model, model.CommonTransOffset);
-        if (nextSectionOffset > model.CommonTransOffset)
-        {
-            return checked((int)(nextSectionOffset - model.CommonTransOffset));
-        }
-
         return GetCommonTransformCount(reader, model) * 0x10;
     }
 
@@ -571,7 +565,7 @@ public static class MobyModelReader
             cornCob.RawData = reader.ReadBytes(checked((int)(endOffset - startOffset)));
         }
 
-        foreach (var kernelOffset in cornCob.KernelOffsets)
+        foreach (var kernelOffset in cornCob.KernelOffsets.Skip(1))
         {
             if (kernelOffset == 0xFF)
             {

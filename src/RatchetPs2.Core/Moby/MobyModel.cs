@@ -242,7 +242,7 @@ public sealed class MobySequence
     public byte FrameCount { get; set; }
     public byte Sound { get; set; }
     public byte TriggerCount { get; set; }
-    public byte Padding { get; set; }
+    public byte FormatMarker { get; set; }
     public int Unknown14 { get; set; }
     public int Unknown18 { get; set; }
     public List<uint> FrameOffsets { get; } = [];
@@ -261,7 +261,7 @@ public sealed class MobySequence
         writer.Write(FrameCount);
         writer.Write(Sound);
         writer.Write(TriggerCount);
-        writer.Write(Padding);
+        writer.Write(FormatMarker);
         writer.Write(Unknown14);
         writer.Write(Unknown18);
     }
@@ -380,6 +380,7 @@ public sealed class MobyBangleData
 
 public sealed class MobyCornCob
 {
+    // Byte 0 is reserved; bytes 1..15 map to bangle indices 0..14.
     public byte[] KernelOffsets { get; set; } = new byte[0x10];
     public List<MobyCornKernel?> Kernels { get; } = [];
     public byte[]? RawData { get; set; }

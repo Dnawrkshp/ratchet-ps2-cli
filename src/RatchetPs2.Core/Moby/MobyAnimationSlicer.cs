@@ -50,7 +50,7 @@ public static class MobyAnimationSlicer
                 FrameCount = 1,
                 Sound = 255,
                 TriggerCount = 0,
-                Padding = 255,
+                FormatMarker = 0,
                 CompactFrames =
                 {
                     new MobyCompactAnimationFrame
@@ -79,7 +79,7 @@ public static class MobyAnimationSlicer
             FrameCount = 1,
             Sound = 255,
             TriggerCount = 0,
-            Padding = 255,
+            FormatMarker = 255,
             Frames =
             {
                 new MobyAnimationFrame()
@@ -145,7 +145,7 @@ public static class MobyAnimationSlicer
             FrameCount = source.FrameCount,
             Sound = source.Sound,
             TriggerCount = source.TriggerCount,
-            Padding = source.Padding,
+            FormatMarker = source.FormatMarker,
             Unknown14 = source.Unknown14,
             Unknown18 = source.Unknown18,
             CompactTriggerOffset = source.CompactTriggerOffset,
@@ -230,7 +230,9 @@ public static class MobyAnimationSlicer
             FrameCount = source.FrameCount,
             Sound = source.Sound,
             TriggerCount = 0,
-            Padding = source.Padding,
+            FormatMarker = source.FormatMarker,
+            CompactAnimDataOffset = source.CompactAnimDataOffset,
+            CompactFrameDataOffset = source.CompactFrameDataOffset,
             CompactAnimInfoData = animInfoData,
             CompactFrameData = frameData
         };
