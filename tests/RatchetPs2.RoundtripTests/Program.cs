@@ -305,6 +305,69 @@ static void ValidateDlAnimationExport(IReadOnlyList<RoundtripCase> cases)
         throw new InvalidDataException($"expected 98 animations, found {animations.GetArrayLength()}.");
     }
 
+    var attributes = root.GetProperty("meshes")[0].GetProperty("primitives")[0].GetProperty("attributes");
+    var positionAccessor = root.GetProperty("accessors")[attributes.GetProperty("POSITION").GetInt32()];
+    var normalAccessor = root.GetProperty("accessors")[attributes.GetProperty("NORMAL").GetInt32()];
+    if (normalAccessor.GetProperty("count").GetInt32() != positionAccessor.GetProperty("count").GetInt32())
+    {
+        throw new InvalidDataException("DL source normals were not exported for every vertex.");
+    }
+
+    var normalView = root.GetProperty("bufferViews")[normalAccessor.GetProperty("bufferView").GetInt32()];
+    var positionView = root.GetProperty("bufferViews")[positionAccessor.GetProperty("bufferView").GetInt32()];
+    var positionOffset = positionView.GetProperty("byteOffset").GetInt32()
+        + (positionAccessor.TryGetProperty("byteOffset", out var positionAccessorOffset) ? positionAccessorOffset.GetInt32() : 0);
+    var normalOffset = normalView.GetProperty("byteOffset").GetInt32()
+        + (normalAccessor.TryGetProperty("byteOffset", out var normalAccessorOffset) ? normalAccessorOffset.GetInt32() : 0);
+    var actualNormal = new Vector3(
+        BitConverter.ToSingle(export.BinBytes, normalOffset),
+        BitConverter.ToSingle(export.BinBytes, normalOffset + 4),
+        BitConverter.ToSingle(export.BinBytes, normalOffset + 8));
+
+    using (var normalSourceInput = File.OpenRead(testCase.MobyPath))
+    {
+        var normalSourceModel = MobyModelReader.Read(
+            normalSourceInput,
+            new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact, SkipAnimationSequences = true });
+        var sourceMesh = normalSourceModel.MeshTable!.Entries.First(entry => entry.MeshType == MobyMeshType.HighLod);
+        var sourceVertexOffset = BitConverter.ToUInt16(sourceMesh.VertexData, 0x0C);
+        var azimuth = sourceMesh.VertexData[sourceVertexOffset + 0x08] * MathF.PI / 128f;
+        var elevation = sourceMesh.VertexData[sourceVertexOffset + 0x09] * MathF.PI / 128f;
+        var cosElevation = MathF.Cos(elevation);
+        var expectedNormal = new Vector3(
+            -MathF.Cos(azimuth) * cosElevation,
+            -MathF.Sin(elevation),
+            MathF.Sin(azimuth) * cosElevation);
+        if (Vector3.Distance(actualNormal, expectedNormal) > 0.000001f)
+        {
+            throw new InvalidDataException($"DL source normal was {actualNormal}; expected {expectedNormal}.");
+        }
+    }
+
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var indexAccessor = root.GetProperty("accessors")[primitive.GetProperty("indices").GetInt32()];
+        var indexView = root.GetProperty("bufferViews")[indexAccessor.GetProperty("bufferView").GetInt32()];
+        var indexOffset = indexView.GetProperty("byteOffset").GetInt32()
+            + (indexAccessor.TryGetProperty("byteOffset", out var indexAccessorOffset) ? indexAccessorOffset.GetInt32() : 0);
+        for (var index = 0; index < indexAccessor.GetProperty("count").GetInt32(); index += 3)
+        {
+            var i0 = BitConverter.ToUInt32(export.BinBytes, indexOffset + index * sizeof(uint));
+            var i1 = BitConverter.ToUInt32(export.BinBytes, indexOffset + (index + 1) * sizeof(uint));
+            var i2 = BitConverter.ToUInt32(export.BinBytes, indexOffset + (index + 2) * sizeof(uint));
+            var faceNormal = Vector3.Cross(
+                ReadBufferVector3(export.BinBytes, positionOffset, i1) - ReadBufferVector3(export.BinBytes, positionOffset, i0),
+                ReadBufferVector3(export.BinBytes, positionOffset, i2) - ReadBufferVector3(export.BinBytes, positionOffset, i0));
+            var sourceNormal = ReadBufferVector3(export.BinBytes, normalOffset, i0)
+                + ReadBufferVector3(export.BinBytes, normalOffset, i1)
+                + ReadBufferVector3(export.BinBytes, normalOffset, i2);
+            if (Vector3.Dot(faceNormal, sourceNormal) < 0f)
+            {
+                throw new InvalidDataException("DL triangle winding opposed its source normals.");
+            }
+        }
+    }
+
     var timedAnimation = animations[45];
     var timedSampler = timedAnimation.GetProperty("samplers")[0];
     var timedAccessor = root.GetProperty("accessors")[timedSampler.GetProperty("input").GetInt32()];
@@ -778,6 +841,22 @@ static void ValidateDlBangleTable(IReadOnlyList<RoundtripCase> cases)
         throw new InvalidDataException("native DL player bangle metadata was decoded incorrectly.");
     }
 
+    table.OffsetList[0].LowLodMeshTableIndex = table.OffsetList[0].HighLodMeshTableIndex;
+    table.OffsetList[0].LowLodMeshCount = table.OffsetList[0].HighLodMeshCount;
+    table.OffsetList[0].HighLodMeshCount = 0;
+    var export = DlMobyGltfExporter.Export(
+        model,
+        options: new MobyGltfExportOptions { AnimationFormat = MobyAnimationFormat.Compact, SkipAnimationSequences = true });
+    using var gltf = JsonDocument.Parse(export.GltfBytes);
+    var nodes = gltf.RootElement.GetProperty("nodes");
+    var bangle = nodes.EnumerateArray().Single(node =>
+        node.TryGetProperty("name", out var name) && name.GetString() == "bangle_00");
+    if (!bangle.GetProperty("children").EnumerateArray().Any(child =>
+            nodes[child.GetInt32()].GetProperty("name").GetString() == "low_lod"))
+    {
+        throw new InvalidDataException("low-LOD bangle meshes were not grouped separately for export.");
+    }
+
     var cornCob = model.CornCob ?? throw new InvalidDataException("the native DL player has no corncob table.");
     if (cornCob.KernelOffsets.Length != 0x10
         || cornCob.KernelOffsets[0] != 0xff
@@ -999,6 +1078,15 @@ static Vector3 ReadAnimationVector3(
     var offset = view.GetProperty("byteOffset").GetInt32()
         + (accessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0)
         + keyIndex * 3 * sizeof(float);
+    return new Vector3(
+        BitConverter.ToSingle(buffer, offset),
+        BitConverter.ToSingle(buffer, offset + 4),
+        BitConverter.ToSingle(buffer, offset + 8));
+}
+
+static Vector3 ReadBufferVector3(byte[] buffer, int baseOffset, uint index)
+{
+    var offset = checked(baseOffset + (int)index * 3 * sizeof(float));
     return new Vector3(
         BitConverter.ToSingle(buffer, offset),
         BitConverter.ToSingle(buffer, offset + 4),

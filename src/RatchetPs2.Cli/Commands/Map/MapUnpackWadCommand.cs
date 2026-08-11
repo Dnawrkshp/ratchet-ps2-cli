@@ -81,7 +81,8 @@ internal static class MapUnpackWadCommand
                     {
                         var renderOptions = DlLevelWadRenderPackageBuildOptions.Browser with
                         {
-                            IncludeDiagnostics = true
+                            IncludeDiagnostics = true,
+                            MobyLodIndex = null
                         };
                         IReadOnlyList<PackedFile> BuildAssetFiles(UyaLevelAssetSourceFiles assetFiles) =>
                             DlLevelWadRenderPackageBuilder.BuildAssetFiles(
@@ -134,7 +135,8 @@ internal static class MapUnpackWadCommand
                 {
                     var renderOptions = DlLevelWadRenderPackageBuildOptions.Browser with
                     {
-                        IncludeDiagnostics = true
+                        IncludeDiagnostics = true,
+                        MobyLodIndex = null
                     };
                     if (normalizedFormat == "indexed")
                     {

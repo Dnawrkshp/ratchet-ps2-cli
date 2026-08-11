@@ -121,6 +121,7 @@ public static class MobyGltfExporter
         var animationDiagnostics = new List<object>();
         var scale = modelScale / 1024f;
         var rollingVertexCache = new Vector3?[512];
+        var rollingNormalCache = new Vector3?[512];
         var rollingJointCache = new ushort[512][];
         var rollingWeightCache = new float[512][];
         var rollingBlendCache = new SkinBlend?[64];
@@ -146,7 +147,10 @@ public static class MobyGltfExporter
         for (var meshIndex = 0; meshIndex < (model.MeshTable?.Entries.Count ?? 0); meshIndex++)
         {
             var entry = model.MeshTable!.Entries[meshIndex];
-            if (!ShouldExportMesh(entry.MeshType, options.LodIndex))
+            var bangleGroup = entry.MeshType == MobyMeshType.Bangle
+                ? ResolveBangleMeshGroup(model.BangleTable, meshIndex)
+                : null;
+            if (!ShouldExportMesh(entry.MeshType, options.LodIndex, bangleGroup))
             {
                 diagnostics.Add(new
                 {
@@ -169,11 +173,13 @@ public static class MobyGltfExporter
                     entry,
                     scale,
                     rollingVertexCache,
+                    rollingNormalCache,
                     rollingJointCache,
                     rollingWeightCache,
                     rollingBlendCache,
                     effectiveTextureId,
                     out var positions,
+                    out var normals,
                     out var validMask,
                     out var joints,
                     out var weights,
@@ -254,6 +260,34 @@ public static class MobyGltfExporter
                 type = "VEC3",
                 min = new[] { min.X, min.Y, min.Z },
                 max = new[] { max.X, max.Y, max.Z }
+            });
+
+            Align(writer, 4);
+            var normalByteOffset = checked((int)writer.BaseStream.Position);
+            foreach (var normal in normals)
+            {
+                writer.Write(normal.X);
+                writer.Write(normal.Y);
+                writer.Write(normal.Z);
+            }
+
+            var normalBufferView = bufferViews.Count;
+            bufferViews.Add(new
+            {
+                buffer = 0,
+                byteOffset = normalByteOffset,
+                byteLength = normals.Count * 3 * sizeof(float),
+                target = 34962
+            });
+
+            var normalAccessor = accessors.Count;
+            accessors.Add(new
+            {
+                bufferView = normalBufferView,
+                byteOffset = 0,
+                componentType = 5126,
+                count = normals.Count,
+                type = "VEC3"
             });
 
             int? jointsAccessor = null;
@@ -388,7 +422,11 @@ public static class MobyGltfExporter
             }
 
             var gltfMeshIndex = meshes.Count;
-            var attributes = new Dictionary<string, int> { ["POSITION"] = positionAccessor };
+            var attributes = new Dictionary<string, int>
+            {
+                ["POSITION"] = positionAccessor,
+                ["NORMAL"] = normalAccessor
+            };
             if (texCoordAccessor.HasValue)
             {
                 attributes["TEXCOORD_0"] = texCoordAccessor.Value;
@@ -487,7 +525,7 @@ public static class MobyGltfExporter
             }
 
             nodes.Add(node);
-            hierarchy.AddMeshNode(entry.MeshType, nodeIndex);
+            hierarchy.AddMeshNode(entry.MeshType, nodeIndex, bangleGroup);
 
             diagnostics.Add(new
             {
@@ -579,10 +617,11 @@ public static class MobyGltfExporter
         }
     }
 
-    private static bool ShouldExportMesh(MobyMeshType meshType, int? lodIndex)
+    private static bool ShouldExportMesh(MobyMeshType meshType, int? lodIndex, BangleMeshGroup? bangleGroup)
     {
         return lodIndex is null
-            || meshType is MobyMeshType.HighLod or MobyMeshType.Bangle or MobyMeshType.Metal;
+            || meshType is MobyMeshType.HighLod or MobyMeshType.Metal
+            || meshType == MobyMeshType.Bangle && bangleGroup?.IsLowLod != true;
     }
 
     private sealed class GltfSkinContext
@@ -639,6 +678,32 @@ public static class MobyGltfExporter
     private readonly record struct TextureTriangle(Vector3 Centroid, Vector2? UvCentroid, int TextureId);
     private readonly record struct PrimitiveIndexGroup(int? TextureId, List<uint> Indices);
     private readonly record struct VifTextureIndexGroup(int? TextureId, List<uint> Indices);
+    private readonly record struct BangleMeshGroup(int Index, bool IsLowLod);
+
+    private static BangleMeshGroup? ResolveBangleMeshGroup(MobyBangleTable? table, int meshTableIndex)
+    {
+        if (table is null)
+        {
+            return null;
+        }
+
+        for (var index = 0; index < table.OffsetList.Count; index++)
+        {
+            var entry = table.OffsetList[index];
+            if (meshTableIndex >= entry.HighLodMeshTableIndex
+                && meshTableIndex < entry.HighLodMeshTableIndex + entry.HighLodMeshCount)
+            {
+                return new BangleMeshGroup(index, false);
+            }
+            if (meshTableIndex >= entry.LowLodMeshTableIndex
+                && meshTableIndex < entry.LowLodMeshTableIndex + entry.LowLodMeshCount)
+            {
+                return new BangleMeshGroup(index, true);
+            }
+        }
+
+        return null;
+    }
 
     private static GltfSkinContext? TryBuildSkinContext(
         MobyModel model,
@@ -1429,9 +1494,9 @@ public static class MobyGltfExporter
             this.sceneNodes = sceneNodes;
         }
 
-        public void AddMeshNode(MobyMeshType meshType, int meshNodeIndex)
+        public void AddMeshNode(MobyMeshType meshType, int meshNodeIndex, BangleMeshGroup? bangleGroup)
         {
-            var path = GetGroupPath(meshType);
+            var path = GetGroupPath(meshType, bangleGroup);
             AddNodeToGroup(path, meshNodeIndex);
         }
 
@@ -1481,14 +1546,16 @@ public static class MobyGltfExporter
             return parentIndex;
         }
 
-        private static string[] GetGroupPath(MobyMeshType meshType)
+        private static string[] GetGroupPath(MobyMeshType meshType, BangleMeshGroup? bangleGroup)
         {
             return meshType switch
             {
                 MobyMeshType.HighLod => ["mesh", "high_lod"],
                 MobyMeshType.LowLod => ["mesh", "low_lod"],
                 MobyMeshType.FarLod => ["mesh", "far_lod"],
-                MobyMeshType.Bangle => ["bangles", "high_lod"],
+                MobyMeshType.Bangle when bangleGroup.HasValue =>
+                    ["bangles", $"bangle_{bangleGroup.Value.Index:00}", bangleGroup.Value.IsLowLod ? "low_lod" : "high_lod"],
+                MobyMeshType.Bangle => ["bangles", "unassigned", "high_lod"],
                 MobyMeshType.Metal => ["metals"],
                 _ => ["mesh", "unknown"]
             };
@@ -1499,11 +1566,13 @@ public static class MobyGltfExporter
         MobyMeshTableEntry entry,
         float scale,
         Vector3?[] rollingVertexCache,
+        Vector3?[] rollingNormalCache,
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         SkinBlend?[] rollingBlendCache,
         int? initialTextureId,
         out List<Vector3> positions,
+        out List<Vector3> normals,
         out List<bool> validMask,
         out List<ushort[]> joints,
         out List<float[]> weights,
@@ -1513,6 +1582,7 @@ public static class MobyGltfExporter
         out object diagnostic)
     {
         positions = [];
+        normals = [];
         validMask = [];
         joints = [];
         weights = [];
@@ -1525,10 +1595,12 @@ public static class MobyGltfExporter
                 entry,
                 scale,
                 rollingVertexCache,
+                rollingNormalCache,
                 rollingJointCache,
                 rollingWeightCache,
                 rollingBlendCache,
                 out positions,
+                out normals,
                 out validMask,
                 out joints,
                 out weights,
@@ -1561,6 +1633,7 @@ public static class MobyGltfExporter
                 positions.Count,
                 validMask,
                 positions,
+                normals,
                 indices,
                 topologyTextureGroups,
                 initialTextureId,
@@ -1579,6 +1652,7 @@ public static class MobyGltfExporter
                     positions.Count,
                     validMask,
                     positions,
+                    normals,
                     indices,
                     topologyTextureGroups,
                     initialTextureId,
@@ -1840,16 +1914,19 @@ public static class MobyGltfExporter
         MobyMeshTableEntry entry,
         float scale,
         Vector3?[] rollingVertexCache,
+        Vector3?[] rollingNormalCache,
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         SkinBlend?[] rollingBlendCache,
         out List<Vector3> positions,
+        out List<Vector3> normals,
         out List<bool> validMask,
         out List<ushort[]> joints,
         out List<float[]> weights,
         out int duplicateCacheMisses)
     {
         positions = [];
+        normals = [];
         validMask = [];
         joints = [];
         weights = [];
@@ -1982,14 +2059,17 @@ public static class MobyGltfExporter
                 var vertex = vertices[i];
                 var vertexIndex = ReadLowHalfword(vertex) & 0x01FF;
                 var position = DecodePosition(vertex, scale);
+                var normal = DecodeNormal(vertex);
                 var (jointRow, weightRow) = DecodeSkinRow(vertex, i, twoWayBlendVertexCount, threeWayBlendVertexCount, rollingBlendCache);
                 positions.Add(position);
+                normals.Add(normal);
                 validMask.Add(true);
                 joints.Add(jointRow);
                 weights.Add(weightRow);
                 if (vertexIndex >= 0 && vertexIndex < rollingVertexCache.Length)
                 {
                     rollingVertexCache[vertexIndex] = position;
+                    rollingNormalCache[vertexIndex] = normal;
                     rollingJointCache[vertexIndex] = jointRow;
                     rollingWeightCache[vertexIndex] = weightRow;
                 }
@@ -2000,6 +2080,7 @@ public static class MobyGltfExporter
                 if (duplicateIndex >= 0 && duplicateIndex < rollingVertexCache.Length && rollingVertexCache[duplicateIndex].HasValue)
                 {
                     positions.Add(rollingVertexCache[duplicateIndex]!.Value);
+                    normals.Add(rollingNormalCache[duplicateIndex] ?? Vector3.UnitY);
                     validMask.Add(true);
                     joints.Add(rollingJointCache[duplicateIndex] ?? DefaultJoints());
                     weights.Add(rollingWeightCache[duplicateIndex] ?? DefaultWeights());
@@ -2008,6 +2089,7 @@ public static class MobyGltfExporter
 
                 duplicateCacheMisses++;
                 positions.Add(positions.Count > 0 ? positions[^1] : Vector3.Zero);
+                normals.Add(normals.Count > 0 ? normals[^1] : Vector3.UnitY);
                 validMask.Add(false);
                 joints.Add(DefaultJoints());
                 weights.Add(DefaultWeights());
@@ -2191,6 +2273,7 @@ public static class MobyGltfExporter
         int positionCount,
         IReadOnlyList<bool> validMask,
         IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector3> normals,
         List<uint> indices,
         List<VifTextureIndexGroup> textureGroups,
         int? initialTextureId,
@@ -2318,6 +2401,7 @@ public static class MobyGltfExporter
                 var i2 = flip ? b : c;
                 flip = !flip;
                 rawTriangleCount++;
+                OrientTriangleToSourceNormal(i0, ref i1, ref i2, positions, normals);
 
                 switch (TryAppendTriangle(indices, seenTriangles, i0, i1, i2, validMask, positions))
                 {
@@ -2374,6 +2458,27 @@ public static class MobyGltfExporter
         textureGroups[^1].Indices.Add(i0);
         textureGroups[^1].Indices.Add(i1);
         textureGroups[^1].Indices.Add(i2);
+    }
+
+    private static void OrientTriangleToSourceNormal(
+        uint i0,
+        ref uint i1,
+        ref uint i2,
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector3> normals)
+    {
+        if (i0 >= positions.Count || i1 >= positions.Count || i2 >= positions.Count
+            || i0 >= normals.Count || i1 >= normals.Count || i2 >= normals.Count)
+        {
+            return;
+        }
+
+        var faceNormal = Vector3.Cross(positions[(int)i1] - positions[(int)i0], positions[(int)i2] - positions[(int)i0]);
+        var sourceNormal = normals[(int)i0] + normals[(int)i1] + normals[(int)i2];
+        if (Vector3.Dot(faceNormal, sourceNormal) < 0f)
+        {
+            (i1, i2) = (i2, i1);
+        }
     }
 
     private enum TriangleAppendResult
@@ -2443,6 +2548,18 @@ public static class MobyGltfExporter
         var sourceY = BitConverter.ToInt16(vertex, 0x0C) * scale;
         var sourceZ = BitConverter.ToInt16(vertex, 0x0E) * scale;
         return GltfCoordinateBasis.FromPs2Position(x, sourceY, sourceZ);
+    }
+
+    private static Vector3 DecodeNormal(byte[] vertex)
+    {
+        const float AngleScale = MathF.PI / 128f;
+        var azimuth = vertex[0x08] * AngleScale;
+        var elevation = vertex[0x09] * AngleScale;
+        var cosElevation = MathF.Cos(elevation);
+        return GltfCoordinateBasis.FromPs2Position(
+            -MathF.Cos(azimuth) * cosElevation,
+            -MathF.Sin(azimuth) * cosElevation,
+            -MathF.Sin(elevation));
     }
 
     private static byte[] Combine(byte[] first, byte[]? second)
