@@ -39,7 +39,8 @@ public static partial class MobyGltfImporter
 
             var templateMeshIndex = int.Parse(match.Groups["index"].Value);
             var meshTypeName = match.Groups["type"].Value;
-            if (!Enum.TryParse<MobyMeshType>(meshTypeName, out var meshType))
+            var parsedMeshTypeName = meshTypeName == "MeshType2" ? nameof(MobyMeshType.FarLod) : meshTypeName;
+            if (!Enum.TryParse<MobyMeshType>(parsedMeshTypeName, out var meshType))
             {
                 throw new InvalidDataException($"Unsupported exporter mesh type '{meshTypeName}' in node '{name}'.");
             }

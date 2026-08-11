@@ -2,13 +2,13 @@ namespace RatchetPs2.Core.Moby;
 
 public static class MobyLooseModelReader
 {
-    private static readonly IReadOnlyList<(MobyMeshType Type, string Folder)> MeshFolders =
+    private static readonly IReadOnlyList<(MobyMeshType Type, string Folder, string? LegacyFolder)> MeshFolders =
     [
-        (MobyMeshType.HighLod, "lod_high"),
-        (MobyMeshType.LowLod, "lod_low"),
-        (MobyMeshType.MeshType2, "mesh_type_2"),
-        (MobyMeshType.Bangle, "bangle"),
-        (MobyMeshType.Metal, "metal")
+        (MobyMeshType.HighLod, "lod_high", null),
+        (MobyMeshType.LowLod, "lod_low", null),
+        (MobyMeshType.Metal, "metal", null),
+        (MobyMeshType.FarLod, "lod_far", "mesh_type_2"),
+        (MobyMeshType.Bangle, "bangle", null)
     ];
 
     public static MobyModel Read(IMobyModelInput input, MobyLooseModelReadOptions? options = null)
@@ -54,28 +54,27 @@ public static class MobyLooseModelReader
         {
             var table = new MobyBangleTable
             {
-                Unknown00 = reader.ReadByte(),
-                BangleCount = reader.ReadByte(),
-                Unknown02 = reader.ReadByte(),
-                Unknown03 = reader.ReadByte()
+                MeshTableIndex = reader.ReadByte(),
+                MeshCount = reader.ReadByte(),
+                BangleMask = reader.ReadUInt16()
             };
 
             for (var i = 0; i < 15; i++)
             {
                 table.OffsetList.Add(new MobyBangleListEntry
                 {
-                    MeshTableIndex = reader.ReadInt16(),
-                    Unknown02 = reader.ReadInt16()
+                    HighLodMeshTableIndex = reader.ReadByte(),
+                    HighLodMeshCount = reader.ReadByte(),
+                    LowLodMeshTableIndex = reader.ReadByte(),
+                    LowLodMeshCount = reader.ReadByte()
                 });
             }
 
-            foreach (var entry in table.OffsetList)
+            var dataCount = table.BangleMask == 0
+                ? 0
+                : System.Numerics.BitOperations.Log2(table.BangleMask) + 1;
+            for (var i = 0; i < dataCount; i++)
             {
-                if (entry.MeshTableIndex == 0)
-                {
-                    continue;
-                }
-
                 table.DataList.Add(new MobyBangleData
                 {
                     Unknown00 = reader.ReadInt32(),
@@ -418,9 +417,14 @@ public static class MobyLooseModelReader
     private static void ReadMeshes(IMobyModelInput input, MobyModel model)
     {
         var table = new MobyMeshTable();
-        foreach (var (type, folder) in MeshFolders)
+        foreach (var (type, folder, legacyFolder) in MeshFolders)
         {
             var relativeFolder = Path.Combine("mesh", folder);
+            if (!input.DirectoryExists(relativeFolder) && legacyFolder is not null)
+            {
+                relativeFolder = Path.Combine("mesh", legacyFolder);
+            }
+
             if (!input.DirectoryExists(relativeFolder))
             {
                 continue;
@@ -491,8 +495,8 @@ public static class MobyLooseModelReader
         var entries = model.MeshTable?.Entries ?? [];
         model.HighLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.HighLod));
         model.LowLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.LowLod));
-        model.MeshCountType2 = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.MeshType2));
-        model.MetalOffsets = checked((byte)(model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2));
+        model.FarLodMeshCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.FarLod));
+        model.MetalOffsets = checked((byte)(model.HighLodMeshCount + model.LowLodMeshCount));
         model.MetalCount = checked((byte)entries.Count(entry => entry.MeshType == MobyMeshType.Metal));
     }
 

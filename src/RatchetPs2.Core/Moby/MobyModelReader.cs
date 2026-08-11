@@ -20,12 +20,12 @@ public static class MobyModelReader
         }
         ReadPreAnimationSectionPadding(reader, model);
 
+        ReadBangleTable(reader, model);
         ReadShadow(reader, model);
         ReadSkeleton(reader, model, options.AnimationFormat);
         ReadAnimationJoints(reader, model);
         ReadCommonTransforms(reader, model);
         ReadGifTags(reader, model);
-        ReadBangleTable(reader, model);
         ReadCornCob(reader, model);
         ReadMeshes(reader, model);
         ReadTeamPalettes(reader, model);
@@ -46,7 +46,7 @@ public static class MobyModelReader
             MetalOffsets = reader.ReadByte(),
             JointCount = reader.ReadByte(),
             Padding = reader.ReadByte(),
-            MeshCountType2 = reader.ReadByte(),
+            FarLodMeshCount = reader.ReadByte(),
             TeamPalettes = reader.ReadByte(),
             AnimationCount = reader.ReadByte(),
             SoundCount = reader.ReadByte(),
@@ -342,7 +342,7 @@ public static class MobyModelReader
 
         var shadowSize = model.Shadow * 0x10;
         var shadowOffset = model.SkeletonOffset - shadowSize;
-        var meshTableEntryCount = model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2 + model.MetalCount;
+        var meshTableEntryCount = GetMeshTableEntryCount(model);
         var afterMeshTable = model.MeshTableOffset > 0 ? model.MeshTableOffset + meshTableEntryCount * 0x10 : 0;
         if (model.CollisionOffset == 0 && afterMeshTable > 0 && shadowOffset > afterMeshTable)
         {
@@ -451,7 +451,7 @@ public static class MobyModelReader
             return count;
         }
 
-        var entryCount = model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2 + model.MetalCount;
+        var entryCount = GetMeshTableEntryCount(model);
         if (entryCount <= 0)
         {
             return count;
@@ -473,6 +473,14 @@ public static class MobyModelReader
         }
 
         return count;
+    }
+
+    private static int GetMeshTableEntryCount(MobyModel model)
+    {
+        var baseMeshEnd = model.HighLodMeshCount + model.LowLodMeshCount;
+        var farLodEnd = model.MetalOffsets + model.MetalCount + model.FarLodMeshCount;
+        var bangleEnd = (model.BangleTable?.MeshTableIndex ?? 0) + (model.BangleTable?.MeshCount ?? 0);
+        return Math.Max(baseMeshEnd, Math.Max(farLodEnd, bangleEnd));
     }
 
     private static void ReadGifTags(BinaryReader reader, MobyModel model)
@@ -511,28 +519,25 @@ public static class MobyModelReader
         reader.BaseStream.Seek(model.BangleTableOffset * 0x10, SeekOrigin.Begin);
         var table = new MobyBangleTable
         {
-            Unknown00 = reader.ReadByte(),
-            BangleCount = reader.ReadByte(),
-            Unknown02 = reader.ReadByte(),
-            Unknown03 = reader.ReadByte()
+            MeshTableIndex = reader.ReadByte(),
+            MeshCount = reader.ReadByte(),
+            BangleMask = reader.ReadUInt16()
         };
 
         for (var i = 0; i < 15; i++)
         {
             table.OffsetList.Add(new MobyBangleListEntry
             {
-                MeshTableIndex = reader.ReadInt16(),
-                Unknown02 = reader.ReadInt16()
+                HighLodMeshTableIndex = reader.ReadByte(),
+                HighLodMeshCount = reader.ReadByte(),
+                LowLodMeshTableIndex = reader.ReadByte(),
+                LowLodMeshCount = reader.ReadByte()
             });
         }
 
-        foreach (var entry in table.OffsetList)
+        var dataCount = table.BangleMask == 0 ? 0 : BitOperations.Log2(table.BangleMask) + 1;
+        for (var i = 0; i < dataCount; i++)
         {
-            if (entry.MeshTableIndex == 0)
-            {
-                continue;
-            }
-
             table.DataList.Add(new MobyBangleData
             {
                 Unknown00 = reader.ReadInt32(),
@@ -650,27 +655,24 @@ public static class MobyModelReader
             return;
         }
 
-        reader.BaseStream.Seek(model.MeshTableOffset, SeekOrigin.Begin);
         var table = new MobyMeshTable();
-        var meshCounts = new (MobyMeshType Type, int Count)[]
+        var meshRanges = new (MobyMeshType Type, int Index, int Count)[]
         {
-            (MobyMeshType.HighLod, model.HighLodMeshCount),
-            (MobyMeshType.LowLod, model.LowLodMeshCount),
-            (MobyMeshType.MeshType2, model.MeshCountType2),
-            (MobyMeshType.Bangle, model.BangleTable?.BangleCount ?? 0),
-            (MobyMeshType.Metal, model.MetalCount)
+            (MobyMeshType.HighLod, 0, model.HighLodMeshCount),
+            (MobyMeshType.LowLod, model.HighLodMeshCount, model.LowLodMeshCount),
+            (MobyMeshType.Metal, model.MetalOffsets, model.MetalCount),
+            (MobyMeshType.FarLod, model.MetalOffsets + model.MetalCount, model.FarLodMeshCount),
+            (MobyMeshType.Bangle, model.BangleTable?.MeshTableIndex ?? 0, model.BangleTable?.MeshCount ?? 0)
         };
 
-        var tableOffset = model.MeshTableOffset;
-        foreach (var (type, count) in meshCounts)
+        foreach (var (type, index, count) in meshRanges)
         {
             for (var i = 0; i < count; i++)
             {
-                reader.BaseStream.Seek(tableOffset, SeekOrigin.Begin);
+                reader.BaseStream.Seek(model.MeshTableOffset + (index + i) * 0x10, SeekOrigin.Begin);
                 var entry = ReadMeshEntry(reader, type);
                 AttachMeshData(reader, entry, model.GifTags);
                 table.Entries.Add(entry);
-                tableOffset += 0x10;
             }
         }
 

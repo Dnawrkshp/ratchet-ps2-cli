@@ -333,6 +333,7 @@ public static class DlMobyGltfImporter
             }
         }
 
+        var frameDurations = new ushort[frameCount];
         for (var frame = 0; frame < frameCount; frame++)
         {
             var ticks = checked((int)MathF.Round(
@@ -344,10 +345,16 @@ public static class DlMobyGltfImporter
                     $"DL animation {animation.SourceIndex} frame {frame} duration is outside the 1..65535 tick range.");
             }
 
+            frameDurations[frame] = checked((ushort)ticks);
+        }
+
+        var frameIds = BuildFrameIds(template, frameDurations);
+        for (var frame = 0; frame < frameCount; frame++)
+        {
             sequence.CompactFrames.Add(new MobyCompactAnimationFrame
             {
-                Unknown00 = unchecked((short)(ushort)ticks),
-                FrameId = checked((short)(frame * 0x10))
+                Unknown00 = unchecked((short)frameDurations[frame]),
+                FrameId = unchecked((short)frameIds[frame])
             });
         }
 
@@ -359,6 +366,29 @@ public static class DlMobyGltfImporter
             frameCount,
             Math.Abs(model.Scale) > 1e-8f ? model.Scale : 1f);
         return sequence;
+    }
+
+    private static ushort[] BuildFrameIds(MobySequence? template, IReadOnlyList<ushort> frameDurations)
+    {
+        var templateIds = template?.Format == MobyAnimationFormat.Compact
+            ? template.CompactFrames.Select(frame => unchecked((ushort)frame.FrameId)).ToArray()
+            : template?.Frames.Select(frame => (ushort)(frame.Unknown04 | frame.Unknown05 << 8)).ToArray() ?? [];
+        if (templateIds.Length == frameDurations.Count
+            && Enumerable.Range(0, Math.Max(0, templateIds.Length - 1)).All(index =>
+                unchecked((ushort)(templateIds[index + 1] - templateIds[index]))
+                == unchecked((ushort)(frameDurations[index] * 8))))
+        {
+            return templateIds;
+        }
+
+        var result = new ushort[frameDurations.Count];
+        var frameId = templateIds.FirstOrDefault();
+        for (var frame = 0; frame < result.Length; frame++)
+        {
+            result[frame] = frameId;
+            frameId = unchecked((ushort)(frameId + frameDurations[frame] * 8));
+        }
+        return result;
     }
 
     private static Dictionary<int, Quaternion[]> BuildRotationTracks(

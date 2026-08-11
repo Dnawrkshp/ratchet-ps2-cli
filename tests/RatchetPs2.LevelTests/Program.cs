@@ -646,8 +646,10 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
             !mobyGltf.RootElement.GetProperty("nodes").EnumerateArray().Any(node =>
                 node.TryGetProperty("name", out var name)
                 && (name.GetString()?.Contains("low_lod", StringComparison.Ordinal) == true
+                    || name.GetString()?.Contains("far_lod", StringComparison.Ordinal) == true
                     || name.GetString()?.Contains("mesh_type_2", StringComparison.Ordinal) == true
                     || name.GetString()?.Contains("LowLod", StringComparison.Ordinal) == true
+                    || name.GetString()?.Contains("FarLod", StringComparison.Ordinal) == true
                     || name.GetString()?.Contains("MeshType2", StringComparison.Ordinal) == true)),
             "browser render package moby glTF should include only LOD0 render mesh groups");
     }

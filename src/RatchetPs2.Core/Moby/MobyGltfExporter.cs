@@ -1487,7 +1487,7 @@ public static class MobyGltfExporter
             {
                 MobyMeshType.HighLod => ["mesh", "high_lod"],
                 MobyMeshType.LowLod => ["mesh", "low_lod"],
-                MobyMeshType.MeshType2 => ["mesh", "mesh_type_2"],
+                MobyMeshType.FarLod => ["mesh", "far_lod"],
                 MobyMeshType.Bangle => ["bangles", "high_lod"],
                 MobyMeshType.Metal => ["metals"],
                 _ => ["mesh", "unknown"]

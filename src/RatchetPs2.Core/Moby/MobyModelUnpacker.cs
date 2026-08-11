@@ -7,7 +7,7 @@ public static class MobyModelUnpacker
         {
             [MobyMeshType.HighLod] = "lod_high",
             [MobyMeshType.LowLod] = "lod_low",
-            [MobyMeshType.MeshType2] = "mesh_type_2",
+            [MobyMeshType.FarLod] = "lod_far",
             [MobyMeshType.Bangle] = "bangle",
             [MobyMeshType.Metal] = "metal"
         };

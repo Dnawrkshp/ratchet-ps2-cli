@@ -8,7 +8,7 @@ public static partial class MobyGltfImporter
         {
             model.HighLodMeshCount = 0;
             model.LowLodMeshCount = 0;
-            model.MeshCountType2 = 0;
+            model.FarLodMeshCount = 0;
             model.MetalOffsets = 0;
             model.MetalCount = 0;
             return;
@@ -16,8 +16,8 @@ public static partial class MobyGltfImporter
 
         model.HighLodMeshCount = checked((byte)model.MeshTable.Entries.Count(entry => entry.MeshType == MobyMeshType.HighLod));
         model.LowLodMeshCount = checked((byte)model.MeshTable.Entries.Count(entry => entry.MeshType == MobyMeshType.LowLod));
-        model.MeshCountType2 = checked((byte)model.MeshTable.Entries.Count(entry => entry.MeshType == MobyMeshType.MeshType2));
-        model.MetalOffsets = checked((byte)(model.HighLodMeshCount + model.LowLodMeshCount + model.MeshCountType2));
+        model.FarLodMeshCount = checked((byte)model.MeshTable.Entries.Count(entry => entry.MeshType == MobyMeshType.FarLod));
+        model.MetalOffsets = checked((byte)(model.HighLodMeshCount + model.LowLodMeshCount));
         model.MetalCount = checked((byte)model.MeshTable.Entries.Count(entry => entry.MeshType == MobyMeshType.Metal));
     }
 
@@ -52,8 +52,8 @@ public static partial class MobyGltfImporter
 
             if (highLodOrdinal >= maxHighLodMeshes)
             {
-                entry.MeshType = MobyMeshType.MeshType2;
-                mesh.MeshType = MobyMeshType.MeshType2;
+                entry.MeshType = MobyMeshType.FarLod;
+                mesh.MeshType = MobyMeshType.FarLod;
             }
 
             highLodOrdinal++;

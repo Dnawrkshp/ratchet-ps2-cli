@@ -13,7 +13,7 @@ internal static class MobyModelWriter
             writer.Write(model.MetalOffsets);
             writer.Write(model.JointCount);
             writer.Write(model.Padding);
-            writer.Write(model.MeshCountType2);
+            writer.Write(model.FarLodMeshCount);
             writer.Write(model.TeamPalettes);
             writer.Write(model.AnimationCount);
             writer.Write(model.SoundCount);

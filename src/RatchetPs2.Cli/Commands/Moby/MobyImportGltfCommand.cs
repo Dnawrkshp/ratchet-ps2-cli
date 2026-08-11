@@ -582,7 +582,7 @@ internal static class MobyImportGltfCommand
         };
         var customStaticMaxHighLodMeshesOption = new Option<int?>("--custom-static-max-high-lod-meshes")
         {
-            Description = "For --custom-static split imports, keep only the first N generated high-lod chunks as high-lod and bucket later chunks as mesh_type_2."
+            Description = "For --custom-static split imports, keep only the first N generated high-lod chunks as high-lod and bucket later chunks as far LOD."
         };
         var customStaticInitialTriangleCapOption = new Option<int?>("--custom-static-initial-triangle-cap")
         {

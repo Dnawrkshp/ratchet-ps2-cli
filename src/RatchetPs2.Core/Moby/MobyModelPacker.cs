@@ -82,7 +82,7 @@ public static class MobyModelPacker
 
     private static void WriteBangles(BinaryWriter writer, MobyModel model)
     {
-        if (model.BangleTable is null || model.BangleTable.BangleCount <= 0)
+        if (model.BangleTable is null || model.BangleTable.MeshCount <= 0)
         {
             model.BangleTableOffset = 0;
             return;

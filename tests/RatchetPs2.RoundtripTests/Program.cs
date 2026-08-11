@@ -64,6 +64,28 @@ try
 
     try
     {
+        ValidateDlBangleTable(cases);
+        Console.WriteLine("PASS DL bangle table layout");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"DL bangle table layout: {ex.Message}");
+        Console.WriteLine("FAIL DL bangle table layout");
+    }
+
+    try
+    {
+        ValidateMeshTableOrdering();
+        Console.WriteLine("PASS far LOD, metal, and bangle mesh layout");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"Far LOD, metal, and bangle mesh layout: {ex.Message}");
+        Console.WriteLine("FAIL far LOD, metal, and bangle mesh layout");
+    }
+
+    try
+    {
         ValidateUyaToDlConversion(cases);
         Console.WriteLine("PASS UYA 0x171C to DL conversion");
     }
@@ -570,6 +592,13 @@ static void ValidateDlAnimationPacking(IReadOnlyList<RoundtripCase> cases)
     {
         throw new InvalidDataException("edited glTF animation discarded its compact metadata.");
     }
+    if (!packed.Model.Sequences[editedAnimationIndex].CompactFrames.Select(frame => frame.FrameId).SequenceEqual(
+            originalModel.Sequences[editedAnimationIndex].CompactFrames.Select(frame => frame.FrameId))
+        || !packed.Model.Sequences[editedAnimationIndex].Triggers.Select(trigger => (trigger.Unknown00, trigger.Unknown02)).SequenceEqual(
+            originalModel.Sequences[editedAnimationIndex].Triggers.Select(trigger => (trigger.Unknown00, trigger.Unknown02))))
+    {
+        throw new InvalidDataException("edited glTF animation discarded its frame or trigger metadata.");
+    }
 
     var packedBytes = MobyModelPacker.Build(packed.Model);
     MobyGltfExport packedExport;
@@ -628,6 +657,7 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
     }
 
     var sourceAnimations = MobyStandardAnimationDecoder.Decode(model).Animations;
+    var sourceModelSequences = model.Sequences.ToArray();
     var sourceMeshData = model.MeshTable!.Entries
         .Select(entry => (Vif: entry.VifData, Vertex: entry.VertexData, Texture: entry.VifTextureData))
         .ToArray();
@@ -638,6 +668,21 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
         || model.SkeletonFormat != MobyAnimationFormat.Compact)
     {
         throw new InvalidDataException("0x171C did not produce loadable compact DL animations and skeleton.");
+    }
+    for (var sequenceIndex = 0; sequenceIndex < model.Sequences.Count; sequenceIndex++)
+    {
+        var sourceFrames = sourceModelSequences[sequenceIndex].Frames;
+        var compactFrames = model.Sequences[sequenceIndex].CompactFrames;
+        for (var frameIndex = 0; frameIndex < sourceFrames.Count; frameIndex++)
+        {
+            var expectedFrameId = unchecked((short)(ushort)(
+                sourceFrames[frameIndex].Unknown04 | sourceFrames[frameIndex].Unknown05 << 8));
+            if (compactFrames[frameIndex].FrameId != expectedFrameId)
+            {
+                throw new InvalidDataException(
+                    $"0x171C animation {sequenceIndex} frame {frameIndex} lost source frame id 0x{unchecked((ushort)expectedFrameId):X4}.");
+            }
+        }
     }
     if (sourceMeshData.Where((payload, index) =>
             !payload.Vif.SequenceEqual(model.MeshTable.Entries[index].VifData)
@@ -676,6 +721,104 @@ static void ValidateUyaToDlConversion(IReadOnlyList<RoundtripCase> cases)
             throw new InvalidDataException($"0x171C compact animation {i} did not decode: {error}.");
         }
         RequireMatchingAnimation(sourceAnimations[i], converted);
+    }
+}
+
+static void ValidateDlBangleTable(IReadOnlyList<RoundtripCase> cases)
+{
+    var testCase = cases.FirstOrDefault(test =>
+        test.Game == "DL"
+        && test.MobyPath.Contains("09500_251C", StringComparison.OrdinalIgnoreCase))
+        ?? throw new InvalidDataException("The native DL player fixture is missing.");
+
+    using var input = File.OpenRead(testCase.MobyPath);
+    var model = MobyModelReader.Read(input, new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact });
+    var table = model.BangleTable ?? throw new InvalidDataException("the native DL player has no bangle table.");
+    var activeEntries = table.OffsetList
+        .Where(entry => entry.HighLodMeshCount != 0 || entry.LowLodMeshCount != 0)
+        .Select(entry => (
+            entry.HighLodMeshTableIndex,
+            entry.HighLodMeshCount,
+            entry.LowLodMeshTableIndex,
+            entry.LowLodMeshCount))
+        .ToArray();
+    var expectedEntries = new (byte HighIndex, byte HighCount, byte LowIndex, byte LowCount)[]
+    {
+        (23, 1, 0, 0), (24, 2, 0, 0), (26, 2, 0, 0), (28, 1, 0, 0), (29, 2, 0, 0)
+    };
+    if (table.MeshTableIndex != 23
+        || table.MeshCount != 8
+        || table.BangleMask != 0x1f
+        || !activeEntries.SequenceEqual(expectedEntries)
+        || table.DataList.Count != expectedEntries.Length)
+    {
+        throw new InvalidDataException("native DL player bangle metadata was decoded incorrectly.");
+    }
+}
+
+static void ValidateMeshTableOrdering()
+{
+    var model = new MobyModel
+    {
+        HighLodMeshCount = 1,
+        LowLodMeshCount = 1,
+        FarLodMeshCount = 1,
+        MetalCount = 1,
+        MetalOffsets = 2,
+        MeshTable = new MobyMeshTable(),
+        ShadowPrefixData = Enumerable.Repeat((byte)0xa5, 0x10).ToArray(),
+        ShadowData = Enumerable.Repeat((byte)0x5a, 0x10).ToArray(),
+        Skeleton = new MobySkeleton(),
+        BangleTable = new MobyBangleTable
+        {
+            MeshTableIndex = 4,
+            MeshCount = 2,
+            BangleMask = 0b101
+        }
+    };
+    model.BangleTable.OffsetList.AddRange(Enumerable.Range(0, 15).Select(_ => new MobyBangleListEntry()));
+    model.BangleTable.OffsetList[0].HighLodMeshTableIndex = 4;
+    model.BangleTable.OffsetList[0].HighLodMeshCount = 1;
+    model.BangleTable.OffsetList[2].LowLodMeshTableIndex = 5;
+    model.BangleTable.OffsetList[2].LowLodMeshCount = 1;
+    model.BangleTable.DataList.AddRange(new[]
+    {
+        new MobyBangleData { Unknown00 = 10 },
+        new MobyBangleData { Unknown00 = 20 },
+        new MobyBangleData { Unknown00 = 30 }
+    });
+    model.MeshTable.Entries.AddRange(new[]
+    {
+        new MobyMeshTableEntry { MeshType = MobyMeshType.HighLod },
+        new MobyMeshTableEntry { MeshType = MobyMeshType.LowLod },
+        new MobyMeshTableEntry { MeshType = MobyMeshType.Metal },
+        new MobyMeshTableEntry { MeshType = MobyMeshType.FarLod },
+        new MobyMeshTableEntry { MeshType = MobyMeshType.Bangle },
+        new MobyMeshTableEntry { MeshType = MobyMeshType.Bangle }
+    });
+    model.Skeleton!.Bones.Add(new MobyMatrix4());
+
+    using var input = new MemoryStream(MobyModelPacker.Build(model), writable: false);
+    var packed = MobyModelReader.Read(input);
+    var expected = new[]
+    {
+        MobyMeshType.HighLod,
+        MobyMeshType.LowLod,
+        MobyMeshType.Metal,
+        MobyMeshType.FarLod,
+        MobyMeshType.Bangle,
+        MobyMeshType.Bangle
+    };
+    if (packed.MeshTable is null
+        || !packed.MeshTable.Entries.Select(entry => entry.MeshType).SequenceEqual(expected)
+        || packed.MetalOffsets != 2
+        || packed.BangleTable?.OffsetList[2].LowLodMeshTableIndex != 5
+        || packed.BangleTable.DataList.Count != 3
+        || packed.BangleTable.DataList[2].Unknown00 != 30
+        || packed.ShadowPrefixData is null
+        || !packed.ShadowPrefixData.SequenceEqual(model.ShadowPrefixData!))
+    {
+        throw new InvalidDataException("mesh table was not decoded as base, metal, far LOD, then bangle meshes.");
     }
 }
 
@@ -782,7 +925,7 @@ static void ValidateLod0Export(IReadOnlyList<RoundtripCase> cases)
                 });
         }
 
-        if (model.LowLodMeshCount == 0 && model.MeshCountType2 == 0)
+        if (model.LowLodMeshCount == 0 && model.FarLodMeshCount == 0)
         {
             continue;
         }
@@ -809,8 +952,10 @@ static void ValidateLod0Export(IReadOnlyList<RoundtripCase> cases)
 
             var name = nameElement.GetString() ?? string.Empty;
             if (name.Contains("LowLod", StringComparison.Ordinal)
+                || name.Contains("FarLod", StringComparison.Ordinal)
                 || name.Contains("MeshType2", StringComparison.Ordinal)
                 || name.Contains("low_lod", StringComparison.Ordinal)
+                || name.Contains("far_lod", StringComparison.Ordinal)
                 || name.Contains("mesh_type_2", StringComparison.Ordinal))
             {
                 throw new InvalidDataException(

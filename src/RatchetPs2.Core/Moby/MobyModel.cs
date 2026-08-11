@@ -10,10 +10,11 @@ public sealed class MobyModel
     public byte HighLodMeshCount { get; set; }
     public byte LowLodMeshCount { get; set; }
     public byte MetalCount { get; set; }
+    // Absolute mesh-table index; the far-LOD range follows the metal range.
     public byte MetalOffsets { get; set; }
     public byte JointCount { get; set; }
     public byte Padding { get; set; }
-    public byte MeshCountType2 { get; set; }
+    public byte FarLodMeshCount { get; set; }
     public byte TeamPalettes { get; set; }
     public byte AnimationCount { get; set; }
     public byte SoundCount { get; set; }
@@ -88,7 +89,7 @@ public enum MobyMeshType
 {
     HighLod,
     LowLod,
-    MeshType2,
+    FarLod,
     Bangle,
     Metal
 }
@@ -321,19 +322,17 @@ public sealed class MobyAnimationTrigger
 
 public sealed class MobyBangleTable
 {
-    public byte Unknown00 { get; set; }
-    public byte BangleCount { get; set; }
-    public byte Unknown02 { get; set; }
-    public byte Unknown03 { get; set; }
+    public byte MeshTableIndex { get; set; }
+    public byte MeshCount { get; set; }
+    public ushort BangleMask { get; set; }
     public List<MobyBangleListEntry> OffsetList { get; } = [];
     public List<MobyBangleData> DataList { get; } = [];
 
     public void Write(BinaryWriter writer)
     {
-        writer.Write(Unknown00);
-        writer.Write(BangleCount);
-        writer.Write(Unknown02);
-        writer.Write(Unknown03);
+        writer.Write(MeshTableIndex);
+        writer.Write(MeshCount);
+        writer.Write(BangleMask);
 
         foreach (var entry in OffsetList)
         {
@@ -349,13 +348,17 @@ public sealed class MobyBangleTable
 
 public sealed class MobyBangleListEntry
 {
-    public short MeshTableIndex { get; set; }
-    public short Unknown02 { get; set; }
+    public byte HighLodMeshTableIndex { get; set; }
+    public byte HighLodMeshCount { get; set; }
+    public byte LowLodMeshTableIndex { get; set; }
+    public byte LowLodMeshCount { get; set; }
 
     public void Write(BinaryWriter writer)
     {
-        writer.Write(MeshTableIndex);
-        writer.Write(Unknown02);
+        writer.Write(HighLodMeshTableIndex);
+        writer.Write(HighLodMeshCount);
+        writer.Write(LowLodMeshTableIndex);
+        writer.Write(LowLodMeshCount);
     }
 }
 
