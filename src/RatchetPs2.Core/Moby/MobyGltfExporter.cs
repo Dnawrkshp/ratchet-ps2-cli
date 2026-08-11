@@ -2557,9 +2557,9 @@ public static class MobyGltfExporter
         var elevation = vertex[0x09] * AngleScale;
         var cosElevation = MathF.Cos(elevation);
         return GltfCoordinateBasis.FromPs2Position(
-            -MathF.Cos(azimuth) * cosElevation,
-            -MathF.Sin(azimuth) * cosElevation,
-            -MathF.Sin(elevation));
+            MathF.Cos(azimuth) * cosElevation,
+            MathF.Sin(azimuth) * cosElevation,
+            MathF.Sin(elevation));
     }
 
     private static byte[] Combine(byte[] first, byte[]? second)

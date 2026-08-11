@@ -335,9 +335,9 @@ static void ValidateDlAnimationExport(IReadOnlyList<RoundtripCase> cases)
         var elevation = sourceMesh.VertexData[sourceVertexOffset + 0x09] * MathF.PI / 128f;
         var cosElevation = MathF.Cos(elevation);
         var expectedNormal = new Vector3(
-            -MathF.Cos(azimuth) * cosElevation,
-            -MathF.Sin(elevation),
-            MathF.Sin(azimuth) * cosElevation);
+            MathF.Cos(azimuth) * cosElevation,
+            MathF.Sin(elevation),
+            -MathF.Sin(azimuth) * cosElevation);
         if (Vector3.Distance(actualNormal, expectedNormal) > 0.000001f)
         {
             throw new InvalidDataException($"DL source normal was {actualNormal}; expected {expectedNormal}.");
