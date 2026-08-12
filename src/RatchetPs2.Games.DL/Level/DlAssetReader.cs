@@ -177,6 +177,28 @@ public static class DlAssetReader
         return definitions;
     }
 
+    public static IReadOnlyList<int> ReadMobyGsStashClassIds(ReadOnlySpan<byte> headerData, int offset)
+    {
+        if (offset <= 0)
+        {
+            return [];
+        }
+
+        var classIds = new List<int>();
+        for (var position = offset; position <= headerData.Length - sizeof(short); position += sizeof(short))
+        {
+            var classId = BinaryPrimitives.ReadInt16LittleEndian(headerData[position..]);
+            if (classId < 0)
+            {
+                return classIds;
+            }
+
+            classIds.Add(classId);
+        }
+
+        throw new InvalidDataException("DL moby GS stash class list is missing its terminator.");
+    }
+
     public static IReadOnlyList<DlParticleTextureDefinition> ReadParticleTextureDefinitions(
         ReadOnlySpan<byte> headerData,
         int offset,

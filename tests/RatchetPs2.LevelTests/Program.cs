@@ -40,6 +40,7 @@ ValidateCodeSegmentParsing();
 ValidateHudBankParsing();
 ValidateWorldInstanceParsing();
 ValidateAssetSlicing();
+ValidateMobyGsStashTextures();
 ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
 
@@ -1178,6 +1179,70 @@ static void ValidateAssetSlicing()
 
     var nonZeroSlice = DlAssetReader.ReadAssetSlice(assetData, 10, knownOffsets);
     Expect(nonZeroSlice.SequenceEqual(assetData[10..20]), "non-zero asset slices should stop at the next known asset offset");
+}
+
+static void ValidateMobyGsStashTextures()
+{
+    const int classId = 0x251c;
+    var headerBytes = new byte[0x100];
+    WriteInt32(headerBytes, 0x18, 1);
+    WriteInt32(headerBytes, 0x1c, 0xc0);
+    WriteInt32(headerBytes, 0x38, 1);
+    WriteInt32(headerBytes, 0x3c, 0xe0);
+    WriteInt32(headerBytes, 0xac, 0xf0);
+    WriteInt32(headerBytes, 0xc0, 0x200);
+    WriteInt32(headerBytes, 0xc4, classId);
+    headerBytes.AsSpan(0xd0, 0x10).Fill(0xff);
+    headerBytes[0xd0] = 0;
+    WriteInt32(headerBytes, 0xe0, 0x100);
+    WriteInt16(headerBytes, 0xe4, 16);
+    WriteInt16(headerBytes, 0xe6, 16);
+    WriteInt16(headerBytes, 0xe8, 1);
+    WriteInt16(headerBytes, 0xea, 0);
+    WriteInt16(headerBytes, 0xec, -1);
+    WriteInt16(headerBytes, 0xee, -1);
+    WriteInt16(headerBytes, 0xf0, classId);
+    WriteInt16(headerBytes, 0xf2, -1);
+
+    var classIds = DlAssetReader.ReadMobyGsStashClassIds(headerBytes, 0xf0);
+    Expect(classIds.SequenceEqual([classId]), "moby GS stash class ids should be read through the -1 terminator");
+
+    var palette = CreatePalette();
+    var assetBytes = new byte[0x201];
+    for (var i = 0; i < 0x100; i++)
+    {
+        assetBytes[0x100 + i] = (byte)i;
+    }
+    assetBytes[0x200] = 1;
+
+    var files = DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+        GameId.DL,
+        levelIndex: 1,
+        headerBytes,
+        palette,
+        assetBytes);
+    var exportedPng = files.Single(file =>
+        file.Path == "assets/moby/09500_251C/textures/tex.0000.png").Bytes;
+    var definition = DlAssetReader.ReadTextureDefinitions(headerBytes, 0xe0, 1).Single();
+    var unswizzledPng = DlAssetReader.BuildAssetTexture(
+        "moby",
+        0,
+        definition,
+        palette,
+        assetBytes,
+        textureDataOffset: 0,
+        isSwizzled: false).PngBytes;
+    var swizzledPng = DlAssetReader.BuildAssetTexture(
+        "moby",
+        0,
+        definition,
+        palette,
+        assetBytes,
+        textureDataOffset: 0,
+        isSwizzled: true).PngBytes;
+
+    Expect(exportedPng.SequenceEqual(unswizzledPng), "GS-stashed moby textures should be exported without swizzle");
+    Expect(!exportedPng.SequenceEqual(swizzledPng), "GS-stashed moby textures should not use the normal DL swizzle");
 }
 
 static void ValidatePifMipRoundtrip()

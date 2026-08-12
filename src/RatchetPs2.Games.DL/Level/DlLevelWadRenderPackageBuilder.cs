@@ -235,6 +235,9 @@ public static class DlLevelWadRenderPackageBuilder
             header.GsRamOffset,
             Math.Max(0, header.GsRamCount + header.ExtraMipmapCount));
         var gsStashDefinitions = allMipmapDefinitions.Skip(header.GsRamCount).ToArray();
+        var mobyGsStashClassIds = DlAssetReader.ReadMobyGsStashClassIds(
+            headerBytes,
+            header.MobyGsStashListOffset);
         var mobyDefinitions = DlAssetReader.ReadModelDefinitions(headerBytes, header.MobyModelOffset, header.MobyModelCount);
         var tieDefinitions = DlAssetReader.ReadModelDefinitions(headerBytes, header.TieModelOffset, header.TieModelCount);
         var shrubDefinitions = DlAssetReader.ReadShrubDefinitions(headerBytes, header.ShrubModelOffset, header.ShrubModelCount);
@@ -312,6 +315,7 @@ public static class DlLevelWadRenderPackageBuilder
             assetBytes,
             header.TextureDataOffset,
             gsStashDefinitions,
+            mobyGsStashClassIds,
             knownAssetOffsets,
             textureIsSwizzled,
             options).ToArray();
@@ -390,6 +394,7 @@ public static class DlLevelWadRenderPackageBuilder
             ["HeaderTables"] = new
             {
                 MipmapDefinitions = allMipmapDefinitions,
+                MobyGsStashClassIds = mobyGsStashClassIds,
                 MobyDefinitions = mobyDefinitions,
                 TieDefinitions = tieDefinitions,
                 ShrubDefinitions = shrubDefinitions,
@@ -625,6 +630,7 @@ public static class DlLevelWadRenderPackageBuilder
         byte[] assetBytes,
         int textureDataOffset,
         IReadOnlyList<DlAssetMipmapDefinition> gsStashDefinitions,
+        IReadOnlyList<int> mobyGsStashClassIds,
         IReadOnlyList<int> knownAssetOffsets,
         bool textureIsSwizzled,
         DlLevelWadRenderPackageBuildOptions options)
@@ -654,6 +660,8 @@ public static class DlLevelWadRenderPackageBuilder
             {
                 var textureResources = new RenderTextureResources();
                 var relativeTextureIndex = 0;
+                var mobyTextureIsSwizzled = textureIsSwizzled
+                    && !mobyGsStashClassIds.Contains(definition.ModelId);
                 foreach (var textureId in definition.TextureIds)
                 {
                     if (textureId == 0xff || textureId >= textureDefinitions.Count)
@@ -669,7 +677,7 @@ public static class DlLevelWadRenderPackageBuilder
                         assetBytes,
                         textureDataOffset,
                         gsStashDefinitions,
-                        isSwizzled: textureIsSwizzled);
+                        isSwizzled: mobyTextureIsSwizzled);
                     AddTexture(
                         files,
                         $"{packageRoot}/textures",

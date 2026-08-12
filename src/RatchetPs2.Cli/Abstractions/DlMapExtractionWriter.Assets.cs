@@ -73,6 +73,9 @@ internal static partial class DlMapExtractionWriter
             header.GsRamOffset,
             Math.Max(0, header.GsRamCount + header.ExtraMipmapCount));
         var gsStashDefinitions = allMipmapDefinitions.Skip(header.GsRamCount).ToArray();
+        var mobyGsStashClassIds = DlAssetReader.ReadMobyGsStashClassIds(
+            headerBytes,
+            header.MobyGsStashListOffset);
         var mobyDefinitions = DlAssetReader.ReadModelDefinitions(headerBytes, header.MobyModelOffset, header.MobyModelCount);
         var tieDefinitions = DlAssetReader.ReadModelDefinitions(headerBytes, header.TieModelOffset, header.TieModelCount);
         var shrubDefinitions = DlAssetReader.ReadShrubDefinitions(headerBytes, header.ShrubModelOffset, header.ShrubModelCount);
@@ -91,6 +94,7 @@ internal static partial class DlMapExtractionWriter
         assetManifest["HeaderTables"] = new
         {
             MipmapDefinitions = allMipmapDefinitions,
+            MobyGsStashClassIds = mobyGsStashClassIds,
             MobyDefinitions = mobyDefinitions,
             TieDefinitions = tieDefinitions,
             ShrubDefinitions = shrubDefinitions,
@@ -119,6 +123,7 @@ internal static partial class DlMapExtractionWriter
             assetBytes,
             header.TextureDataOffset,
             gsStashDefinitions,
+            mobyGsStashClassIds,
             textureMetadata,
             knownAssetOffsets);
         ExtractModelFamily(
@@ -130,6 +135,7 @@ internal static partial class DlMapExtractionWriter
             assetBytes,
             header.TextureDataOffset,
             gsStashDefinitions: [],
+            unswizzledModelIds: [],
             textureMetadata,
             knownAssetOffsets);
         ExtractShrubFamily(
@@ -233,6 +239,7 @@ internal static partial class DlMapExtractionWriter
         byte[] assetBytes,
         int textureDataOffset,
         IReadOnlyList<DlAssetMipmapDefinition> gsStashDefinitions,
+        IReadOnlyList<int> unswizzledModelIds,
         List<DlNormalizedTextureMetadata> textureMetadata,
         IReadOnlyList<int> knownAssetOffsets)
     {
@@ -250,6 +257,7 @@ internal static partial class DlMapExtractionWriter
 
             var texturesDirectory = CreateDirectory(modelDirectory, "textures");
             var relativeTextureIndex = 0;
+            var textureIsSwizzled = !unswizzledModelIds.Contains(modelDefinition.ModelId);
             foreach (var textureId in modelDefinition.TextureIds)
             {
                 if (textureId == 0xff || textureId >= textureDefinitions.Count)
@@ -266,7 +274,8 @@ internal static partial class DlMapExtractionWriter
                         paletteBytes,
                         assetBytes,
                         textureDataOffset,
-                        gsStashDefinitions),
+                        gsStashDefinitions,
+                        isSwizzled: textureIsSwizzled),
                     textureMetadata);
                 relativeTextureIndex++;
             }
