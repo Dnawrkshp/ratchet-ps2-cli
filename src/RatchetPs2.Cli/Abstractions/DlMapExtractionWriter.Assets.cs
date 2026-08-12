@@ -106,7 +106,7 @@ internal static partial class DlMapExtractionWriter
             FxTextureDefinitions = fxDefinitions
         };
 
-        var knownAssetOffsets = CollectKnownAssetOffsets(
+        var knownAssetOffsets = DlAssetReader.CollectKnownAssetOffsets(
             header,
             assetBytes.Length,
             mobyDefinitions,

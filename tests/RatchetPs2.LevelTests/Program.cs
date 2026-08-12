@@ -9,6 +9,7 @@ using RatchetPs2.Core.Wad;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.DL.Moby;
 using RatchetPs2.Games.UYA.Gameplay;
 using RatchetPs2.Games.UYA.Level;
 
@@ -41,6 +42,7 @@ ValidateHudBankParsing();
 ValidateWorldInstanceParsing();
 ValidateAssetSlicing();
 ValidateMobyGsStashTextures();
+ValidateDzoGlbExportWhenAvailable();
 ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
 
@@ -1243,6 +1245,42 @@ static void ValidateMobyGsStashTextures()
 
     Expect(exportedPng.SequenceEqual(unswizzledPng), "GS-stashed moby textures should be exported without swizzle");
     Expect(!exportedPng.SequenceEqual(swizzledPng), "GS-stashed moby textures should not use the normal DL swizzle");
+}
+
+static void ValidateDzoGlbExportWhenAvailable()
+{
+    var fixtureRoot = Path.Combine("test-assets", "DL Mobys", "09500_251C");
+    var modelPath = Path.Combine(fixtureRoot, "moby.bin");
+    var texturePath = Path.Combine(fixtureRoot, "tex.0000.0.png");
+    if (!File.Exists(modelPath) || !File.Exists(texturePath))
+    {
+        return;
+    }
+
+    var textureBytes = File.ReadAllBytes(texturePath);
+    var glb = DlDzoMobyExporter.ExportMoby(
+        File.ReadAllBytes(modelPath),
+        [textureBytes]);
+    Expect(BinaryPrimitives.ReadUInt32LittleEndian(glb) == 0x46546c67, "DZO export should write the GLB magic");
+    Expect(BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(4)) == 2, "DZO export should write GLB version 2");
+    Expect(BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(8)) == glb.Length, "DZO GLB length should match its header");
+
+    var jsonLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(12)));
+    Expect(BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(16)) == 0x4e4f534a, "DZO GLB should start with a JSON chunk");
+    using var json = JsonDocument.Parse(glb.AsMemory(20, jsonLength));
+    var root = json.RootElement;
+    Expect(!root.GetProperty("buffers")[0].TryGetProperty("uri", out _), "DZO GLB buffer should be embedded");
+    var image = root.GetProperty("images")[0];
+    Expect(!image.TryGetProperty("uri", out _), "DZO GLB image should be embedded");
+    Expect(image.GetProperty("mimeType").GetString() == "image/png", "DZO GLB image should retain its PNG media type");
+
+    var binHeaderOffset = checked(20 + jsonLength);
+    Expect(BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(binHeaderOffset + 4)) == 0x004e4942, "DZO GLB should contain a BIN chunk");
+    var imageView = root.GetProperty("bufferViews")[image.GetProperty("bufferView").GetInt32()];
+    var imageOffset = checked(binHeaderOffset + 8 + imageView.GetProperty("byteOffset").GetInt32());
+    Expect(
+        glb.AsSpan(imageOffset, 8).SequenceEqual(textureBytes.AsSpan(0, 8)),
+        "DZO GLB should contain the source PNG bytes in its BIN chunk");
 }
 
 static void ValidatePifMipRoundtrip()

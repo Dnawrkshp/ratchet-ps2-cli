@@ -17,6 +17,7 @@ internal static class MobyCommand
             MobyCopyAnimationCommand.Build(gameModuleResolver),
             MobyDebugSkinTransferCommand.Build(gameModuleResolver),
             MobyDefaultAnimationCommand.Build(gameModuleResolver),
+            MobyExportDzoCommand.Build(),
             MobyExportGltfCommand.Build(gameModuleResolver),
             MobyImportGltfCommand.Build(gameModuleResolver),
             MobyKeepAnimationCommand.Build(gameModuleResolver),

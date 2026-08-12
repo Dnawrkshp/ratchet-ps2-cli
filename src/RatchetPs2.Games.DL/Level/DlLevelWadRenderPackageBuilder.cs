@@ -247,7 +247,7 @@ public static class DlLevelWadRenderPackageBuilder
         var shrubTextureDefinitions = DlAssetReader.ReadTextureDefinitions(headerBytes, header.ShrubTextureOffset, header.ShrubTextureCount);
         var fxDefinitions = DlAssetReader.ReadFxTextureDefinitions(headerBytes, header.FxTextureDefOffset, header.FxTextureCount);
         var textureIsSwizzled = ShouldSwizzleAssetTextures(gameId);
-        var knownAssetOffsets = CollectKnownAssetOffsets(
+        var knownAssetOffsets = DlAssetReader.CollectKnownAssetOffsets(
             header,
             assetBytes.Length,
             mobyDefinitions,
@@ -1277,36 +1277,6 @@ public static class DlLevelWadRenderPackageBuilder
             RawLength = segment.RawBytes.Length,
             PayloadLength = segment.PayloadBytes.Length
         }).ToArray<object>();
-    }
-
-    private static IReadOnlyList<int> CollectKnownAssetOffsets(
-        DlAssetHeader header,
-        int assetLength,
-        IEnumerable<DlAssetModelDefinition> mobyDefinitions,
-        IEnumerable<DlAssetModelDefinition> tieDefinitions,
-        IEnumerable<DlAssetShrubDefinition> shrubDefinitions)
-    {
-        var offsets = new List<int>
-        {
-            header.TerrainOffset,
-            header.OcclusionOffset,
-            header.SkyOffset,
-            header.CollisionOffset,
-            header.TextureDataOffset,
-            header.ParticleTextureDataOffset,
-            header.FxTextureDataOffset,
-            header.LightCuboidsOffset,
-            header.HeightmapOffset,
-            header.OcclusionOctreeOffset,
-            header.OcclusionRadiusOffset,
-            header.OcclusionRadius2Offset,
-            assetLength
-        };
-        offsets.AddRange(mobyDefinitions.Select(definition => definition.ModelOffset));
-        offsets.AddRange(tieDefinitions.Select(definition => definition.ModelOffset));
-        offsets.AddRange(shrubDefinitions.Select(definition => definition.ModelOffset));
-
-        return offsets.Where(offset => offset > 0 && offset <= assetLength).Distinct().OrderBy(offset => offset).ToArray();
     }
 
     private static IReadOnlyDictionary<int, byte[]> ReadChunkWads(

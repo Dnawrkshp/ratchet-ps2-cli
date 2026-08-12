@@ -264,33 +264,4 @@ internal static partial class DlMapExtractionWriter
         return unknownRanges;
     }
 
-    private static IReadOnlyList<int> CollectKnownAssetOffsets(
-        DlAssetHeader header,
-        int assetLength,
-        IEnumerable<DlAssetModelDefinition> mobyDefinitions,
-        IEnumerable<DlAssetModelDefinition> tieDefinitions,
-        IEnumerable<DlAssetShrubDefinition> shrubDefinitions)
-    {
-        var offsets = new List<int>
-        {
-            header.TerrainOffset,
-            header.OcclusionOffset,
-            header.SkyOffset,
-            header.CollisionOffset,
-            header.TextureDataOffset,
-            header.ParticleTextureDataOffset,
-            header.FxTextureDataOffset,
-            header.LightCuboidsOffset,
-            header.HeightmapOffset,
-            header.OcclusionOctreeOffset,
-            header.OcclusionRadiusOffset,
-            header.OcclusionRadius2Offset,
-            assetLength
-        };
-        offsets.AddRange(mobyDefinitions.Select(definition => definition.ModelOffset));
-        offsets.AddRange(tieDefinitions.Select(definition => definition.ModelOffset));
-        offsets.AddRange(shrubDefinitions.Select(definition => definition.ModelOffset));
-
-        return offsets.Where(offset => offset > 0 && offset <= assetLength).Distinct().OrderBy(offset => offset).ToArray();
-    }
 }
