@@ -25,6 +25,7 @@ public sealed record DlLevelWadRenderPackageBuildOptions
     {
         IncludeSourceFiles = false,
         IncludeDiagnostics = false,
+        IncludeMissionMobys = false,
         MinifyGltf = true,
         GltfMetadataMode = GltfExportMetadataMode.RuntimeOnly,
         TfragLodIndex = 0,
@@ -33,6 +34,7 @@ public sealed record DlLevelWadRenderPackageBuildOptions
 
     public bool IncludeSourceFiles { get; init; } = true;
     public bool IncludeDiagnostics { get; init; } = true;
+    public bool IncludeMissionMobys { get; init; } = true;
     public bool MinifyGltf { get; init; }
     public GltfExportMetadataMode GltfMetadataMode { get; init; } = GltfExportMetadataMode.Full;
     public int? TfragLodIndex { get; init; }
@@ -113,7 +115,7 @@ public static class DlLevelWadRenderPackageBuilder
             options,
             ReadChunkWads(levelWadBytes, levelWad.Chunks));
 
-        for (var missionIndex = 0; missionIndex < levelWad.GameplayMissionData.Count; missionIndex++)
+        for (var missionIndex = 0; options.IncludeMissionMobys && missionIndex < levelWad.GameplayMissionData.Count; missionIndex++)
         {
             var missionData = DlLevelWadReader.ReadSectorFileBlock(
                 levelWadBytes,
@@ -148,6 +150,11 @@ public static class DlLevelWadRenderPackageBuilder
         else
         {
             throw new InvalidDataException("DL level WAD is missing the world instance core segment.");
+        }
+
+        if (coreSegmentByHeaderOffset.TryGetValue(0x60, out var gameplayCore))
+        {
+            AddFile(files, "gameplay/gameplay_core.bin", gameplayCore.PayloadBytes);
         }
 
         AddTiming(

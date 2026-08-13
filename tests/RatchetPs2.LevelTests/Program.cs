@@ -587,6 +587,9 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
         entries.Keys.All(path => !path.EndsWith(".diagnostics.json", StringComparison.Ordinal)),
         "browser render package should omit glTF diagnostics");
     Expect(
+        entries.Keys.All(path => !path.StartsWith("missions/", StringComparison.Ordinal)),
+        "browser render package should omit mission mobys unless requested");
+    Expect(
         entries.Keys.All(path =>
             !path.EndsWith("/tie.bin", StringComparison.Ordinal)
             && !path.EndsWith("/moby.bin", StringComparison.Ordinal)

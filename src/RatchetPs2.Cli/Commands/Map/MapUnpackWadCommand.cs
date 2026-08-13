@@ -26,7 +26,11 @@ internal static class MapUnpackWadCommand
         };
         var renderOption = new Option<bool>("--render")
         {
-            Description = "Build the complete render-ready level package, including mobys."
+            Description = "Build the main level's render-ready package, including its mobys."
+        };
+        var missionsOption = new Option<bool>("--missions")
+        {
+            Description = "Include DL mission-specific moby models in the render package. Requires --render."
         };
 
         var command = CliCommandBuilder.Create(
@@ -36,7 +40,8 @@ internal static class MapUnpackWadCommand
             inputOption,
             outputOption,
             formatOption,
-            renderOption);
+            renderOption,
+            missionsOption);
 
         command.SetAction(parseResult =>
         {
@@ -45,6 +50,7 @@ internal static class MapUnpackWadCommand
             var outputDirectory = parseResult.GetValue(outputOption);
             var format = parseResult.GetValue(formatOption);
             var render = parseResult.GetValue(renderOption);
+            var missions = parseResult.GetValue(missionsOption);
 
             if (!TryValidateMapGame(gameValue, out var gameId, out var error))
             {
@@ -68,6 +74,16 @@ internal static class MapUnpackWadCommand
             if (normalizedFormat is not "files" and not "indexed")
             {
                 Console.Error.WriteLine($"Unsupported --format value '{format}'. Expected files or indexed.");
+                return 1;
+            }
+            if (missions && !render)
+            {
+                Console.Error.WriteLine("--missions requires --render.");
+                return 1;
+            }
+            if (missions && gameId != GameId.DL)
+            {
+                Console.Error.WriteLine("--missions is currently supported only for DL render packages.");
                 return 1;
             }
             try
@@ -136,6 +152,7 @@ internal static class MapUnpackWadCommand
                     var renderOptions = DlLevelWadRenderPackageBuildOptions.Browser with
                     {
                         IncludeDiagnostics = true,
+                        IncludeMissionMobys = missions,
                         MobyLodIndex = null
                     };
                     if (normalizedFormat == "indexed")

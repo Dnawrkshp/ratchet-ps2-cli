@@ -83,11 +83,9 @@ public static partial class Exports
     {
         ArgumentNullException.ThrowIfNull(levelWadBytes);
 
-        var package = DlLevelWadUnpacker.Unpack(levelWadBytes);
-        var renderPackage = DlLevelWadRenderPackageBuilder.BuildPacked(
+        return DlLevelWadRenderPackageBuilder.BuildPacked(
             levelWadBytes,
             DlLevelWadRenderPackageBuildOptions.Browser);
-        return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
     }
 
     [JSInvokable("BuildUyaLevelWadRenderPackage")]
