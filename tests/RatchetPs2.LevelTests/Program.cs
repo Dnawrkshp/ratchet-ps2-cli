@@ -571,8 +571,10 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
         return;
     }
 
+    var wadBytes = File.ReadAllBytes(wadPath);
+    var levelWad = DlLevelWadReader.ReadLevelWad(wadBytes);
     var renderPackage = DlLevelWadRenderPackageBuilder.BuildPacked(
-        File.ReadAllBytes(wadPath),
+        wadBytes,
         DlLevelWadRenderPackageBuildOptions.Browser);
     var entries = renderPackage.Entries.ToDictionary(entry => entry.Path, StringComparer.Ordinal);
 
@@ -587,8 +589,14 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
         entries.Keys.All(path => !path.EndsWith(".diagnostics.json", StringComparison.Ordinal)),
         "browser render package should omit glTF diagnostics");
     Expect(
-        entries.Keys.All(path => !path.StartsWith("missions/", StringComparison.Ordinal)),
-        "browser render package should omit mission mobys unless requested");
+        DlLevelWadRenderPackageBuildOptions.Browser.IncludeMissionMobys,
+        "browser render packages should include mission mobys when present");
+    if (levelWad.GameplayMissionData.Any(block => !block.IsEmpty))
+    {
+        Expect(
+            entries.Keys.Any(path => path.StartsWith("missions/", StringComparison.Ordinal)),
+            "browser render package should include available mission mobys");
+    }
     Expect(
         entries.Keys.All(path =>
             !path.EndsWith("/tie.bin", StringComparison.Ordinal)
@@ -600,6 +608,12 @@ static void ValidateLooseLevelWadRenderPackageWhenAvailable()
         "browser render package should omit source moby, tie, and shrub sidecars");
 
     using var rootManifest = JsonDocument.Parse(ReadPackedEntryBytes(renderPackage, entries["manifest.json"]));
+    var writtenMobys = rootManifest.RootElement.GetProperty("Mobys").EnumerateArray()
+        .Where(entry => entry.GetProperty("Status").GetString() == "written")
+        .ToArray();
+    Expect(
+        writtenMobys.Select(entry => entry.GetProperty("ClassId").GetInt32()).Distinct().Count() == writtenMobys.Length,
+        "render package should contain only one written moby per class");
     var performanceTimings = rootManifest.RootElement.GetProperty("PerformanceTimings").EnumerateArray().ToArray();
     Expect(
         performanceTimings.Any(entry => entry.GetProperty("Key").GetString() == "managed.assets.tfrag"),

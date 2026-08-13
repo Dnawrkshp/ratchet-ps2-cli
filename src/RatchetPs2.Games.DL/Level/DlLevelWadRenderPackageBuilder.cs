@@ -25,7 +25,6 @@ public sealed record DlLevelWadRenderPackageBuildOptions
     {
         IncludeSourceFiles = false,
         IncludeDiagnostics = false,
-        IncludeMissionMobys = false,
         MinifyGltf = true,
         GltfMetadataMode = GltfExportMetadataMode.RuntimeOnly,
         TfragLodIndex = 0,
@@ -114,6 +113,10 @@ public static class DlLevelWadRenderPackageBuilder
             timings,
             options,
             ReadChunkWads(levelWadBytes, levelWad.Chunks));
+        var exportedMobyClassIds = mobyEntries
+            .Where(entry => entry.Status == "written")
+            .Select(entry => entry.ClassId)
+            .ToHashSet();
 
         for (var missionIndex = 0; options.IncludeMissionMobys && missionIndex < levelWad.GameplayMissionData.Count; missionIndex++)
         {
@@ -123,7 +126,7 @@ public static class DlLevelWadRenderPackageBuilder
             var classes = DlMissionDataReader.ReadClasses(missionData);
             if (classes.Length > 0)
             {
-                BuildMissionMobyGltfs(files, mobyEntries, missionIndex, classes, options);
+                BuildMissionMobyGltfs(files, mobyEntries, exportedMobyClassIds, missionIndex, classes, options);
             }
         }
         manifest["Mobys"] = mobyEntries;
@@ -731,6 +734,7 @@ public static class DlLevelWadRenderPackageBuilder
     private static void BuildMissionMobyGltfs(
         List<PackedFile> files,
         List<MobyExportManifestEntry> entries,
+        HashSet<int> exportedClassIds,
         int missionIndex,
         byte[] classes,
         DlLevelWadRenderPackageBuildOptions options)
@@ -738,6 +742,11 @@ public static class DlLevelWadRenderPackageBuilder
         var group = $"mission_{missionIndex}";
         foreach (var moby in DlMissionMobyBankReader.Read(classes))
         {
+            if (!exportedClassIds.Add(moby.Definition.ClassId))
+            {
+                continue;
+            }
+
             var name = moby.Definition.ClassId.ToString("x4", CultureInfo.InvariantCulture);
             var packageRoot = $"missions/{group}/moby/{name}";
             var gltfPath = $"{packageRoot}/moby.gltf";
@@ -748,6 +757,7 @@ public static class DlLevelWadRenderPackageBuilder
 
             if (moby.ModelBytes.Length == 0)
             {
+                exportedClassIds.Remove(moby.Definition.ClassId);
                 entries.Add(MobyExportManifestEntry.Empty(group, name, moby.Definition.ClassId));
                 continue;
             }
@@ -807,6 +817,7 @@ public static class DlLevelWadRenderPackageBuilder
             }
             catch (Exception ex) when (IsAssetTextureFailure(ex))
             {
+                exportedClassIds.Remove(moby.Definition.ClassId);
                 entries.Add(MobyExportManifestEntry.Failed(group, name, moby.Definition.ClassId, ex.Message));
             }
         }
