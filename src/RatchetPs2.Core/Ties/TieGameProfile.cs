@@ -19,19 +19,12 @@ public sealed record TieGameProfile
     public float ReflectiveMaskRoughnessFactor { get; init; } = 0.24f;
     public byte FullOpacityAlpha { get; init; } = Ps2Color.FullOpacityAlpha;
     public bool SuppressGeneratedNormalFallback { get; init; }
-    public bool UseStripTokenReferencesForTopology { get; init; }
-    public bool UsePreviousStripReferencePhaseForTopology { get; init; }
-    public bool UseSourceNormalPhaseWindingRepair { get; init; }
     public bool PreferVuAddressSourceNormalRemaps { get; init; }
     public bool InvertDecodedFatVertexSourceNormals { get; init; }
     public bool UsePackedVertexNormalTableSource { get; init; }
     public bool UsePacketRowSourceNormals { get; init; } = true;
     public bool UseRgbaRecipeSourceNormals { get; init; }
-    public bool UseGeometryWindingRepair { get; init; } = true;
-    public bool UseLocalInwardGeometryWindingRepair { get; init; }
-    public bool UsePartialSmallStripSourceNormalPhaseWindingRepair { get; init; }
     public int VertexNormalHeaderSize { get; init; } = 0x10;
-    public float SourceNormalPhaseWindingRepairAverageDot { get; init; } = 0.72f;
 
     public static TieGameProfile ForGame(GameId gameId)
     {
@@ -45,20 +38,13 @@ public sealed record TieGameProfile
         {
             GameLabel = normalized,
             SuppressGeneratedNormalFallback = normalized == "GC",
-            UseStripTokenReferencesForTopology = false,
-            UsePreviousStripReferencePhaseForTopology = normalized == "GC",
-            UseSourceNormalPhaseWindingRepair = normalized is "GC" or "UYA",
             PreferVuAddressSourceNormalRemaps = normalized is "DL" or "UYA",
             InvertDecodedFatVertexSourceNormals = normalized is "DL" or "UYA",
             UsePackedVertexNormalTableSource = normalized is "DL" or "UYA",
             UsePacketRowSourceNormals = normalized == "UYA",
             UseRgbaRecipeSourceNormals = normalized == "UYA",
             UseAmbientIndexAttribute = normalized is "DL" or "UYA",
-            UseGeometryWindingRepair = normalized != "GC",
-            UseLocalInwardGeometryWindingRepair = normalized == "UYA",
-            UsePartialSmallStripSourceNormalPhaseWindingRepair = normalized == "UYA",
-            VertexNormalHeaderSize = normalized is "GC" or "UYA" ? 0 : 0x10,
-            SourceNormalPhaseWindingRepairAverageDot = 0.72f
+            VertexNormalHeaderSize = normalized is "GC" or "UYA" ? 0 : 0x10
         };
     }
 

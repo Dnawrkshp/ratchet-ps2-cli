@@ -13,17 +13,6 @@ internal sealed record TieGltfSourceNormalPhaseAnalysis(
     public int InvertedVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Inverted);
     public int AmbiguousVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Ambiguous);
     public int InsufficientVoteStripCount => Strips.Count(strip => strip.PhaseVote == TieGltfSourceNormalPhaseVote.Insufficient);
-    public IReadOnlySet<int> RepairStripIndices => Strips
-        .Where(strip => strip.ShouldApplyWindingRepair)
-        .Where(strip => strip.WindingRepairTriangleCount > 0)
-        .Select(strip => strip.StripIndex)
-        .ToHashSet();
-    public IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey> RepairTriangles => Strips
-        .Where(strip => strip.ShouldApplyWindingRepair)
-        .SelectMany(strip => strip.WindingRepairTriangleIndices.Select(triangleIndex =>
-            new TieGltfSourceNormalPhaseTriangleKey(strip.StripIndex, triangleIndex)))
-        .ToHashSet();
-    public int RepairTriangleCount => RepairTriangles.Count;
 }
 
 internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
@@ -43,7 +32,6 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
     IReadOnlyList<TieGltfSourceNormalPhaseRemapChunkDiagnostic> UsedNormalRemapChunks,
     int? DominantUsedNormalRemapChunkIndex,
     int DominantUsedNormalRemapChunkRemapCount,
-    bool UsesPreviousStripReferencePhase,
     string SelectedTargetMode,
     IReadOnlyList<TieGltfSourceNormalPhaseTargetDiagnostic> TargetModeVotes,
     IReadOnlyList<TieGltfSourceNormalPhaseTriangleDiagnostic> TriangleVotes,
@@ -54,111 +42,7 @@ internal sealed record TieGltfSourceNormalPhaseStripDiagnostic(
     string BestInvertedLayout,
     int BestInvertedStrongTriangleCount,
     float BestInvertedAverageDot,
-    float WindingRepairAverageDot,
-    bool EnablePartialSmallStripWindingRepair,
-    TieGltfSourceNormalPhaseVote PhaseVote)
-{
-    private const float PartialSmallStripExactHalfMaximumAverageDot = 0.55f;
-    private const float NearDenseWindingRepairAverageDot = 0.45f;
-    private const int NearDenseWindingRepairMinimumStrongTriangleLead = 6;
-
-    public bool ShouldApplyWindingRepair =>
-        !UsesPreviousStripReferencePhase
-        && (
-            PhaseVote == TieGltfSourceNormalPhaseVote.Inverted
-                && (UsesDenseSourceNormalRepair
-                    || UsesNearDenseSourceNormalRepair
-                    || UsesSmallStripSourceNormalRepair
-                    || UsesPartialSmallStripSourceNormalRepair)
-            || UsesMixedTriangleSourceNormalRepair);
-
-    public bool UsesDenseSourceNormalRepair =>
-        ScoredTriangleCount >= 8
-        && BestInvertedStrongTriangleCount >= Math.Max(2, ScoredTriangleCount / 2)
-        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + 2
-        && BestInvertedAverageDot >= WindingRepairAverageDot;
-
-    public bool UsesNearDenseSourceNormalRepair =>
-        !UsesDenseSourceNormalRepair
-        && WindingRepairAverageDot <= 0.5f
-        && ScoredTriangleCount >= 8
-        && BestInvertedStrongTriangleCount >= Math.Max(2, ScoredTriangleCount / 2)
-        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + NearDenseWindingRepairMinimumStrongTriangleLead
-        && BestCurrentAverageDot <= -NearDenseWindingRepairAverageDot
-        && BestInvertedAverageDot >= NearDenseWindingRepairAverageDot;
-
-    public bool UsesSmallStripSourceNormalRepair =>
-        TriangleCount > 0
-        && ScoredTriangleCount == TriangleCount
-        && ScoredTriangleCount < 8
-        && BestInvertedStrongTriangleCount == ScoredTriangleCount
-        && BestCurrentStrongTriangleCount == 0
-        && BestCurrentAverageDot <= -0.5f
-        && BestInvertedAverageDot >= WindingRepairAverageDot;
-
-    public bool UsesPartialSmallStripSourceNormalRepair =>
-        EnablePartialSmallStripWindingRepair
-        && !UsesDenseSourceNormalRepair
-        && !UsesSmallStripSourceNormalRepair
-        && PhaseVote == TieGltfSourceNormalPhaseVote.Inverted
-        && TriangleCount > 0
-        && ScoredTriangleCount > 0
-        && ScoredTriangleCount < 8
-        && BestInvertedStrongTriangleCount >= 2
-        && HasPartialSmallStripInvertedMajority
-        && BestInvertedStrongTriangleCount >= BestCurrentStrongTriangleCount + 2
-        && BestCurrentAverageDot <= -0.5f
-        && BestInvertedAverageDot > WindingRepairAverageDot
-        && TriangleVotes.Any(vote => vote.PrefersPartialStripInvertedWinding);
-
-    private bool HasPartialSmallStripInvertedMajority =>
-        BestInvertedStrongTriangleCount * 2 > ScoredTriangleCount
-        || BestInvertedStrongTriangleCount * 2 == ScoredTriangleCount
-        && BestInvertedAverageDot < PartialSmallStripExactHalfMaximumAverageDot;
-
-    public bool UsesMixedTriangleSourceNormalRepair =>
-        PhaseVote == TieGltfSourceNormalPhaseVote.Ambiguous
-        && TriangleCount > 0
-        && ScoredTriangleCount == TriangleCount
-        && BestInvertedStrongTriangleCount >= 2
-        && BestCurrentStrongTriangleCount >= 2
-        && TriangleVotes.Any(vote => vote.PrefersInvertedWinding);
-
-    public IReadOnlyList<int> WindingRepairTriangleIndices
-    {
-        get
-        {
-            if (!ShouldApplyWindingRepair)
-            {
-                return [];
-            }
-
-            if (UsesMixedTriangleSourceNormalRepair)
-            {
-                return TriangleVotes
-                    .Where(vote => vote.PrefersInvertedWinding)
-                    .Select(vote => vote.TriangleIndexInStrip)
-                    .ToArray();
-            }
-
-            if (UsesPartialSmallStripSourceNormalRepair)
-            {
-                return TriangleVotes
-                    .Where(vote => vote.PrefersPartialStripInvertedWinding)
-                    .Select(vote => vote.TriangleIndexInStrip)
-                    .ToArray();
-            }
-
-            return Enumerable.Range(0, TriangleCount).ToArray();
-        }
-    }
-
-    public int WindingRepairTriangleCount => WindingRepairTriangleIndices.Count;
-}
-
-internal readonly record struct TieGltfSourceNormalPhaseTriangleKey(
-    int StripIndex,
-    int TriangleIndexInStrip);
+    TieGltfSourceNormalPhaseVote PhaseVote);
 
 internal readonly record struct TieGltfSourceNormalPhaseTargetScore(
     TieGltfSourceNormalPhaseRemapTargetMode TargetMode,
@@ -167,19 +51,7 @@ internal readonly record struct TieGltfSourceNormalPhaseTargetScore(
 internal sealed record TieGltfSourceNormalPhaseTriangleDiagnostic(
     int TriangleIndexInStrip,
     float CurrentAverageDot,
-    float InvertedAverageDot)
-{
-    private const float InvertedWindingMinimumAverageDot = 0.5f;
-    private const float PartialStripInvertedWindingMinimumAverageDot = 0.45f;
-
-    public bool PrefersInvertedWinding =>
-        InvertedAverageDot >= InvertedWindingMinimumAverageDot
-        && InvertedAverageDot > CurrentAverageDot;
-
-    public bool PrefersPartialStripInvertedWinding =>
-        InvertedAverageDot >= PartialStripInvertedWindingMinimumAverageDot
-        && InvertedAverageDot > CurrentAverageDot;
-}
+    float InvertedAverageDot);
 
 internal sealed record TieGltfSourceNormalPhaseTargetDiagnostic(
     string TargetMode,

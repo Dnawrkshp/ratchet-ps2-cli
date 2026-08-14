@@ -64,33 +64,6 @@ if (File.Exists(uyaTie7539Path))
         uyaTie7539.FileSections.Any(section => section.Offset == uyaNormalEnd && section.Name.Contains("rgba-remap-0", StringComparison.Ordinal)),
         "expected UYA 7539 raw sections to label rgba-remap-0 at the resolved normal-table offset");
 }
-var uyaBakisiLampPath = Path.Combine(
-    repoRoot,
-    "test-assets",
-    "extractions_uya",
-    "level41_iso_world01",
-    "assets",
-    "tie",
-    "07496_1D48",
-    "tie.bin");
-if (File.Exists(uyaBakisiLampPath))
-{
-    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
-    using var uyaBakisiLampInput = File.OpenRead(uyaBakisiLampPath);
-    var uyaBakisiLamp = TieClassReader.Read(
-        uyaBakisiLampInput,
-        TieClassReadOptions.ForGameProfile(uyaProfile));
-    var uyaBakisiLampExport = TieGltfExporter.Export(
-        uyaBakisiLamp,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
-    using var uyaBakisiLampDiagnosticsDocument = JsonDocument.Parse(uyaBakisiLampExport.DiagnosticsBytes);
-    var uyaBakisiLampDiagnostics = uyaBakisiLampDiagnosticsDocument.RootElement;
-    Expect(
-        uyaBakisiLampDiagnostics.GetProperty("SourceNormalPhaseWindingRepairStripCount").GetInt32() == 11
-        && uyaBakisiLampDiagnostics.GetProperty("SourceNormalPhaseWindingRepairTriangleCount").GetInt32() == 34,
-        "expected UYA Bakisi 07496 to apply packed source-normal phase winding repair");
-}
 var uyaTie6109Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6109", "core.bin");
 if (File.Exists(uyaTie6109Path))
 {
@@ -103,25 +76,6 @@ if (File.Exists(uyaTie6109Path))
         new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
     using var uyaTie6109DiagnosticsDocument = JsonDocument.Parse(uyaTie6109Export.DiagnosticsBytes);
     var uyaTie6109Diagnostics = uyaTie6109DiagnosticsDocument.RootElement;
-    Expect(
-        uyaTie6109Diagnostics.GetProperty("SourceNormalPhaseWindingRepairStripCount").GetInt32() == 6
-        && uyaTie6109Diagnostics.GetProperty("SourceNormalPhaseWindingRepairTriangleCount").GetInt32() == 23,
-        "expected UYA 6109 to include partial short-strip source-normal phase repairs");
-    ExpectUyaPartialRepair(
-        uyaTie6109Diagnostics,
-        "UYA 6109",
-        stripIndex: 6,
-        expectedTriangleIndices: new[] { 1, 2, 3 });
-    ExpectUyaPartialRepair(
-        uyaTie6109Diagnostics,
-        "UYA 6109",
-        stripIndex: 7,
-        expectedTriangleIndices: new[] { 0, 1, 2, 3 });
-    ExpectUyaPartialRepair(
-        uyaTie6109Diagnostics,
-        "UYA 6109",
-        stripIndex: 15,
-        expectedTriangleIndices: new[] { 0, 1 });
     var uyaTie6109Topology = uyaTie6109.LodTopologies[0];
     Expect(
         uyaTie6109.GlowRgbaRemaps.Count == 1
@@ -150,6 +104,75 @@ if (File.Exists(uyaTie6109Path))
     Expect(
         ReadPrimitiveMinimumNormalFaceDot(uyaTie6109Export, packetIndex: 2, shaderIndex: 2) is >= 0.9f,
         "expected UYA 6109 packet 2 shader 2 shell normals to avoid the dark side-band source-normal mismatch");
+}
+var uyaTie591Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "591", "core.bin");
+if (File.Exists(uyaTie591Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie591Input = File.OpenRead(uyaTie591Path);
+    var uyaTie591 = TieClassReader.Read(uyaTie591Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie591Export = TieGltfExporter.Export(
+        uyaTie591,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie591Document = JsonDocument.Parse(uyaTie591Export.GltfBytes);
+    var uyaTie591Root = uyaTie591Document.RootElement;
+    var uyaTie591Materials = uyaTie591Root.GetProperty("materials");
+    var uyaTie591BfcByPacket = uyaTie591.PacketTables
+        .Single(table => table.LodIndex == 0)
+        .Packets
+        .ToDictionary(packet => packet.PacketIndex, packet => packet.BfcDistance);
+    var sawBackfaceCulledPrimitive = false;
+    var sawDoubleSidedPrimitive = false;
+    foreach (var primitive in uyaTie591Root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var extras = primitive.GetProperty("extras");
+        var packetIndex = extras.GetProperty("PacketIndex").GetInt32();
+        var bfcDistance = uyaTie591BfcByPacket[packetIndex];
+        var material = uyaTie591Materials[primitive.GetProperty("material").GetInt32()];
+        var doubleSided = material.TryGetProperty("doubleSided", out var doubleSidedProperty)
+            && doubleSidedProperty.GetBoolean();
+        Expect(
+            doubleSided == (bfcDistance == 0)
+                && extras.GetProperty("BfcDistance").GetInt32() == bfcDistance,
+            $"expected UYA 591 packet {packetIndex} BFC distance {bfcDistance} to control glTF backface culling");
+        sawBackfaceCulledPrimitive |= !doubleSided;
+        sawDoubleSidedPrimitive |= doubleSided;
+    }
+
+    Expect(
+        sawBackfaceCulledPrimitive && sawDoubleSidedPrimitive,
+        "expected UYA 591 to retain both backface-culled and double-sided packet materials");
+}
+var uyaTie6338Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6338", "core.bin");
+if (File.Exists(uyaTie6338Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie6338Input = File.OpenRead(uyaTie6338Path);
+    var uyaTie6338 = TieClassReader.Read(uyaTie6338Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie6338Export = TieGltfExporter.Export(
+        uyaTie6338,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    ExpectExportWindingMatchesDae(
+        uyaTie6338Export,
+        Path.Combine(Path.GetDirectoryName(uyaTie6338Path)!, "mesh.dae"),
+        "UYA 0x18C2");
+}
+var uyaTie6055Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6055", "core.bin");
+if (File.Exists(uyaTie6055Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie6055Input = File.OpenRead(uyaTie6055Path);
+    var uyaTie6055 = TieClassReader.Read(uyaTie6055Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    var uyaTie6055Export = TieGltfExporter.Export(
+        uyaTie6055,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    ExpectExportWindingMatchesDae(
+        uyaTie6055Export,
+        Path.Combine(Path.GetDirectoryName(uyaTie6055Path)!, "mesh.dae"),
+        "UYA 0x17A7");
 }
 var uyaTie777Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "777", "core.bin");
 if (File.Exists(uyaTie777Path))
@@ -195,21 +218,6 @@ if (File.Exists(uyaTie472Path))
         uyaTie472,
         "tie.gltf",
         new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
-    using var uyaTie472DiagnosticsDocument = JsonDocument.Parse(uyaTie472Export.DiagnosticsBytes);
-    var uyaTie472Diagnostics = uyaTie472DiagnosticsDocument.RootElement;
-    Expect(
-        uyaTie472Diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 24,
-        "expected UYA 472 open annular shell to repair the strongly inward radial faces");
-    ExpectUyaPartialRepair(
-        uyaTie472Diagnostics,
-        "UYA 472",
-        stripIndex: 3,
-        expectedTriangleIndices: new[] { 16, 17, 18, 19 });
-    ExpectUyaPartialRepair(
-        uyaTie472Diagnostics,
-        "UYA 472",
-        stripIndex: 13,
-        expectedTriangleIndices: new[] { 0, 1 });
     Expect(
         ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 3, shaderIndex: 2) is >= 0.75f,
         "expected UYA 472 packet 3 shell normals to repair severe single-corner source-normal outliers");
@@ -222,61 +230,6 @@ if (File.Exists(uyaTie472Path))
     Expect(
         ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 16, shaderIndex: 2) is >= 0.84f,
         "expected UYA 472 mirrored lower ring shell normals to avoid dark single-corner source-normal panels");
-}
-var uyaTie491Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "491", "core.bin");
-if (File.Exists(uyaTie491Path))
-{
-    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
-    using var uyaTie491Input = File.OpenRead(uyaTie491Path);
-    var uyaTie491 = TieClassReader.Read(uyaTie491Input, TieClassReadOptions.ForGameProfile(uyaProfile));
-    var uyaTie491Export = TieGltfExporter.Export(
-        uyaTie491,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
-    using var uyaTie491DiagnosticsDocument = JsonDocument.Parse(uyaTie491Export.DiagnosticsBytes);
-    var uyaTie491Diagnostics = uyaTie491DiagnosticsDocument.RootElement;
-    var uyaTie491Strip10 = uyaTie491Diagnostics
-        .GetProperty("SourceNormalPhaseVotes")
-        .EnumerateArray()
-        .FirstOrDefault(vote => vote.GetProperty("StripIndex").GetInt32() == 10);
-    Expect(
-        uyaTie491Strip10.ValueKind != JsonValueKind.Undefined,
-        "expected UYA 491 strip 10 source-normal phase diagnostics");
-    if (uyaTie491Strip10.ValueKind != JsonValueKind.Undefined)
-    {
-        Expect(
-            uyaTie491Strip10.GetProperty("UsesNearDenseSourceNormalRepair").GetBoolean()
-            && uyaTie491Strip10.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
-            "expected UYA 491 strip 10 to use near-dense source-normal phase repair");
-        Expect(
-            uyaTie491Strip10.GetProperty("WindingRepairTriangleIndices")
-                .EnumerateArray()
-                .Select(index => index.GetInt32())
-                .SequenceEqual(Enumerable.Range(0, 20)),
-            "expected UYA 491 strip 10 to repair the full inverted arch strip");
-    }
-}
-var uyaTie6230Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "6230", "core.bin");
-if (File.Exists(uyaTie6230Path))
-{
-    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
-    using var uyaTie6230Input = File.OpenRead(uyaTie6230Path);
-    var uyaTie6230 = TieClassReader.Read(uyaTie6230Input, TieClassReadOptions.ForGameProfile(uyaProfile));
-    var uyaTie6230Export = TieGltfExporter.Export(
-        uyaTie6230,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
-    using var uyaTie6230DiagnosticsDocument = JsonDocument.Parse(uyaTie6230Export.DiagnosticsBytes);
-    var uyaTie6230Diagnostics = uyaTie6230DiagnosticsDocument.RootElement;
-    Expect(
-        uyaTie6230Diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 27,
-        "expected UYA 6230 sphere to restore the source-phase inward triangle patches");
-    Expect(
-        ReadMinimumFaceRadialDot(uyaTie6230Export) is >= 0.5f,
-        "expected UYA 6230 sphere faces to point outward after local inward winding repair");
-    Expect(
-        ReadMinimumNormalFaceDot(uyaTie6230Export) is >= 0.95f,
-        "expected UYA 6230 sphere normals to be rebuilt consistently across local inward winding repairs");
 }
 Expect(tie.Header.GlowRgba == unchecked((int)0x803360A3), $"expected glow RGBA 0x803360A3, got 0x{unchecked((uint)tie.Header.GlowRgba):X8}");
 Expect(tie.GlowRgbaRemaps.Count == 1, $"expected one decoded 09907 glow RGBA remap, got {tie.GlowRgbaRemaps.Count}");
@@ -303,6 +256,20 @@ if (File.Exists(tie9767Path))
         $"expected 09767 glow remaps to cover the full packet 1 logical vertex set, got {tie9767.GlowRgbaVertices.Count} vertices");
 }
 var dlProfile = TieGameProfile.Default.WithGameLabel("DL");
+var tie9638Path = Path.Combine(tiesRoot, "ALL DL", "9638", "core.bin");
+if (File.Exists(tie9638Path))
+{
+    using var tie9638Input = File.OpenRead(tie9638Path);
+    var tie9638 = TieClassReader.Read(tie9638Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    var tie9638Export = TieGltfExporter.Export(
+        tie9638,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    ExpectExportWindingMatchesDae(
+        tie9638Export,
+        Path.Combine(Path.GetDirectoryName(tie9638Path)!, "mesh.dae"),
+        "DL 0x25A6");
+}
 var tie9312Path = Path.Combine(tiesRoot, "ALL DL", "9312", "core.bin");
 if (File.Exists(tie9312Path))
 {
@@ -1082,7 +1049,6 @@ ValidateBroadSparseTableNormalFixture();
 ValidateHighInvertedRatioTableNormalFixture();
 ValidateUpperStrongDownTableNormalFixture();
 ValidatePoorlyAlignedSourceNormalRepairFixture();
-ValidateDlFlatProfileLocalInwardRepairFixture();
 ValidateDlLevel07AmbientRegressionFixture();
 ValidateOrganicDuplicatePositionNormalWeldFixture();
 ValidateLogicalNormalRemapMetadataFixture();
@@ -1111,34 +1077,24 @@ void Expect(bool condition, string message)
     }
 }
 
-void ExpectUyaPartialRepair(
-    JsonElement diagnostics,
-    string label,
-    int stripIndex,
-    int[] expectedTriangleIndices)
+void ExpectExportWindingMatchesDae(TieGltfExport export, string daePath, string label)
 {
-    var vote = diagnostics
-        .GetProperty("SourceNormalPhaseVotes")
-        .EnumerateArray()
-        .FirstOrDefault(vote => vote.GetProperty("StripIndex").GetInt32() == stripIndex);
-    Expect(
-        vote.ValueKind != JsonValueKind.Undefined,
-        $"expected {label} strip {stripIndex} source-normal phase diagnostics");
-    if (vote.ValueKind == JsonValueKind.Undefined)
+    var exportedFaceKeys = BuildTriangleFaceKeyCounts(
+        ReadExportedPositions(export),
+        ReadExportedIndices(export));
+    var referenceFaceKeys = ReadDaeTriangleFaceKeyCounts(daePath);
+    var missingReferenceFaceCount = referenceFaceKeys.Sum(pair =>
     {
-        return;
-    }
+        exportedFaceKeys.TryGetValue(pair.Key, out var exportedCount);
+        return Math.Max(0, pair.Value - exportedCount);
+    });
 
     Expect(
-        vote.GetProperty("UsesPartialSmallStripSourceNormalRepair").GetBoolean()
-        && vote.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
-        $"expected {label} strip {stripIndex} to use partial short-strip source-normal repair");
+        exportedFaceKeys.Values.Sum() == referenceFaceKeys.Values.Sum(),
+        $"{label}: expected exported triangle count to match mesh.dae");
     Expect(
-        vote.GetProperty("WindingRepairTriangleIndices")
-            .EnumerateArray()
-            .Select(index => index.GetInt32())
-            .SequenceEqual(expectedTriangleIndices),
-        $"expected {label} strip {stripIndex} to repair only the source-normal inverted triangles");
+        missingReferenceFaceCount == 0,
+        $"{label}: expected exported winding to match mesh.dae, got {missingReferenceFaceCount} missing/flipped face(s)");
 }
 
 void ValidateFixture(string fixturePath)
@@ -2695,54 +2651,6 @@ void ValidatePoorlyAlignedSourceNormalRepairFixture()
     }
 }
 
-void ValidateDlFlatProfileLocalInwardRepairFixture()
-{
-    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9097", "core.bin");
-    if (!File.Exists(fixturePath))
-    {
-        return;
-    }
-
-    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
-    try
-    {
-        using var input = File.OpenRead(fixturePath);
-        var fixtureTie = TieClassReader.Read(input, TieClassReadOptions.ForGameProfile(dlProfile));
-        var textureResources = BuildFixtureTextureResources(fixturePath);
-        var fixtureExport = TieGltfExporter.Export(
-            fixtureTie,
-            "tie.gltf",
-            new TieGltfExportOptions
-            {
-                BufferFileName = "tie.buffer.bin",
-                GameProfile = dlProfile,
-                ExternalTextureUris = textureResources?.Uris,
-                ExternalTextureSizes = textureResources?.Sizes,
-                ExternalTextureAlpha = textureResources?.Alpha
-            });
-
-        using (var diagnosticsDocument = JsonDocument.Parse(fixtureExport.DiagnosticsBytes))
-        {
-            var diagnostics = diagnosticsDocument.RootElement;
-            Expect(
-                diagnostics.GetProperty("WindingLocalInwardTriangleCount").GetInt32() == 0,
-                $"{relativePath}: expected DL flat-profile normal repair not to run UYA local inward winding flips");
-        }
-
-        var minimumNormalFaceDot = ReadMinimumNormalFaceDot(fixtureExport);
-        Expect(
-            minimumNormalFaceDot is >= 0.6f,
-            $"{relativePath}: expected 9097 normals to stay aligned with final faces, got minimum dot {minimumNormalFaceDot}");
-
-        Console.WriteLine($"PASS DL tie flat-profile local inward guard {relativePath}");
-    }
-    catch (Exception ex)
-    {
-        failures.Add($"{relativePath}: {ex.Message}");
-        Console.WriteLine($"FAIL DL tie flat-profile local inward guard {relativePath}");
-    }
-}
-
 void ValidateDlLevel07AmbientRegressionFixture()
 {
     var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9085", "core.bin");
@@ -2858,7 +2766,8 @@ void ValidateLogicalNormalRemapMetadataFixture()
 void ValidateInvertedComponentWindingFixture()
 {
     var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9777", "core.bin");
-    if (!File.Exists(fixturePath))
+    var daePath = Path.Combine(Path.GetDirectoryName(fixturePath)!, "mesh.dae");
+    if (!File.Exists(fixturePath) || !File.Exists(daePath))
     {
         return;
     }
@@ -2868,217 +2777,17 @@ void ValidateInvertedComponentWindingFixture()
     {
         using var input = File.OpenRead(fixturePath);
         var fixtureTie = TieClassReader.Read(input);
-        var textureResources = BuildFixtureTextureResources(fixturePath);
         var fixtureExport = TieGltfExporter.Export(
             fixtureTie,
             "tie.gltf",
-            new TieGltfExportOptions
-            {
-                BufferFileName = "tie.buffer.bin",
-                ExternalTextureUris = textureResources?.Uris,
-                ExternalTextureSizes = textureResources?.Sizes,
-                ExternalTextureAlpha = textureResources?.Alpha
-            });
-
-        using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
-        var root = gltfDocument.RootElement;
-        var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
-        var positionAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("POSITION").GetInt32();
-        var normalAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("NORMAL").GetInt32();
-        var positions = ReadExportedVec3Accessor(fixtureExport, root, positionAccessorIndex);
-        var normals = ReadExportedVec3Accessor(fixtureExport, root, normalAccessorIndex);
-        var triangles = new List<(
-            int A,
-            int B,
-            int C,
-            (int X, int Y, int Z) AKey,
-            (int X, int Y, int Z) BKey,
-            (int X, int Y, int Z) CKey)>();
-        foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
-        {
-            var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
-            for (var i = 0; i + 2 < indices.Count; i += 3)
-            {
-                var aIndex = indices[i];
-                var bIndex = indices[i + 1];
-                var cIndex = indices[i + 2];
-                triangles.Add((
-                    aIndex,
-                    bIndex,
-                    cIndex,
-                    QuantizedPositionKey(positions[aIndex]),
-                    QuantizedPositionKey(positions[bIndex]),
-                    QuantizedPositionKey(positions[cIndex])));
-            }
-        }
-
-        var triangleIndicesByPosition = new Dictionary<(int X, int Y, int Z), List<int>>();
-        for (var i = 0; i < triangles.Count; i++)
-        {
-            AddTriangleIndex(triangles[i].AKey, i);
-            AddTriangleIndex(triangles[i].BKey, i);
-            AddTriangleIndex(triangles[i].CKey, i);
-        }
-
-        var visited = new bool[triangles.Count];
-        var foundTipComponent = false;
-        var tipComponentSignedVolume = 0f;
-        var tipComponentInwardTriangleCount = 0;
-        var tipComponentOutwardTriangleCount = 0;
-        var tipComponentWorstNormalDot = 1f;
-        for (var i = 0; i < triangles.Count; i++)
-        {
-            if (visited[i])
-            {
-                continue;
-            }
-
-            var component = FindComponent(i);
-            var min = (X: float.PositiveInfinity, Y: float.PositiveInfinity, Z: float.PositiveInfinity);
-            var max = (X: float.NegativeInfinity, Y: float.NegativeInfinity, Z: float.NegativeInfinity);
-            void ExpandBounds((float X, float Y, float Z) position)
-            {
-                min = (
-                    MathF.Min(min.X, position.X),
-                    MathF.Min(min.Y, position.Y),
-                    MathF.Min(min.Z, position.Z));
-                max = (
-                    MathF.Max(max.X, position.X),
-                    MathF.Max(max.Y, position.Y),
-                    MathF.Max(max.Z, position.Z));
-            }
-
-            foreach (var triangleIndex in component)
-            {
-                ExpandBounds(positions[triangles[triangleIndex].A]);
-                ExpandBounds(positions[triangles[triangleIndex].B]);
-                ExpandBounds(positions[triangles[triangleIndex].C]);
-            }
-
-            if (component.Count < 150
-                || min.X < -1.1f
-                || max.X > 1.1f
-                || min.Z < -1.1f
-                || max.Z > 1.1f
-                || min.Y > -6.5f
-                || max.Y < -5.8f)
-            {
-                continue;
-            }
-
-            foundTipComponent = true;
-            var center = (
-                X: (min.X + max.X) / 2f,
-                Y: (min.Y + max.Y) / 2f,
-                Z: (min.Z + max.Z) / 2f);
-            foreach (var triangleIndex in component)
-            {
-                var triangle = triangles[triangleIndex];
-                var a = positions[triangle.A];
-                var b = positions[triangle.B];
-                var c = positions[triangle.C];
-                tipComponentSignedVolume += SignedVolume(a, b, c);
-                if (!TryFaceNormal(a, b, c, out var faceNormal))
-                {
-                    continue;
-                }
-
-                var triangleCenter = (
-                    X: (a.X + b.X + c.X) / 3f,
-                    Y: (a.Y + b.Y + c.Y) / 3f,
-                    Z: (a.Z + b.Z + c.Z) / 3f);
-                var centerVector = Normalize((
-                    triangleCenter.X - center.X,
-                    triangleCenter.Y - center.Y,
-                    triangleCenter.Z - center.Z));
-                var directionDot = NormalDot(faceNormal, centerVector);
-                if (MathF.Abs(directionDot) > 0.2f)
-                {
-                    if (directionDot < 0f)
-                    {
-                        tipComponentInwardTriangleCount++;
-                    }
-                    else
-                    {
-                        tipComponentOutwardTriangleCount++;
-                    }
-                }
-
-                var averageNormal = Normalize((
-                    normals[triangle.A].X + normals[triangle.B].X + normals[triangle.C].X,
-                    normals[triangle.A].Y + normals[triangle.B].Y + normals[triangle.C].Y,
-                    normals[triangle.A].Z + normals[triangle.B].Z + normals[triangle.C].Z));
-                tipComponentWorstNormalDot = MathF.Min(tipComponentWorstNormalDot, NormalDot(faceNormal, averageNormal));
-            }
-        }
-
-        Expect(foundTipComponent, $"{relativePath}: expected to find 9777 lower tip connected component");
-        Expect(
-            tipComponentSignedVolume > 0f,
-            $"{relativePath}: expected 9777 lower tip winding volume to be positive, got {tipComponentSignedVolume}");
-        Expect(
-            tipComponentOutwardTriangleCount > tipComponentInwardTriangleCount * 2,
-            $"{relativePath}: expected 9777 lower tip normals to face outward, got {tipComponentOutwardTriangleCount} outward and {tipComponentInwardTriangleCount} inward");
-        Expect(
-            tipComponentWorstNormalDot > 0.8f,
-            $"{relativePath}: expected 9777 lower tip custom normals to align with flipped faces, worst dot {tipComponentWorstNormalDot}");
-
-        Console.WriteLine($"PASS DL tie inverted component winding {relativePath}");
-
-        void AddTriangleIndex((int X, int Y, int Z) key, int triangleIndex)
-        {
-            if (!triangleIndicesByPosition.TryGetValue(key, out var indices))
-            {
-                indices = [];
-                triangleIndicesByPosition[key] = indices;
-            }
-
-            indices.Add(triangleIndex);
-        }
-
-        List<int> FindComponent(int startTriangleIndex)
-        {
-            var component = new List<int>();
-            var pending = new Stack<int>();
-            pending.Push(startTriangleIndex);
-            visited[startTriangleIndex] = true;
-            while (pending.Count > 0)
-            {
-                var triangleIndex = pending.Pop();
-                component.Add(triangleIndex);
-                foreach (var key in new[] { triangles[triangleIndex].AKey, triangles[triangleIndex].BKey, triangles[triangleIndex].CKey })
-                {
-                    foreach (var connectedTriangleIndex in triangleIndicesByPosition[key])
-                    {
-                        if (visited[connectedTriangleIndex])
-                        {
-                            continue;
-                        }
-
-                        visited[connectedTriangleIndex] = true;
-                        pending.Push(connectedTriangleIndex);
-                    }
-                }
-            }
-
-            return component;
-        }
-
-        static float SignedVolume(
-            (float X, float Y, float Z) a,
-            (float X, float Y, float Z) b,
-            (float X, float Y, float Z) c)
-        {
-            return (
-                a.X * (b.Y * c.Z - b.Z * c.Y)
-                + a.Y * (b.Z * c.X - b.X * c.Z)
-                + a.Z * (b.X * c.Y - b.Y * c.X)) / 6f;
-        }
+            new TieGltfExportOptions { BufferFileName = "tie.buffer.bin" });
+        ExpectExportWindingMatchesDae(fixtureExport, daePath, relativePath);
+        Console.WriteLine($"PASS DL tie reference winding {relativePath}");
     }
     catch (Exception ex)
     {
         failures.Add($"{relativePath}: {ex.Message}");
-        Console.WriteLine($"FAIL DL tie inverted component winding {relativePath}");
+        Console.WriteLine($"FAIL DL tie reference winding {relativePath}");
     }
 }
 
@@ -3134,7 +2843,6 @@ void ValidateGc336StripTokenSemantics(TieClass fixtureTie, string relativePath)
     if (topologyStrip1 is not null && topologyStrip1.LogicalVertices.Count >= 2)
     {
         Expect(topologyStrip1.LogicalVertices[0].GsPacketWriteOffset == gcStrip1FirstToken.ExpectedGsPacketWriteOffset, $"{relativePath}: expected topology to keep packet 3 strip 1 on the physical write sequence");
-        Expect(!topologyStrip1.UsesPreviousStripReferencePhase, $"{relativePath}: expected packet 3 strip 1 material-boundary previous reference not to continue strip phase");
     }
 
     var topologyStrip2 = fixtureTie.LodTopologies
@@ -3145,331 +2853,14 @@ void ValidateGc336StripTokenSemantics(TieClass fixtureTie, string relativePath)
     if (topologyStrip2 is not null && topologyStrip2.LogicalVertices.Count >= 2)
     {
         Expect(topologyStrip2.LogicalVertices[0].GsPacketWriteOffset == gcStrip2FirstToken.ExpectedGsPacketWriteOffset, $"{relativePath}: expected topology to keep packet 3 strip 2 on the physical write sequence");
-        Expect(!topologyStrip2.UsesPreviousStripReferencePhase, $"{relativePath}: expected packet 3 strip 2 primary-write previous reference not to continue strip phase");
     }
-
-    var topologyStrip3 = fixtureTie.LodTopologies
-        .FirstOrDefault(topology => topology.LodIndex == 0)?
-        .Strips
-        .FirstOrDefault(strip => strip.PacketIndex == 3 && strip.PacketStripIndex == 3);
-    Expect(topologyStrip3 is not null, $"{relativePath}: expected LOD0 packet 3 strip 3 topology coverage");
-    if (topologyStrip3 is not null && topologyStrip3.LogicalVertices.Count >= 2)
-    {
-        Expect(topologyStrip3.UsesPreviousStripReferencePhase, $"{relativePath}: expected packet 3 strip 3 secondary-write previous reference to continue strip phase");
-    }
-}
-
-void ValidateGc336SourceNormalPhaseDiagnostics(TieGltfExport fixtureExport, string relativePath)
-{
-    using var diagnosticsDocument = JsonDocument.Parse(fixtureExport.DiagnosticsBytes);
-    var diagnostics = diagnosticsDocument.RootElement;
-    Expect(
-        diagnostics.GetProperty("SourceNormalPhaseScoredStripCount").GetInt32() > 0,
-        $"{relativePath}: expected GC 336 diagnostics to score authored normal phase votes");
-    Expect(
-        diagnostics.GetProperty("SourceNormalPhaseWindingRepairStripCount").GetInt32() == 2
-        && diagnostics.GetProperty("SourceNormalPhaseWindingRepairTriangleCount").GetInt32() == 9,
-        $"{relativePath}: expected GC 336 source-normal phase repair to apply the sliver and mixed grass triangles");
-    Expect(
-        diagnostics.GetProperty("PreviousStripReferencePhaseStripCount").GetInt32() > 0,
-        $"{relativePath}: expected GC 336 diagnostics to count previous-strip reference phase strips");
-    var shaderDiagnostics = diagnostics.GetProperty("Shaders");
-    Expect(
-        shaderDiagnostics.GetArrayLength() == 6,
-        $"{relativePath}: expected GC 336 diagnostics to expose all 6 shader records");
-    if (shaderDiagnostics.GetArrayLength() > 0)
-    {
-        var shader0 = shaderDiagnostics[0];
-        Expect(
-            shader0.GetProperty("Bytes").GetString()?.Length == TieShader.Size * 2
-            && shader0.GetProperty("Words").GetArrayLength() == TieShader.Size / sizeof(int),
-            $"{relativePath}: expected shader diagnostics to expose raw bytes and 32-bit words");
-    }
-    var phaseVotes = diagnostics.GetProperty("SourceNormalPhaseVotes");
-    JsonElement? packet0Strip1Vote = null;
-    JsonElement? packet2Strip1Vote = null;
-    JsonElement? packet2Strip3Vote = null;
-    JsonElement? packet3Strip0Vote = null;
-    foreach (var vote in phaseVotes.EnumerateArray())
-    {
-        if (vote.GetProperty("PacketIndex").GetInt32() == 0
-            && vote.GetProperty("PacketStripIndex").GetInt32() == 1)
-        {
-            packet0Strip1Vote = vote;
-        }
-
-        if (vote.GetProperty("PacketIndex").GetInt32() == 2
-            && vote.GetProperty("PacketStripIndex").GetInt32() == 1)
-        {
-            packet2Strip1Vote = vote;
-        }
-
-        if (vote.GetProperty("PacketIndex").GetInt32() == 2
-            && vote.GetProperty("PacketStripIndex").GetInt32() == 3)
-        {
-            packet2Strip3Vote = vote;
-        }
-
-        if (vote.GetProperty("PacketIndex").GetInt32() == 3
-            && vote.GetProperty("PacketStripIndex").GetInt32() == 0)
-        {
-            packet3Strip0Vote = vote;
-        }
-    }
-
-    Expect(packet0Strip1Vote.HasValue, $"{relativePath}: expected GC 336 packet 0 strip 1 source-normal phase diagnostics");
-    if (packet0Strip1Vote.HasValue)
-    {
-        var smallStripVote = packet0Strip1Vote.Value;
-        Expect(
-            smallStripVote.GetProperty("PhaseVote").GetString() == "Inverted",
-            $"{relativePath}: expected GC 336 packet 0 strip 1 authored normals to vote inverted");
-        Expect(
-            smallStripVote.GetProperty("UsesSmallStripSourceNormalRepair").GetBoolean()
-            &&
-            !smallStripVote.GetProperty("UsesDenseSourceNormalRepair").GetBoolean(),
-            $"{relativePath}: expected GC 336 packet 0 strip 1 to use the strict small-strip source-normal repair gate");
-        Expect(
-            smallStripVote.GetProperty("ShouldApplyWindingRepair").GetBoolean()
-            && smallStripVote.GetProperty("WindingRepairTriangleCount").GetInt32() == 2,
-            $"{relativePath}: expected GC 336 packet 0 strip 1 to apply two source-normal winding repairs");
-    }
-
-    Expect(packet2Strip1Vote.HasValue, $"{relativePath}: expected GC 336 packet 2 strip 1 source-normal phase diagnostics");
-    if (packet2Strip1Vote.HasValue)
-    {
-        var currentContinuationVote = packet2Strip1Vote.Value;
-        Expect(
-            currentContinuationVote.GetProperty("PhaseVote").GetString() == "Current",
-            $"{relativePath}: expected GC 336 packet 2 strip 1 authored normals to vote current despite matching the 0xFC continuation token shape");
-        Expect(
-            !currentContinuationVote.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
-            $"{relativePath}: expected GC 336 packet 2 strip 1 not to apply source-normal winding repair");
-    }
-
-    Expect(packet2Strip3Vote.HasValue, $"{relativePath}: expected GC 336 packet 2 strip 3 source-normal phase diagnostics");
-    if (packet2Strip3Vote.HasValue)
-    {
-        var previousContinuationVote = packet2Strip3Vote.Value;
-        Expect(
-            previousContinuationVote.GetProperty("UsesPreviousStripReferencePhase").GetBoolean(),
-            $"{relativePath}: expected GC 336 packet 2 strip 3 to use previous-strip reference phase");
-        Expect(
-            previousContinuationVote.GetProperty("SelectedTargetMode").GetString() == "PacketVertexRow",
-            $"{relativePath}: expected GC 336 packet 2 strip 3 to score previous-reference phase through packet-row normal remaps");
-        Expect(
-            previousContinuationVote.GetProperty("PhaseVote").GetString() == "Current",
-            $"{relativePath}: expected GC 336 packet 2 strip 3 packet-row authored normals to vote current");
-        Expect(
-            !previousContinuationVote.GetProperty("ShouldApplyWindingRepair").GetBoolean(),
-            $"{relativePath}: expected GC 336 packet 2 strip 3 previous-reference strip not to apply source-normal winding repair");
-
-        JsonElement? logicalFirstTargetVote = null;
-        JsonElement? packetRowTargetVote = null;
-        foreach (var targetVote in previousContinuationVote.GetProperty("TargetModeVotes").EnumerateArray())
-        {
-            if (targetVote.GetProperty("TargetMode").GetString() == "LogicalFirst")
-            {
-                logicalFirstTargetVote = targetVote;
-            }
-
-            if (targetVote.GetProperty("TargetMode").GetString() == "PacketVertexRow")
-            {
-                packetRowTargetVote = targetVote;
-            }
-        }
-
-        Expect(logicalFirstTargetVote.HasValue, $"{relativePath}: expected GC 336 packet 2 strip 3 logical-first target vote");
-        Expect(packetRowTargetVote.HasValue, $"{relativePath}: expected GC 336 packet 2 strip 3 packet-row target vote");
-        if (logicalFirstTargetVote.HasValue && packetRowTargetVote.HasValue)
-        {
-            Expect(
-                logicalFirstTargetVote.Value.GetProperty("PhaseVote").GetString() == "Inverted",
-                $"{relativePath}: expected GC 336 packet 2 strip 3 logical remaps to expose the prior inverted false positive");
-            Expect(
-                packetRowTargetVote.Value.GetProperty("PhaseVote").GetString() == "Current",
-                $"{relativePath}: expected GC 336 packet 2 strip 3 packet-row remaps to override the logical inverted vote");
-        }
-    }
-
-    Expect(packet3Strip0Vote.HasValue, $"{relativePath}: expected GC 336 packet 3 strip 0 source-normal phase diagnostics");
-    if (!packet3Strip0Vote.HasValue)
-    {
-        return;
-    }
-
-    var stripVote = packet3Strip0Vote.Value;
-    Expect(
-        stripVote.GetProperty("LogicalRemappedVertexCount").GetInt32() >= 20,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 to have dense logical normal remap coverage");
-    var usedNormalRemapChunks = stripVote.GetProperty("UsedNormalRemapChunks");
-    Expect(
-        usedNormalRemapChunks.GetArrayLength() == 1,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 to be scored from one normal-remap chunk");
-    if (usedNormalRemapChunks.GetArrayLength() > 0)
-    {
-        var usedChunk = usedNormalRemapChunks[0];
-        Expect(
-            usedChunk.GetProperty("ChunkIndex").GetInt32() == 0
-            && usedChunk.GetProperty("RemapCount").GetInt32() >= 20,
-            $"{relativePath}: expected GC 336 packet 3 strip 0 to use LOD0 logical normal-remap chunk 0");
-    }
-
-    Expect(
-        stripVote.GetProperty("DominantUsedNormalRemapChunkIndex").GetInt32() == 0,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 dominant normal-remap chunk 0");
-    Expect(
-        stripVote.GetProperty("DominantUsedNormalRemapChunkRemapCount").GetInt32() >= 20,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 dominant normal-remap chunk coverage");
-    Expect(
-        stripVote.GetProperty("ScoredTriangleCount").GetInt32() == 22,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 to score all 22 strip triangles against authored normals");
-    Expect(
-        stripVote.GetProperty("PhaseVote").GetString() == "Ambiguous",
-        $"{relativePath}: expected GC 336 packet 3 strip 0 authored normal phase vote to remain ambiguous under the fixed LOD layout");
-    Expect(
-        stripVote.GetProperty("UsesMixedTriangleSourceNormalRepair").GetBoolean()
-        && stripVote.GetProperty("ShouldApplyWindingRepair").GetBoolean()
-        && stripVote.GetProperty("WindingRepairTriangleCount").GetInt32() == 7,
-        $"{relativePath}: expected GC 336 packet 3 strip 0 to apply mixed triangle source-normal winding repair");
-    Expect(
-        stripVote.GetProperty("WindingRepairTriangleIndices").EnumerateArray()
-            .Select(index => index.GetInt32())
-            .SequenceEqual(new[] { 0, 1, 2, 3, 4, 5, 11 }),
-        $"{relativePath}: expected GC 336 packet 3 strip 0 to repair only the individually inverted triangles");
-
-    var packetTables = diagnostics.GetProperty("PacketTables");
-    var packet0Diagnostics = FindPacketDiagnostic(packetTables, lodIndex: 0, packetIndex: 0);
-    var packet2Diagnostics = FindPacketDiagnostic(packetTables, lodIndex: 0, packetIndex: 2);
-    var packet3Diagnostics = FindPacketDiagnostic(packetTables, lodIndex: 0, packetIndex: 3);
-
-    Expect(packet0Diagnostics.HasValue, $"{relativePath}: expected packet 0 primitive diagnostics");
-    Expect(packet2Diagnostics.HasValue, $"{relativePath}: expected packet 2 primitive diagnostics");
-    if (packet0Diagnostics.HasValue && packet2Diagnostics.HasValue)
-    {
-        var packet0Strip1Primitive = FindPrimitiveDiagnostic(packet0Diagnostics.Value, packetStripIndex: 1);
-        var packet2Strip1Primitive = FindPrimitiveDiagnostic(packet2Diagnostics.Value, packetStripIndex: 1);
-        Expect(packet0Strip1Primitive.HasValue, $"{relativePath}: expected packet 0 strip 1 primitive diagnostics");
-        Expect(packet2Strip1Primitive.HasValue, $"{relativePath}: expected packet 2 strip 1 primitive diagnostics");
-        if (packet0Strip1Primitive.HasValue && packet2Strip1Primitive.HasValue)
-        {
-            AssertContinuationSplitPrimitive(packet0Strip1Primitive.Value, "0x20", "0x1C", relativePath, "packet 0 strip 1");
-            AssertContinuationSplitPrimitive(packet2Strip1Primitive.Value, "0x26", "0x22", relativePath, "packet 2 strip 1");
-        }
-    }
-
-    Expect(packet3Diagnostics.HasValue, $"{relativePath}: expected packet 3 primitive diagnostics");
-    if (packet3Diagnostics.HasValue)
-    {
-        var counts = packet3Diagnostics.Value.GetProperty("Counts");
-        Expect(
-            counts.GetProperty("PhysicalPrimitives").GetInt32() == 5
-            && counts.GetProperty("TokenReferencePrimitives").GetInt32() == 5
-            && counts.GetProperty("PhysicalTokenReferenceDivergentPrimitives").GetInt32() == 4,
-            $"{relativePath}: expected packet 3 to expose four physical/token-reference primitive sequence differences");
-        var primitiveDiagnostics = packet3Diagnostics.Value.GetProperty("Primitives");
-        Expect(primitiveDiagnostics.GetArrayLength() > 0, $"{relativePath}: expected packet 3 decoded primitive diagnostics");
-        if (primitiveDiagnostics.GetArrayLength() > 0)
-        {
-            var primitive0 = primitiveDiagnostics[0];
-            Expect(
-                primitive0.GetProperty("PacketStripIndex").GetInt32() == 0
-                && primitive0.GetProperty("MaterialIndex").GetInt32() == 1
-                && primitive0.GetProperty("VertexCount").GetInt32() == 24,
-                $"{relativePath}: expected packet 3 primitive 0 to describe strip 0's 24-vertex shader 1 draw");
-            Expect(
-                primitive0.GetProperty("FirstGsPacketWriteOffset").GetString() == "0x7"
-                && primitive0.GetProperty("LastGsPacketWriteOffset").GetString() == "0x4C",
-                $"{relativePath}: expected packet 3 primitive 0 GS write-offset range 0x7..0x4C");
-            Expect(
-                primitive0.GetProperty("FirstToken").GetProperty("Value").GetString() == "0x07"
-                && !primitive0.GetProperty("TokenReferenceDivergesFromPhysical").GetBoolean()
-                && !primitive0.GetProperty("FirstVertexIsSecondaryWriteOffset").GetBoolean(),
-                $"{relativePath}: expected packet 3 strip 0 to expose absolute-start, non-divergent primitive semantics");
-            var vertexReferences = primitive0.GetProperty("VertexReferences");
-            Expect(
-                vertexReferences.GetArrayLength() == 24
-                && vertexReferences[0].GetProperty("Kind").GetString() == "Fat"
-                && vertexReferences[1].GetProperty("Kind").GetString() == "Dinky",
-                $"{relativePath}: expected packet 3 primitive 0 to expose decoded draw vertex references");
-        }
-
-        var physicalPrimitives = packet3Diagnostics.Value.GetProperty("PhysicalPrimitives");
-        var tokenReferencePrimitives = packet3Diagnostics.Value.GetProperty("TokenReferencePrimitives");
-        Expect(
-            physicalPrimitives.GetArrayLength() == 5
-            && tokenReferencePrimitives.GetArrayLength() == 5,
-            $"{relativePath}: expected packet 3 physical and token-reference primitive diagnostics");
-        if (physicalPrimitives.GetArrayLength() > 1 && tokenReferencePrimitives.GetArrayLength() > 1)
-        {
-            Expect(
-                physicalPrimitives[1].GetProperty("FirstGsPacketWriteOffset").GetString() == "0x56"
-                && tokenReferencePrimitives[1].GetProperty("FirstGsPacketWriteOffset").GetString() == "0x4C",
-                $"{relativePath}: expected packet 3 strip 1 token-reference primitive to reuse previous-strip vertex 0x4C");
-        }
-    }
-}
-
-JsonElement? FindPacketDiagnostic(JsonElement packetTables, int lodIndex, int packetIndex)
-{
-    foreach (var table in packetTables.EnumerateArray())
-    {
-        if (table.GetProperty("LodIndex").GetInt32() != lodIndex)
-        {
-            continue;
-        }
-
-        foreach (var packet in table.GetProperty("Packets").EnumerateArray())
-        {
-            if (packet.GetProperty("PacketIndex").GetInt32() == packetIndex)
-            {
-                return packet;
-            }
-        }
-    }
-
-    return null;
-}
-
-JsonElement? FindPrimitiveDiagnostic(JsonElement packet, int packetStripIndex)
-{
-    foreach (var primitive in packet.GetProperty("Primitives").EnumerateArray())
-    {
-        if (primitive.GetProperty("PacketStripIndex").GetInt32() == packetStripIndex)
-        {
-            return primitive;
-        }
-    }
-
-    return null;
-}
-
-void AssertContinuationSplitPrimitive(
-    JsonElement primitive,
-    string expectedPhysicalFirstOffset,
-    string expectedTokenReferenceFirstOffset,
-    string fixture,
-    string label)
-{
-    Expect(
-        primitive.GetProperty("FirstToken").GetProperty("Value").GetString() == "0xFC"
-        && primitive.GetProperty("FirstToken").GetProperty("AddressMode").GetString() == nameof(TiePacketStripTokenAddressMode.PreviousStripVertexReference),
-        $"{fixture}: expected {label} to expose a 0xFC previous-strip token");
-    Expect(
-        primitive.GetProperty("FirstGsPacketWriteOffset").GetString() == expectedPhysicalFirstOffset
-        && primitive.GetProperty("TokenReferenceFirstGsPacketWriteOffset").GetString() == expectedTokenReferenceFirstOffset,
-        $"{fixture}: expected {label} physical/token-reference first offsets {expectedPhysicalFirstOffset}/{expectedTokenReferenceFirstOffset}");
-    Expect(
-        primitive.GetProperty("TokenReferenceDivergesFromPhysical").GetBoolean()
-        && !primitive.GetProperty("FirstVertexIsSecondaryWriteOffset").GetBoolean()
-        && !primitive.GetProperty("TopologyUsesPreviousStripReferencePhase").GetBoolean(),
-        $"{fixture}: expected {label} to remain a diagnostic-only primary-write continuation split");
 }
 
 void ValidateGcFlatPlatformWindingFixture()
 {
     var fixturePath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "336", "core.bin");
-    if (!File.Exists(fixturePath))
+    var daePath = Path.Combine(Path.GetDirectoryName(fixturePath)!, "mesh.dae");
+    if (!File.Exists(fixturePath) || !File.Exists(daePath))
     {
         return;
     }
@@ -3480,103 +2871,17 @@ void ValidateGcFlatPlatformWindingFixture()
         using var input = File.OpenRead(fixturePath);
         var fixtureTie = ReadGcTie(input);
         ValidateGc336StripTokenSemantics(fixtureTie, relativePath);
-        var textureResources = BuildFixtureTextureResources(fixturePath);
         var fixtureExport = TieGltfExporter.Export(
             fixtureTie,
             "tie.gltf",
-            new TieGltfExportOptions
-            {
-                BufferFileName = "tie.buffer.bin",
-                GameLabel = "GC",
-                ExternalTextureUris = textureResources?.Uris,
-                ExternalTextureSizes = textureResources?.Sizes,
-                ExternalTextureAlpha = textureResources?.Alpha
-            });
-
-        ValidateGc336SourceNormalPhaseDiagnostics(fixtureExport, relativePath);
-        using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
-        var root = gltfDocument.RootElement;
-        var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
-        var positionAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("POSITION").GetInt32();
-        var normalAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("NORMAL").GetInt32();
-        var positions = ReadExportedVec3Accessor(fixtureExport, root, positionAccessorIndex);
-        var normals = ReadExportedVec3Accessor(fixtureExport, root, normalAccessorIndex);
-        var targetMaterials = new HashSet<string>(StringComparer.Ordinal)
-        {
-            "tex_0000",
-            "tex_0001",
-            "tex_0004",
-            "tex_0005"
-        };
-        var targetTriangleCount = 0;
-        var targetDownwardTriangleCount = 0;
-        var opposedNormalTriangleCount = 0;
-        var maxTriangleEdge = 0f;
-
-        foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
-        {
-            var materialIndex = primitive.GetProperty("material").GetInt32();
-            var materialName = root
-                .GetProperty("materials")[materialIndex]
-                .GetProperty("name")
-                .GetString();
-            var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
-            for (var i = 0; i + 2 < indices.Count; i += 3)
-            {
-                var aIndex = indices[i];
-                var bIndex = indices[i + 1];
-                var cIndex = indices[i + 2];
-                if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
-                {
-                    continue;
-                }
-
-                maxTriangleEdge = MathF.Max(maxTriangleEdge, Distance(positions[aIndex], positions[bIndex]));
-                maxTriangleEdge = MathF.Max(maxTriangleEdge, Distance(positions[bIndex], positions[cIndex]));
-                maxTriangleEdge = MathF.Max(maxTriangleEdge, Distance(positions[cIndex], positions[aIndex]));
-
-                if (ExportedVectorLength(normals[aIndex]) > 1e-4f
-                    && ExportedVectorLength(normals[bIndex]) > 1e-4f
-                    && ExportedVectorLength(normals[cIndex]) > 1e-4f)
-                {
-                    var averageNormal = Normalize((
-                        normals[aIndex].X + normals[bIndex].X + normals[cIndex].X,
-                        normals[aIndex].Y + normals[bIndex].Y + normals[cIndex].Y,
-                        normals[aIndex].Z + normals[bIndex].Z + normals[cIndex].Z));
-                    if (NormalDot(faceNormal, averageNormal) < -0.75f)
-                    {
-                        opposedNormalTriangleCount++;
-                    }
-                }
-
-                if (materialName is not null && targetMaterials.Contains(materialName))
-                {
-                    targetTriangleCount++;
-                    if (faceNormal.Y < -0.75f)
-                    {
-                        targetDownwardTriangleCount++;
-                    }
-                }
-            }
-        }
-
-        Expect(targetTriangleCount > 0, $"{relativePath}: expected to find GC 336 grass/edge/light target triangles");
-        Expect(
-            targetDownwardTriangleCount == 20,
-            $"{relativePath}: expected GC 336 source-normal repair to reduce target downward triangles to 20, got {targetDownwardTriangleCount}");
-        Expect(
-            opposedNormalTriangleCount == 0,
-            $"{relativePath}: expected GC 336 exported face winding to align with exported normals, got {opposedNormalTriangleCount} opposed triangle(s)");
-        Expect(
-            maxTriangleEdge < 8f,
-            $"{relativePath}: expected GC 336 not to introduce cross-model stretched triangles, got max edge {maxTriangleEdge}");
-
-        Console.WriteLine($"PASS GC tie flat platform winding {relativePath}");
+            new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
+        ExpectExportWindingMatchesDae(fixtureExport, daePath, relativePath);
+        Console.WriteLine($"PASS GC tie reference winding {relativePath}");
     }
     catch (Exception ex)
     {
         failures.Add($"{relativePath}: {ex.Message}");
-        Console.WriteLine($"FAIL GC tie flat platform winding {relativePath}");
+        Console.WriteLine($"FAIL GC tie reference winding {relativePath}");
     }
 }
 
@@ -5286,81 +4591,6 @@ static float? ReadMinimumNormalFaceDot(TieGltfExport fixtureExport)
                     MathF.Min(
                         NormalDot(Normalize(normals[bIndex]), faceNormal),
                         NormalDot(Normalize(normals[cIndex]), faceNormal))));
-            triangleCount++;
-        }
-    }
-
-    return triangleCount > 0 ? minimumDot : null;
-}
-
-static float? ReadMinimumFaceRadialDot(TieGltfExport fixtureExport)
-{
-    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
-    var root = gltfDocument.RootElement;
-    var primitives = root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray().ToArray();
-    var allPositions = new List<(float X, float Y, float Z)>();
-    foreach (var primitive in primitives)
-    {
-        allPositions.AddRange(ReadExportedVec3Accessor(
-            fixtureExport,
-            root,
-            primitive.GetProperty("attributes").GetProperty("POSITION").GetInt32()));
-    }
-
-    if (allPositions.Count == 0)
-    {
-        return null;
-    }
-
-    var min = allPositions[0];
-    var max = allPositions[0];
-    foreach (var position in allPositions.Skip(1))
-    {
-        min = (
-            MathF.Min(min.X, position.X),
-            MathF.Min(min.Y, position.Y),
-            MathF.Min(min.Z, position.Z));
-        max = (
-            MathF.Max(max.X, position.X),
-            MathF.Max(max.Y, position.Y),
-            MathF.Max(max.Z, position.Z));
-    }
-
-    var center = (
-        (min.X + max.X) * 0.5f,
-        (min.Y + max.Y) * 0.5f,
-        (min.Z + max.Z) * 0.5f);
-    var minimumDot = 1f;
-    var triangleCount = 0;
-    foreach (var primitive in primitives)
-    {
-        var attributes = primitive.GetProperty("attributes");
-        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
-        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
-        for (var i = 0; i + 2 < indices.Count; i += 3)
-        {
-            var a = positions[indices[i]];
-            var b = positions[indices[i + 1]];
-            var c = positions[indices[i + 2]];
-            if (!TryFaceNormal(a, b, c, out var faceNormal))
-            {
-                continue;
-            }
-
-            var triangleCenter = (
-                X: (a.X + b.X + c.X) / 3f,
-                Y: (a.Y + b.Y + c.Y) / 3f,
-                Z: (a.Z + b.Z + c.Z) / 3f);
-            if (!TryNormalize((
-                    triangleCenter.X - center.Item1,
-                    triangleCenter.Y - center.Item2,
-                    triangleCenter.Z - center.Item3),
-                    out var radialNormal))
-            {
-                continue;
-            }
-
-            minimumDot = MathF.Min(minimumDot, NormalDot(faceNormal, radialNormal));
             triangleCount++;
         }
     }

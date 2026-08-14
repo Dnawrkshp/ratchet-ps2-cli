@@ -92,16 +92,11 @@ public static class TieGltfExporter
             "Tie source normal phase",
             sourceNormalPhaseStart,
             $"{sourceNormalPhaseAnalysis.Strips.Count} strips");
-        var sourceNormalPhaseRepairTriangles = profile.UseSourceNormalPhaseWindingRepair
-            ? sourceNormalPhaseAnalysis.RepairTriangles
-            : new HashSet<TieGltfSourceNormalPhaseTriangleKey>();
-
         var packetGroupsStart = Stopwatch.GetTimestamp();
         var packetGroupResult = TieGltfPacketIndexGroupBuilder.Build(
             tie,
             topology,
-            glowColorResult.Colors,
-            sourceNormalPhaseRepairTriangles);
+            glowColorResult.Colors);
         var flatIndices = packetGroupResult.PacketIndexGroups.SelectMany(group => group.Indices).ToArray();
         AddTiming(
             options,
@@ -149,8 +144,6 @@ public static class TieGltfExporter
             normalResult.SourceNormalVertexStates,
             normalResult.SourceNormalIndexStates,
             profile.SuppressGeneratedNormalFallback,
-            profile.UseGeometryWindingRepair,
-            profile.UseLocalInwardGeometryWindingRepair,
             texCoords,
             multipassTexCoords,
             glowColorResult.Colors,
@@ -176,8 +169,6 @@ public static class TieGltfExporter
             ambientIndexResult,
             packetGroupResult.PacketIndexGroups,
             packetGroupResult.PacketRgbaSlotCount,
-            packetGroupResult.SourceNormalPhaseWindingRepairStripCount,
-            packetGroupResult.SourceNormalPhaseWindingRepairTriangleCount,
             positions.Count,
             binFileName,
             profile,

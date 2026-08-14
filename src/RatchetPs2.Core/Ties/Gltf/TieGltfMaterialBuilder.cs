@@ -85,6 +85,7 @@ internal sealed class TieGltfMaterialBuilder
         int multipassUvSize,
         TieRgba32? envPassBleedColor,
         short headerModeBits,
+        bool doubleSided,
         TieGltfGlowEmissionMaterial? glowEmission)
     {
         string? uri = null;
@@ -92,7 +93,7 @@ internal sealed class TieGltfMaterialBuilder
             && shaderIndex >= 0
             && _textureUris.TryGetValue(shaderIndex, out uri)
             && !string.IsNullOrWhiteSpace(uri);
-        if (!hasTexture && glowEmission is null)
+        if (!hasTexture && glowEmission is null && doubleSided)
         {
             return 0;
         }
@@ -107,6 +108,7 @@ internal sealed class TieGltfMaterialBuilder
         var key = new MaterialVariantKey(
             shaderIndex,
             passFlags,
+            doubleSided,
             glowEmission.HasValue,
             hasTexture ? alphaInfo.AlphaMode : TextureAlphaMode.Opaque,
             alphaUsage,
@@ -161,6 +163,7 @@ internal sealed class TieGltfMaterialBuilder
             reflectiveEnvironmentUri,
             headerModeBits,
             _profile,
+            doubleSided,
             glowEmission));
         Diagnostics.Add(BuildMaterialDiagnostic(
             materialIndex,
@@ -277,6 +280,7 @@ internal sealed class TieGltfMaterialBuilder
         string? reflectiveEnvironmentUri,
         short headerModeBits,
         TieGameProfile profile,
+        bool doubleSided,
         TieGltfGlowEmissionMaterial? glowEmission)
     {
         var useGlowEmission = glowEmission.HasValue;
@@ -304,9 +308,12 @@ internal sealed class TieGltfMaterialBuilder
         var material = new Dictionary<string, object>
         {
             ["name"] = name,
-            ["doubleSided"] = true,
             ["pbrMetallicRoughness"] = pbr
         };
+        if (doubleSided)
+        {
+            material["doubleSided"] = true;
+        }
         if (usesReflectiveMask && reflectiveEnvironmentTextureIndex.HasValue)
         {
             material["emissiveFactor"] = new[] { 0f, 0f, 0f };
@@ -642,6 +649,7 @@ internal sealed class TieGltfMaterialBuilder
     private readonly record struct MaterialVariantKey(
         int ShaderIndex,
         int PassFlags,
+        bool DoubleSided,
         bool UseGlowEmission,
         TextureAlphaMode TextureAlphaMode,
         TieMaterialAlphaUsage TextureAlphaUsage,

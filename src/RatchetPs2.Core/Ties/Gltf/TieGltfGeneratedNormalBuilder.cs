@@ -45,11 +45,6 @@ internal static class TieGltfGeneratedNormalBuilder
             }
 
             var faceNormal = Vector3.Normalize(normal);
-            if (weldDuplicatePositions && faceNormal.Y < 0f)
-            {
-                faceNormal = -faceNormal;
-            }
-
             normals[aIndex] += faceNormal;
             normals[bIndex] += faceNormal;
             normals[cIndex] += faceNormal;
@@ -143,7 +138,6 @@ internal static class TieGltfGeneratedNormalBuilder
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<uint> indices,
         Vector3[] indexNormals,
-        bool flipDownwardHorizontalFaces,
         bool restoreOpposedNonHorizontalFaces,
         IReadOnlySet<int>? protectedIndexOffsets = null)
     {
@@ -162,11 +156,6 @@ internal static class TieGltfGeneratedNormalBuilder
             }
 
             var faceNormal = Vector3.Normalize(normal);
-            if (flipDownwardHorizontalFaces && faceNormal.Y < 0f)
-            {
-                faceNormal = -faceNormal;
-            }
-
             faceNormal = ClampNearVerticalFaceNormalY(faceNormal);
             var minimumDot = FlatFaceIndexNormalMinimumDot;
             if (MathF.Abs(faceNormal.Y) < FlatHorizontalGeneratedNormalY)

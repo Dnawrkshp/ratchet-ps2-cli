@@ -141,7 +141,6 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 remapChunkUsage.UsedNormalRemapChunks,
                 remapChunkUsage.DominantUsedNormalRemapChunkIndex,
                 remapChunkUsage.DominantUsedNormalRemapChunkRemapCount,
-                strip.UsesPreviousStripReferencePhase,
                 selectedTargetModeScore.TargetMode.ToString(),
                 targetModeVotes,
                 triangleVotes,
@@ -152,8 +151,6 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
                 dominantLayout.ToString(),
                 score.InvertedStrongTriangleCount,
                 Average(score.InvertedDotSum, score.ScoredTriangleCount),
-                profile.SourceNormalPhaseWindingRepairAverageDot,
-                profile.UsePartialSmallStripSourceNormalPhaseWindingRepair,
                 ResolvePhaseVote(score)));
         }
 
@@ -425,18 +422,8 @@ internal static class TieGltfSourceNormalPhaseAnalyzer
             return packetDinkyUploadScores[0];
         }
 
-        var logicalFirstScore = scores.First(score =>
+        return scores.First(score =>
             score.TargetMode == TieGltfSourceNormalPhaseRemapTargetMode.LogicalFirst);
-        if (!strip.UsesPreviousStripReferencePhase)
-        {
-            return logicalFirstScore;
-        }
-
-        var packetRowScore = scores.First(score =>
-            score.TargetMode == TieGltfSourceNormalPhaseRemapTargetMode.PacketVertexRow);
-        return HasMeaningfulSourceNormalCoverage(strip, packetRowScore.Score)
-            ? packetRowScore
-            : logicalFirstScore;
     }
 
     private static bool HasMeaningfulSourceNormalCoverage(

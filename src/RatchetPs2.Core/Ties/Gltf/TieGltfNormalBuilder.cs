@@ -4,8 +4,6 @@ namespace RatchetPs2.Core.Ties;
 
 internal static class TieGltfNormalBuilder
 {
-    private const float DominantSourceNormalMinimumY = 0.4f;
-    private const float DominantSourceFallbackNormalMaximumY = 0.25f;
     private const float CrossLodExactPositionMinimumMissingCoverage = 0.95f;
     private const float DuplicatePositionExactNormalMinimumGeneratedDot = 0.85f;
     private const float RgbaRecipeSourceNormalMinimumGeneratedDot = 0.85f;
@@ -135,7 +133,6 @@ internal static class TieGltfNormalBuilder
                 positions,
                 indices,
                 indexNormals,
-                flipDownwardHorizontalFaces: true,
                 restoreOpposedNonHorizontalFaces: true,
                 protectedIndexOffsets: sourceIndexOffsets);
         }
@@ -163,7 +160,6 @@ internal static class TieGltfNormalBuilder
                 positions,
                 indices,
                 indexNormals,
-                flipDownwardHorizontalFaces: false,
                 restoreOpposedNonHorizontalFaces: false,
                 protectedIndexOffsets: sourceIndexOffsets);
         }
@@ -198,138 +194,6 @@ internal static class TieGltfNormalBuilder
             duplicatePositionNormalWeldDecision.CurrentScore.AverageDot,
             duplicatePositionNormalWeldDecision.WeldedScore.AverageDot,
             duplicatePositionNormalWeldDecision.WeldedScore.MinimumDot);
-    }
-
-    private static void PropagateDominantSourceNormalsByDuplicatePosition(
-        IReadOnlyList<Vector3> positions,
-        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
-        Vector3[] normals,
-        Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices)
-    {
-        var sourceNormalSumsByPosition = new Dictionary<TieGltfPositionKey, Vector3>();
-        foreach (var vertexIndex in sourceVertexIndices)
-        {
-            if (vertexIndex < 0
-                || vertexIndex >= positions.Count
-                || vertexIndex >= normals.Length
-                || normals[vertexIndex].Y < DominantSourceNormalMinimumY)
-            {
-                continue;
-            }
-
-            var key = TieGltfPositionKey.From(positions[vertexIndex]);
-            sourceNormalSumsByPosition.TryGetValue(key, out var sum);
-            sourceNormalSumsByPosition[key] = sum + normals[vertexIndex];
-        }
-
-        foreach (var pair in sourceNormalSumsByPosition.ToArray())
-        {
-            sourceNormalSumsByPosition[pair.Key] = pair.Value.LengthSquared() <= 1e-12f
-                ? Vector3.UnitY
-                : Vector3.Normalize(pair.Value);
-        }
-
-        for (var i = 0; i < positions.Count && i < normals.Length; i++)
-        {
-            if (sourceVertexIndices.Contains(i)
-                || normals[i].Y >= DominantSourceFallbackNormalMaximumY
-                || !sourceNormalSumsByPosition.TryGetValue(TieGltfPositionKey.From(positions[i]), out var sourceNormal))
-            {
-                continue;
-            }
-
-            ApplyDominantSourceNormal(i, sourceNormal, indexOffsetsByVertex, normals, indexNormals, sourceVertexIndices);
-        }
-    }
-
-    private static void FillWeakDominantSourceNormalsFromStripNeighbors(
-        TieLodTopology topology,
-        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
-        Vector3[] normals,
-        Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices)
-    {
-        foreach (var strip in topology.Strips)
-        {
-            var logicalVertexIndices = strip.LogicalVertices
-                .Select(vertex => vertex.LogicalVertexIndex)
-                .Where(index => index >= 0 && index < normals.Length)
-                .ToArray();
-            for (var i = 0; i < logicalVertexIndices.Length; i++)
-            {
-                var logicalVertexIndex = logicalVertexIndices[i];
-                if (sourceVertexIndices.Contains(logicalVertexIndex)
-                    || normals[logicalVertexIndex].Y >= DominantSourceFallbackNormalMaximumY)
-                {
-                    continue;
-                }
-
-                var sourceNormal = Vector3.Zero;
-                if (TryFindNeighborSourceNormal(-1, out var previousNormal))
-                {
-                    sourceNormal += previousNormal;
-                }
-
-                if (TryFindNeighborSourceNormal(1, out var nextNormal))
-                {
-                    sourceNormal += nextNormal;
-                }
-
-                if (sourceNormal.LengthSquared() <= 1e-12f)
-                {
-                    continue;
-                }
-
-                ApplyDominantSourceNormal(
-                    logicalVertexIndex,
-                    Vector3.Normalize(sourceNormal),
-                    indexOffsetsByVertex,
-                    normals,
-                    indexNormals,
-                    sourceVertexIndices);
-
-                bool TryFindNeighborSourceNormal(int direction, out Vector3 normal)
-                {
-                    for (var j = i + direction; j >= 0 && j < logicalVertexIndices.Length; j += direction)
-                    {
-                        var neighborIndex = logicalVertexIndices[j];
-                        if (sourceVertexIndices.Contains(neighborIndex)
-                            && normals[neighborIndex].Y >= DominantSourceNormalMinimumY)
-                        {
-                            normal = normals[neighborIndex];
-                            return true;
-                        }
-                    }
-
-                    normal = default;
-                    return false;
-                }
-            }
-        }
-    }
-
-    private static void ApplyDominantSourceNormal(
-        int logicalVertexIndex,
-        Vector3 sourceNormal,
-        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
-        Vector3[] normals,
-        Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices)
-    {
-        normals[logicalVertexIndex] = sourceNormal;
-        if (indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
-        {
-            foreach (var indexOffset in indexOffsets)
-            {
-                if (indexOffset >= 0 && indexOffset < indexNormals.Length)
-                {
-                    indexNormals[indexOffset] = sourceNormal;
-                }
-            }
-        }
-
-        sourceVertexIndices.Add(logicalVertexIndex);
     }
 
     private static int ApplyDuplicatePositionExactNormals(

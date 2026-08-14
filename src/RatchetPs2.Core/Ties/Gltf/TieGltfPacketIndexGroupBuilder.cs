@@ -7,32 +7,21 @@ internal static class TieGltfPacketIndexGroupBuilder
     public static TieGltfPacketIndexGroupBuildResult Build(
         TieClass tie,
         TieLodTopology topology,
-        IReadOnlyList<Vector4> glowColors,
-        IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey>? sourceNormalPhaseRepairTriangles)
+        IReadOnlyList<Vector4> glowColors)
     {
         ArgumentNullException.ThrowIfNull(tie);
         ArgumentNullException.ThrowIfNull(topology);
         ArgumentNullException.ThrowIfNull(glowColors);
 
         var packetIndexGroups = SplitPacketIndexGroupsByGlowEmission(
-            BuildPacketIndexGroups(tie, topology, sourceNormalPhaseRepairTriangles),
+            BuildPacketIndexGroups(tie, topology),
             tie,
             glowColors);
         var packetRgbaSlotCount = CountPacketRgbaSlots(tie, topology.LodIndex);
-        var sourceNormalPhaseRepairTriangleCount = CountSourceNormalPhaseRepairTriangles(
-            topology,
-            sourceNormalPhaseRepairTriangles);
-        var sourceNormalPhaseRepairStripCount = topology.Triangles
-            .Where(triangle => ShouldApplySourceNormalPhaseRepair(triangle, sourceNormalPhaseRepairTriangles))
-            .Select(triangle => triangle.StripIndex)
-            .Distinct()
-            .Count();
 
         return new TieGltfPacketIndexGroupBuildResult(
             packetIndexGroups,
-            packetRgbaSlotCount,
-            sourceNormalPhaseRepairStripCount,
-            sourceNormalPhaseRepairTriangleCount);
+            packetRgbaSlotCount);
     }
 
     private static int CountPacketRgbaSlots(TieClass tie, int lodIndex)
@@ -45,8 +34,7 @@ internal static class TieGltfPacketIndexGroupBuilder
 
     private static List<PacketIndexGroup> BuildPacketIndexGroups(
         TieClass tie,
-        TieLodTopology topology,
-        IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey>? sourceNormalPhaseRepairTriangles)
+        TieLodTopology topology)
     {
         var packetsByIndex = tie.PacketTables
             .FirstOrDefault(table => table.LodIndex == topology.LodIndex)?
@@ -99,17 +87,9 @@ internal static class TieGltfPacketIndexGroupBuilder
                 groups.Add(currentGroup.Value);
             }
 
-            var a = triangle.A;
-            var b = triangle.B;
-            var c = triangle.C;
-            if (ShouldApplySourceNormalPhaseRepair(triangle, sourceNormalPhaseRepairTriangles))
-            {
-                (b, c) = (c, b);
-            }
-
-            currentGroup.Value.Indices.Add((uint)a);
-            currentGroup.Value.Indices.Add((uint)b);
-            currentGroup.Value.Indices.Add((uint)c);
+            currentGroup.Value.Indices.Add((uint)triangle.A);
+            currentGroup.Value.Indices.Add((uint)triangle.B);
+            currentGroup.Value.Indices.Add((uint)triangle.C);
         }
 
         return groups;
@@ -148,23 +128,6 @@ internal static class TieGltfPacketIndexGroupBuilder
             block.Bytes[offset + 4],
             block.Bytes[offset + 8],
             block.Bytes[offset + 12]);
-    }
-
-    private static int CountSourceNormalPhaseRepairTriangles(
-        TieLodTopology topology,
-        IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey>? sourceNormalPhaseRepairTriangles)
-    {
-        return topology.Triangles.Count(triangle =>
-            ShouldApplySourceNormalPhaseRepair(triangle, sourceNormalPhaseRepairTriangles));
-    }
-
-    private static bool ShouldApplySourceNormalPhaseRepair(
-        TieTriangle triangle,
-        IReadOnlySet<TieGltfSourceNormalPhaseTriangleKey>? sourceNormalPhaseRepairTriangles)
-    {
-        return sourceNormalPhaseRepairTriangles?.Contains(new TieGltfSourceNormalPhaseTriangleKey(
-            triangle.StripIndex,
-            triangle.TriangleIndexInStrip)) == true;
     }
 
     private static List<PacketIndexGroup> SplitPacketIndexGroupsByGlowEmission(
@@ -306,6 +269,4 @@ internal static class TieGltfPacketIndexGroupBuilder
 
 internal sealed record TieGltfPacketIndexGroupBuildResult(
     IReadOnlyList<PacketIndexGroup> PacketIndexGroups,
-    int PacketRgbaSlotCount,
-    int SourceNormalPhaseWindingRepairStripCount,
-    int SourceNormalPhaseWindingRepairTriangleCount);
+    int PacketRgbaSlotCount);

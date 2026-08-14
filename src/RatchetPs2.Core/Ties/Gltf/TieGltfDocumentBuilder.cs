@@ -18,8 +18,6 @@ internal static class TieGltfDocumentBuilder
         TieGltfAmbientBuildResult ambientIndexResult,
         IReadOnlyList<PacketIndexGroup> sourcePacketIndexGroups,
         int packetRgbaSlotCount,
-        int sourceNormalPhaseWindingRepairStripCount,
-        int sourceNormalPhaseWindingRepairTriangleCount,
         int sourcePositionCount,
         string binFileName,
         TieGameProfile profile,
@@ -128,8 +126,14 @@ internal static class TieGltfDocumentBuilder
         }
 
         var primitives = new List<Dictionary<string, object>>();
+        var packetsByIndex = tie.PacketTables
+            .FirstOrDefault(table => table.LodIndex == topology.LodIndex)?
+            .Packets
+            .ToDictionary(packet => packet.PacketIndex) ?? [];
         foreach (var group in geometry.PacketIndexGroups)
         {
+            packetsByIndex.TryGetValue(group.PacketIndex, out var packet);
+            var bfcDistance = packet?.BfcDistance ?? 0;
             var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
             var materialIndex = materialBuilder.GetMaterialIndex(
                 group.ShaderIndex,
@@ -138,6 +142,7 @@ internal static class TieGltfDocumentBuilder
                 group.MultipassUvSize,
                 group.EnvPassBleedColor,
                 tie.Header.ModeBits,
+                doubleSided: bfcDistance == 0,
                 group.UseGlowEmission ? glowEmission : null);
             var glowRgbaIndexCount = TieGltfGlowBuilder.CountActiveIndices(group.Indices, geometry.GlowColors);
             var primitiveDefinition = new Dictionary<string, object>
@@ -152,6 +157,8 @@ internal static class TieGltfDocumentBuilder
                 primitiveDefinition["extras"] = new
                 {
                     group.PacketIndex,
+                    BfcDistance = bfcDistance,
+                    TieUsesBackfaceCulling = bfcDistance > 0,
                     group.ShaderIndex,
                     group.MultipassOffset,
                     MultipassType = group.PassFlags,
@@ -211,9 +218,6 @@ internal static class TieGltfDocumentBuilder
                         glowColorResult,
                         ambientIndexResult,
                         packetRgbaSlotCount,
-                        sourceNormalPhaseWindingRepairStripCount,
-                        sourceNormalPhaseWindingRepairTriangleCount,
-                        geometry.WindingRepairResult,
                         geometry.SuppressedGeneratedNormalFallbackVertexCount,
                         geometry.SourceNormalMask.Count(value => value < 0.5f),
                         sourceNormalMaskAccessor.HasValue ? geometry.SourceNormalMask.Count : 0,
@@ -257,10 +261,6 @@ internal static class TieGltfDocumentBuilder
             topology.SecondaryAddressMappedLogicalVertexCount,
             topology.UnresolvedLogicalVertexCount,
             topology.TriangleCount,
-            PreviousStripReferencePhaseStripCount = topology.Strips.Count(strip => strip.UsesPreviousStripReferencePhase),
-            PreviousStripReferencePhaseTriangleCount = topology.Strips
-                .Where(strip => strip.UsesPreviousStripReferencePhase)
-                .Sum(strip => strip.TriangleCount),
             SourceNormalVertexCount = normalResult.SourceNormalVertexCount,
             SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             SourcePacketRowNormalVertexCount = normalResult.PacketRowNormalVertexCount,
@@ -285,18 +285,12 @@ internal static class TieGltfDocumentBuilder
             SourceNormalPhaseInvertedVoteStripCount = sourceNormalPhaseAnalysis.InvertedVoteStripCount,
             SourceNormalPhaseAmbiguousVoteStripCount = sourceNormalPhaseAnalysis.AmbiguousVoteStripCount,
             SourceNormalPhaseInsufficientVoteStripCount = sourceNormalPhaseAnalysis.InsufficientVoteStripCount,
-            SourceNormalPhaseWindingRepairStripCount = sourceNormalPhaseWindingRepairStripCount,
-            SourceNormalPhaseWindingRepairTriangleCount = sourceNormalPhaseWindingRepairTriangleCount,
             normalResult.DuplicatePositionNormalWeldMode,
             normalResult.DuplicatePositionNormalPairCount,
             normalResult.DuplicatePositionIncompatibleNormalPairCount,
             normalResult.DuplicatePositionCurrentAverageFaceDot,
             normalResult.DuplicatePositionWeldedAverageFaceDot,
             normalResult.DuplicatePositionWeldedMinimumFaceDot,
-            WindingInvertedComponentTriangleCount = geometry.WindingRepairResult.InvertedComponentTriangleCount,
-            WindingLocalInwardTriangleCount = geometry.WindingRepairResult.LocalInwardTriangleCount,
-            WindingOpposedNormalTriangleCount = geometry.WindingRepairResult.OpposedNormalTriangleCount,
-            WindingUpperHorizontalTriangleCount = geometry.WindingRepairResult.UpperHorizontalTriangleCount,
             GeneratedNormalFallbackVertexCount = sourcePositionCount - normalResult.SourceNormalVertexCount,
             ExpandedGeneratedNormalFallbackVertexCount = geometry.SourceNormalMask.Count(value => value < 0.5f),
             SourceNormalMaskAttributeCount = sourceNormalMaskAccessor.HasValue ? geometry.SourceNormalMask.Count : 0,
@@ -405,7 +399,6 @@ internal static class TieGltfDocumentBuilder
                 strip.PacketStripIndex,
                 strip.ShaderIndex,
                 strip.TriangleCount,
-                strip.UsesPreviousStripReferencePhase,
                 strip.FirstToken,
                 strip.PacketDinkyUploadRemappedVertexCount,
                 strip.LogicalRemappedVertexCount,
@@ -418,8 +411,6 @@ internal static class TieGltfDocumentBuilder
                 strip.DominantUsedNormalRemapChunkRemapCount,
                 strip.SelectedTargetMode,
                 strip.TargetModeVotes,
-                strip.WindingRepairTriangleCount,
-                strip.WindingRepairTriangleIndices,
                 strip.TriangleVotes,
                 strip.ScoredTriangleCount,
                 strip.BestCurrentLayout,
@@ -428,12 +419,6 @@ internal static class TieGltfDocumentBuilder
                 strip.BestInvertedLayout,
                 strip.BestInvertedStrongTriangleCount,
                 strip.BestInvertedAverageDot,
-                strip.UsesDenseSourceNormalRepair,
-                strip.UsesNearDenseSourceNormalRepair,
-                strip.UsesSmallStripSourceNormalRepair,
-                strip.UsesPartialSmallStripSourceNormalRepair,
-                strip.UsesMixedTriangleSourceNormalRepair,
-                strip.ShouldApplyWindingRepair,
                 PhaseVote = strip.PhaseVote.ToString()
             }).ToArray(),
             GlowRgbaRemaps = tie.GlowRgbaRemaps.Select(remap => new
@@ -885,8 +870,6 @@ internal static class TieGltfDocumentBuilder
         var tokenReferenceDiverges = tokenReferencePrimitive is not null
             && tokenReferencePrimitive.PacketStripIndex == primitive.PacketStripIndex
             && !PrimitiveVertexReferencesMatch(primitive, tokenReferencePrimitive);
-        var topologyUsesPreviousStripReferencePhase = topologyStrip?.UsesPreviousStripReferencePhase ?? false;
-        var appliedStartPhaseFlip = primitive.WindingOrder ^ topologyUsesPreviousStripReferencePhase;
         return new
         {
             primitive.Index,
@@ -900,9 +883,7 @@ internal static class TieGltfDocumentBuilder
                 ? null
                 : FormatOffset(previousPrimitive.Vertices[^1].GsPacketWriteOffset),
             TopologyStripIndex = topologyStrip?.StripIndex,
-            TopologyUsesPreviousStripReferencePhase = topologyStrip?.UsesPreviousStripReferencePhase,
-            TopologyUsesTokenReferenceTriangleSequence = topologyStrip?.UsesTokenReferenceTriangleSequence,
-            AppliedStartPhaseFlip = appliedStartPhaseFlip,
+            AppliedStartPhaseFlip = primitive.WindingOrder,
             StripTokenCount = stripControl?.TokenCount,
             StripVuAddress = stripControl is null ? null : FormatByte(stripControl.VuAddress),
             StripFlags = stripControl is null ? null : FormatByte(stripControl.Flags),
@@ -946,7 +927,7 @@ internal static class TieGltfDocumentBuilder
                     tie,
                     stripControl,
                     primitive,
-                    appliedStartPhaseFlip)
+                    primitive.WindingOrder)
                 : Array.Empty<object>(),
             TriangleSequenceCandidates = includeTriangleDiagnostics
                 ? BuildTriangleSequenceCandidateDiagnostics(tie, primitive, tokenReferencePrimitive)
@@ -1432,9 +1413,6 @@ internal static class TieGltfDocumentBuilder
         TieGltfGlowBuildResult glowColorResult,
         TieGltfAmbientBuildResult ambientIndexResult,
         int packetRgbaSlotCount,
-        int sourceNormalPhaseWindingRepairStripCount,
-        int sourceNormalPhaseWindingRepairTriangleCount,
-        TieGltfWindingRepairResult windingRepairResult,
         int suppressedGeneratedNormalFallbackVertexCount,
         int expandedGeneratedNormalFallbackVertexCount,
         int sourceNormalMaskAttributeCount,
@@ -1471,10 +1449,6 @@ internal static class TieGltfDocumentBuilder
             topology.UnresolvedLogicalVertexCount,
             topology.StripCount,
             topology.TriangleCount,
-            PreviousStripReferencePhaseStripCount = topology.Strips.Count(strip => strip.UsesPreviousStripReferencePhase),
-            PreviousStripReferencePhaseTriangleCount = topology.Strips
-                .Where(strip => strip.UsesPreviousStripReferencePhase)
-                .Sum(strip => strip.TriangleCount),
             normalResult.SourceNormalVertexCount,
             SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             normalResult.PacketRowNormalVertexCount,
@@ -1499,18 +1473,12 @@ internal static class TieGltfDocumentBuilder
             SourceNormalPhaseInvertedVoteStripCount = sourceNormalPhaseAnalysis.InvertedVoteStripCount,
             SourceNormalPhaseAmbiguousVoteStripCount = sourceNormalPhaseAnalysis.AmbiguousVoteStripCount,
             SourceNormalPhaseInsufficientVoteStripCount = sourceNormalPhaseAnalysis.InsufficientVoteStripCount,
-            SourceNormalPhaseWindingRepairStripCount = sourceNormalPhaseWindingRepairStripCount,
-            SourceNormalPhaseWindingRepairTriangleCount = sourceNormalPhaseWindingRepairTriangleCount,
             normalResult.DuplicatePositionNormalWeldMode,
             normalResult.DuplicatePositionNormalPairCount,
             normalResult.DuplicatePositionIncompatibleNormalPairCount,
             normalResult.DuplicatePositionCurrentAverageFaceDot,
             normalResult.DuplicatePositionWeldedAverageFaceDot,
             normalResult.DuplicatePositionWeldedMinimumFaceDot,
-            WindingInvertedComponentTriangleCount = windingRepairResult.InvertedComponentTriangleCount,
-            WindingLocalInwardTriangleCount = windingRepairResult.LocalInwardTriangleCount,
-            WindingOpposedNormalTriangleCount = windingRepairResult.OpposedNormalTriangleCount,
-            WindingUpperHorizontalTriangleCount = windingRepairResult.UpperHorizontalTriangleCount,
             ExpandedGeneratedNormalFallbackVertexCount = expandedGeneratedNormalFallbackVertexCount,
             SourceNormalMaskAttributeCount = sourceNormalMaskAttributeCount,
             SourceNormalStateAttributeCount = sourceNormalStateAttributeCount,

@@ -633,31 +633,6 @@ internal static class TieGltfSourceNormalBuilder
         return bestDot >= 0f;
     }
 
-    private static bool TrySelectFirstSourceTableNormal(
-        TieClass tie,
-        IReadOnlyList<TieVertexNormalRemap> remaps,
-        TieGltfRawSourceNormalLayout layout,
-        bool usePackedVertexNormalTableSource,
-        out Vector3 sourceNormal)
-    {
-        foreach (var remap in remaps)
-        {
-            if (remap.NormalIndex >= 0
-                && remap.NormalIndex < tie.VertexNormals.Count
-                && TryNormalizeGltfNormal(
-                    tie.VertexNormals[remap.NormalIndex],
-                    layout,
-                    usePackedVertexNormalTableSource,
-                    out sourceNormal))
-            {
-                return true;
-            }
-        }
-
-        sourceNormal = default;
-        return false;
-    }
-
     private static bool ApplySourceNormalDirect(
         TieClass tie,
         IReadOnlyList<TieVertexNormalRemap> remaps,

@@ -9,8 +9,7 @@ internal static class TiePacketDataBlockReader
     public static List<TiePacketDataBlock> Read(
         byte[] bytes,
         TieClassHeader header,
-        IReadOnlyList<TiePacketTable> tables,
-        TieClassReadOptions options)
+        IReadOnlyList<TiePacketTable> tables)
     {
         var packets = tables
             .SelectMany(table => table.Packets)
@@ -42,9 +41,6 @@ internal static class TiePacketDataBlockReader
                 stripControls,
                 decodedVertices,
                 useStripTokenReferences: true);
-            var primitives = options.UseStripTokenReferencesForTopology
-                ? tokenReferencePrimitives
-                : physicalPrimitives;
             blocks.Add(new TiePacketDataBlock
             {
                 LodIndex = packet.LodIndex,
@@ -64,7 +60,7 @@ internal static class TiePacketDataBlockReader
                 DecodedVertices = decodedVertices,
                 PhysicalPrimitives = physicalPrimitives,
                 TokenReferencePrimitives = tokenReferencePrimitives,
-                Primitives = primitives
+                Primitives = physicalPrimitives
             });
         }
 

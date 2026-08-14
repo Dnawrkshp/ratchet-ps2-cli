@@ -28,8 +28,8 @@ public static class TieClassReader
 
         var header = TieClassHeaderReader.Read(reader);
         var packetTables = TiePacketTableReader.Read(reader, bytes, header);
-        var packetDataBlocks = TiePacketDataBlockReader.Read(bytes, header, packetTables, options);
-        var lodTopologies = TieLodTopologyBuilder.Build(packetDataBlocks, options);
+        var packetDataBlocks = TiePacketDataBlockReader.Read(bytes, header, packetTables);
+        var lodTopologies = TieLodTopologyBuilder.Build(packetDataBlocks);
         var vertexNormals = TieVertexNormalReader.Read(bytes, header, options);
         var vertexNormalRemaps = TieVertexNormalReader.ReadRemaps(
             bytes,

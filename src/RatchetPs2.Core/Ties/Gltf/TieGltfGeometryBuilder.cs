@@ -27,8 +27,6 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalVertexStates,
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
         bool suppressGeneratedNormalFallback,
-        bool useGeometryWindingRepair,
-        bool useLocalInwardGeometryWindingRepair,
         IReadOnlyList<Vector2> texCoords,
         IReadOnlyList<Vector2> multipassTexCoords,
         IReadOnlyList<Vector4> glowColors,
@@ -59,10 +57,6 @@ internal static class TieGltfGeometryBuilder
         var includeIndexAmbientIndices = indexAmbientIndices.Count == sourceIndexCount
             && indexAmbientIndices.Any(index => index >= 0f);
         var includeAmbientIndices = includeSourceAmbientIndices || includeIndexAmbientIndices;
-        var enableFlatProfileNormalFallbacks = useGeometryWindingRepair && !suppressGeneratedNormalFallback;
-        var restoreFlatProfileFaceNormals = enableFlatProfileNormalFallbacks
-            && TieGltfFlatProfileNormalRepairer.ShouldRestore(positions);
-        var enableLocalInwardWindingRepair = useLocalInwardGeometryWindingRepair;
         var expandedPositions = positions.ToList();
         var expandedNormals = normals.ToList();
         var sourceNormalVertexIndexSet = sourceNormalVertexIndices.ToHashSet();
@@ -169,53 +163,6 @@ internal static class TieGltfGeometryBuilder
                 expandedIndices));
         }
 
-        var windingRepairResult = useGeometryWindingRepair
-            ? TieGltfWindingRepairer.RestoreInvertedWindingConnectedComponents(
-                expandedPositions,
-                expandedNormals,
-                expandedSourceOnlyNormals,
-                expandedSourceNormalMask,
-                expandedSourceNormalStates,
-                expandedTexCoords,
-                expandedMultipassTexCoords,
-                includeMultipassTexCoords,
-                expandedGlowColors,
-                includeGlowColors,
-                expandedAmbientIndices,
-                includeAmbientIndices,
-                expandedGroups,
-                enableLocalInwardRepair: enableLocalInwardWindingRepair,
-                smoothLocalInwardComponentNormals: useLocalInwardGeometryWindingRepair,
-                enableUpperHorizontalFlatFaceFallback: true)
-            : TieGltfWindingRepairResult.None;
-
-        if (restoreFlatProfileFaceNormals)
-        {
-            TieGltfFlatProfileNormalRepairer.RestoreFlatProfileExpandedFaceNormals(
-                expandedPositions,
-                expandedNormals,
-                expandedSourceOnlyNormals,
-                expandedSourceNormalMask,
-                expandedSourceNormalStates,
-                expandedTexCoords,
-                expandedMultipassTexCoords,
-                includeMultipassTexCoords,
-                expandedGlowColors,
-                includeGlowColors,
-                expandedAmbientIndices,
-                includeAmbientIndices,
-                expandedGroups);
-        }
-
-        if (restoreFlatProfileFaceNormals)
-        {
-            windingRepairResult = windingRepairResult.WithOpposedNormalTriangleCount(
-                TieGltfWindingRepairer.RestoreTrianglesOpposedToVertexNormals(
-                    expandedPositions,
-                    expandedNormals,
-                    expandedGroups));
-        }
-
         RestorePoorlyAlignedSourceExpandedNormals();
 
         var suppressedGeneratedNormalFallbackVertexCount = 0;
@@ -247,7 +194,6 @@ internal static class TieGltfGeometryBuilder
             expandedGlowColors,
             expandedAmbientIndices,
             expandedGroups,
-            windingRepairResult,
             suppressedGeneratedNormalFallbackVertexCount);
 
         Vector3 GetIndexNormal(int indexOffset, int sourceIndex)
@@ -771,5 +717,4 @@ internal sealed record GltfGeometry(
     List<Vector4> GlowColors,
     List<float> AmbientIndices,
     List<PacketIndexGroup> PacketIndexGroups,
-    TieGltfWindingRepairResult WindingRepairResult,
     int SuppressedGeneratedNormalFallbackVertexCount);

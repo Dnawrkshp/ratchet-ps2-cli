@@ -20,17 +20,12 @@ public sealed record TieClassReadOptions
 {
     public static TieClassReadOptions Default { get; } = new();
 
-    public bool UseStripTokenReferencesForTopology { get; init; }
-    public bool UsePreviousStripReferencePhaseForTopology { get; init; }
     public int VertexNormalHeaderSize { get; init; } = 0x10;
 
     public static TieClassReadOptions ForGameProfile(TieGameProfile? profile)
     {
         return new TieClassReadOptions
         {
-            UseStripTokenReferencesForTopology = profile?.UseStripTokenReferencesForTopology ?? false,
-            UsePreviousStripReferencePhaseForTopology =
-                profile?.UsePreviousStripReferencePhaseForTopology ?? false,
             VertexNormalHeaderSize = profile?.VertexNormalHeaderSize ?? Default.VertexNormalHeaderSize
         };
     }
@@ -269,8 +264,6 @@ public sealed class TieTriangleStrip
     public required int TriangleCount { get; init; }
     public required byte VuAddress { get; init; }
     public required byte Flags { get; init; }
-    public bool UsesPreviousStripReferencePhase { get; init; }
-    public bool UsesTokenReferenceTriangleSequence { get; init; }
     public int? ShaderIndex { get; init; }
     public required byte[] Tokens { get; init; }
     public IReadOnlyList<TieLogicalVertex> LogicalVertices { get; init; } = [];
