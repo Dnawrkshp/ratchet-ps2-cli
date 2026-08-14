@@ -260,7 +260,7 @@ static void ValidateDlLevel10Chunk283Texture8UvSpan(string repoRoot)
                 [8] = new TextureSize(128, 128)
             },
             Minify = true,
-            MetadataMode = GltfExportMetadataMode.RuntimeOnly
+            MetadataMode = GltfExportMetadataMode.Full
         });
 
     using var document = JsonDocument.Parse(export.GltfBytes);

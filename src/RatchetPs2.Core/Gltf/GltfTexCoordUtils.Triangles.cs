@@ -307,9 +307,12 @@ public static partial class GltfTexCoordUtils
         var bestRange = Range(a, b, c);
         var originalRange = bestRange;
         var bestInteriorBoundaryCount = CountInteriorIntegerBoundaries(a, b, c);
+        var unwrapRepeatedTileSeam = originalRange < 1f - rangeImprovementTolerance
+            && bestInteriorBoundaryCount == 0
+            && StraddlesRepeatedTileSeam(a, b, c);
         if (originalRange < 1f - rangeImprovementTolerance
             && bestInteriorBoundaryCount == 0
-            && !StraddlesRepeatedTileSeam(a, b, c))
+            && !unwrapRepeatedTileSeam)
         {
             return [a, b, c];
         }
@@ -329,9 +332,11 @@ public static partial class GltfTexCoordUtils
                 }
 
                 var candidateInteriorBoundaryCount = CountInteriorIntegerBoundaries(a, candidateB, candidateC);
-                if (candidateInteriorBoundaryCount < bestInteriorBoundaryCount
-                    || (candidateInteriorBoundaryCount == bestInteriorBoundaryCount
-                        && candidateRange < bestRange - rangeImprovementTolerance))
+                if (unwrapRepeatedTileSeam
+                    ? candidateRange < bestRange - rangeImprovementTolerance
+                    : candidateInteriorBoundaryCount < bestInteriorBoundaryCount
+                        || (candidateInteriorBoundaryCount == bestInteriorBoundaryCount
+                            && candidateRange < bestRange - rangeImprovementTolerance))
                 {
                     bestInteriorBoundaryCount = candidateInteriorBoundaryCount;
                     bestRange = candidateRange;
