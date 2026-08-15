@@ -4,10 +4,9 @@ namespace RatchetPs2.Core.Ties;
 
 internal static class TieGltfNormalBuilder
 {
+    private const int LightingRecipeConstantColorSourceSlot = 0x7FC / sizeof(int);
     private const float CrossLodExactPositionMinimumMissingCoverage = 0.95f;
     private const float DuplicatePositionExactNormalMinimumGeneratedDot = 0.85f;
-    private const float RgbaRecipeSourceNormalMinimumGeneratedDot = 0.85f;
-    private const int RgbaRecipeConstantColorSourceSlot = 0x7FC / sizeof(int);
 
     public static TieGltfNormalBuildResult Build(
         TieClass tie,
@@ -26,8 +25,13 @@ internal static class TieGltfNormalBuilder
 
         var flatHorizontalBounds = TieGltfGeneratedNormalBuilder.IsFlatHorizontalBounds(
             TieGltfGeneratedNormalBuilder.GetPositionBounds(positions));
-        var generatedNormals = TieGltfGeneratedNormalBuilder.BuildGeneratedNormals(positions, indices).ToArray();
-        var generatedIndexNormals = flatHorizontalBounds
+        var useLightingRecipes = profile.UsePackedVertexNormalTableSource
+            && tie.RgbaRemapOperations.Any(operation => operation.LodIndex == topology.LodIndex);
+        var generatedNormals = TieGltfGeneratedNormalBuilder.BuildGeneratedNormals(
+            positions,
+            indices,
+            weldDuplicatePositions: !useLightingRecipes && flatHorizontalBounds).ToArray();
+        var generatedIndexNormals = useLightingRecipes || flatHorizontalBounds
             ? TieGltfGeneratedNormalBuilder.BuildIndexNormalsFromVertexNormals(generatedNormals, indices).ToArray()
             : TieGltfGeneratedNormalBuilder.BuildGeneratedIndexNormals(positions, indices).ToArray();
         var normals = generatedNormals.ToArray();
@@ -37,31 +41,14 @@ internal static class TieGltfNormalBuilder
         var sourceVertexStates = new TieGltfSourceNormalState[positions.Count];
         var sourceIndexStates = new TieGltfSourceNormalState[indices.Count];
         var indexOffsetsByVertex = TieGltfGeneratedNormalBuilder.BuildIndexOffsetsByVertex(indices);
-        var tableNormalResult = TieGltfSourceNormalBuilder.ApplyVertexNormalTableRemaps(
-            tie,
-            topology,
-            allowLogicalVertexRemaps: !flatHorizontalBounds,
-            preferVuAddressRemaps: profile.PreferVuAddressSourceNormalRemaps,
-            positions,
-            indexOffsetsByVertex,
-            generatedNormals,
-            generatedIndexNormals,
-            normals,
-            indexNormals,
-            sourceVertexIndices,
-            sourceIndexOffsets,
-            sourceVertexStates,
-            sourceIndexStates,
-            profile.UsePackedVertexNormalTableSource,
-            sourceNormalPhaseAnalysis.DominantLayout);
-        var rgbaRecipeNormalResult = profile.UseRgbaRecipeSourceNormals
-            ? ApplyRgbaRecipeSourceNormals(
+        var tableNormalResult = useLightingRecipes
+            ? new TieGltfSourceNormalTableApplyResult(0, null)
+            : TieGltfSourceNormalBuilder.ApplyVertexNormalTableRemaps(
                 tie,
                 topology,
-                tableNormalResult.Selection?.Layout
-                    ?? sourceNormalPhaseAnalysis.DominantLayout
-                    ?? TieGltfRawSourceNormalLayout.Default,
-                profile.UsePackedVertexNormalTableSource,
+                allowLogicalVertexRemaps: !flatHorizontalBounds,
+                preferVuAddressRemaps: profile.PreferVuAddressSourceNormalRemaps,
+                positions,
                 indexOffsetsByVertex,
                 generatedNormals,
                 generatedIndexNormals,
@@ -70,9 +57,22 @@ internal static class TieGltfNormalBuilder
                 sourceVertexIndices,
                 sourceIndexOffsets,
                 sourceVertexStates,
+                sourceIndexStates,
+                profile.UsePackedVertexNormalTableSource,
+                sourceNormalPhaseAnalysis.DominantLayout);
+        var lightingRecipeNormalResult = useLightingRecipes
+            ? ApplyLightingRecipeNormals(
+                tie,
+                topology,
+                indexOffsetsByVertex,
+                normals,
+                indexNormals,
+                sourceVertexIndices,
+                sourceIndexOffsets,
+                sourceVertexStates,
                 sourceIndexStates)
-            : TieGltfRgbaRecipeNormalApplyResult.Empty;
-        var packetRowNormalVertexCount = profile.UsePacketRowSourceNormals
+            : TieGltfLightingRecipeNormalApplyResult.Empty;
+        var packetRowNormalVertexCount = !useLightingRecipes && profile.UsePacketRowSourceNormals
             ? ApplyPacketRowNormals(
                 topology,
                 profile.InvertDecodedFatVertexSourceNormals,
@@ -86,7 +86,7 @@ internal static class TieGltfNormalBuilder
                 sourceVertexStates,
                 sourceIndexStates)
             : 0;
-        var crossLodExactNormalVertexCount = ApplyCrossLodExactPositionNormals(
+        var crossLodExactNormalVertexCount = useLightingRecipes ? 0 : ApplyCrossLodExactPositionNormals(
             tie,
             topology,
             profile.PreferVuAddressSourceNormalRemaps,
@@ -102,66 +102,74 @@ internal static class TieGltfNormalBuilder
             sourceIndexOffsets,
             sourceVertexStates,
             sourceIndexStates);
-        var duplicatePositionExactNormalVertexCount = ApplyDuplicatePositionExactNormals(
-            positions,
-            indexOffsetsByVertex,
-            generatedNormals,
-            generatedIndexNormals,
-            normals,
-            indexNormals,
-            sourceVertexIndices,
-            sourceIndexOffsets,
-            sourceVertexStates,
-            sourceIndexStates);
-        SealSourceNormalIndexOffsets(
-            indices,
-            generatedIndexNormals,
-            normals,
-            indexNormals,
-            sourceVertexIndices,
-            sourceIndexOffsets,
-            sourceVertexStates,
-            sourceIndexStates);
+        var duplicatePositionExactNormalVertexCount = useLightingRecipes
+            ? 0
+            : ApplyDuplicatePositionExactNormals(
+                positions,
+                indexOffsetsByVertex,
+                generatedNormals,
+                generatedIndexNormals,
+                normals,
+                indexNormals,
+                sourceVertexIndices,
+                sourceIndexOffsets,
+                sourceVertexStates,
+                sourceIndexStates);
+        if (!useLightingRecipes)
+        {
+            SealSourceNormalIndexOffsets(
+                indices,
+                generatedIndexNormals,
+                normals,
+                indexNormals,
+                sourceVertexIndices,
+                sourceIndexOffsets,
+                sourceVertexStates,
+                sourceIndexStates);
+        }
 
         var duplicatePositionNormalWeldDecision = TieGltfDuplicatePositionNormalWeldDecision.None;
-        if (flatHorizontalBounds)
+        if (!useLightingRecipes)
         {
-            TieGltfGeneratedNormalBuilder.WeldNormalsByPosition(positions, normals);
-            TieGltfGeneratedNormalBuilder.RestoreFlatHorizontalGeneratedNormals(generatedNormals, normals, sourceVertexIndices);
-            indexNormals = TieGltfGeneratedNormalBuilder.BuildIndexNormalsFromVertexNormals(normals, indices).ToArray();
-            TieGltfGeneratedNormalBuilder.RestoreStronglyTiltedFlatFaceIndexNormals(
-                positions,
-                indices,
-                indexNormals,
-                restoreOpposedNonHorizontalFaces: true,
-                protectedIndexOffsets: sourceIndexOffsets);
-        }
-        else
-        {
-            duplicatePositionNormalWeldDecision = TieGltfGeneratedNormalBuilder.EvaluateDuplicatePositionIndexNormalWeld(positions, indices, indexNormals);
-            if (duplicatePositionNormalWeldDecision.ShouldWeld)
+            if (flatHorizontalBounds)
             {
-                TieGltfGeneratedNormalBuilder.WeldIndexNormalsByPosition(
+                TieGltfGeneratedNormalBuilder.WeldNormalsByPosition(positions, normals);
+                TieGltfGeneratedNormalBuilder.RestoreFlatHorizontalGeneratedNormals(generatedNormals, normals, sourceVertexIndices);
+                indexNormals = TieGltfGeneratedNormalBuilder.BuildIndexNormalsFromVertexNormals(normals, indices).ToArray();
+                TieGltfGeneratedNormalBuilder.RestoreStronglyTiltedFlatFaceIndexNormals(
                     positions,
                     indices,
                     indexNormals,
-                    sourceIndexOffsets);
+                    restoreOpposedNonHorizontalFaces: true,
+                    protectedIndexOffsets: sourceIndexOffsets);
             }
             else
             {
-                TieGltfGeneratedNormalBuilder.SmoothCompatibleIndexNormalsByPosition(
+                duplicatePositionNormalWeldDecision = TieGltfGeneratedNormalBuilder.EvaluateDuplicatePositionIndexNormalWeld(positions, indices, indexNormals);
+                if (duplicatePositionNormalWeldDecision.ShouldWeld)
+                {
+                    TieGltfGeneratedNormalBuilder.WeldIndexNormalsByPosition(
+                        positions,
+                        indices,
+                        indexNormals,
+                        sourceIndexOffsets);
+                }
+                else
+                {
+                    TieGltfGeneratedNormalBuilder.SmoothCompatibleIndexNormalsByPosition(
+                        positions,
+                        indices,
+                        indexNormals,
+                        sourceIndexOffsets);
+                }
+
+                TieGltfGeneratedNormalBuilder.RestoreStronglyTiltedFlatFaceIndexNormals(
                     positions,
                     indices,
                     indexNormals,
-                    sourceIndexOffsets);
+                    restoreOpposedNonHorizontalFaces: false,
+                    protectedIndexOffsets: sourceIndexOffsets);
             }
-
-            TieGltfGeneratedNormalBuilder.RestoreStronglyTiltedFlatFaceIndexNormals(
-                positions,
-                indices,
-                indexNormals,
-                restoreOpposedNonHorizontalFaces: false,
-                protectedIndexOffsets: sourceIndexOffsets);
         }
 
         return new TieGltfNormalBuildResult(
@@ -174,9 +182,9 @@ internal static class TieGltfNormalBuilder
             sourceVertexIndices.Count,
             packetRowNormalVertexCount,
             tableNormalResult.VertexCount,
-            rgbaRecipeNormalResult.NormalVertexCount,
-            rgbaRecipeNormalResult.ConstantColorVertexCount,
-            rgbaRecipeNormalResult.DegenerateBlendVertexCount,
+            lightingRecipeNormalResult.NormalVertexCount,
+            lightingRecipeNormalResult.ConstantColorVertexCount,
+            lightingRecipeNormalResult.UnresolvedVertexCount,
             crossLodExactNormalVertexCount,
             duplicatePositionExactNormalVertexCount,
             tableNormalResult.Selection?.Layout.ToString(),
@@ -194,6 +202,120 @@ internal static class TieGltfNormalBuilder
             duplicatePositionNormalWeldDecision.CurrentScore.AverageDot,
             duplicatePositionNormalWeldDecision.WeldedScore.AverageDot,
             duplicatePositionNormalWeldDecision.WeldedScore.MinimumDot);
+    }
+
+    private static TieGltfLightingRecipeNormalApplyResult ApplyLightingRecipeNormals(
+        TieClass tie,
+        TieLodTopology topology,
+        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
+        Vector3[] normals,
+        Vector3[] indexNormals,
+        HashSet<int> sourceVertexIndices,
+        HashSet<int> sourceIndexOffsets,
+        TieGltfSourceNormalState[] sourceVertexStates,
+        TieGltfSourceNormalState[] sourceIndexStates)
+    {
+        var packetUploadLayouts = TieGltfNormalRemapTargetResolver.BuildPacketUploadLayouts(tie, topology);
+        var recipesByTargetSlot = tie.RgbaRemapOperations
+            .Where(operation => operation.LodIndex == topology.LodIndex)
+            .OrderBy(operation => operation.GroupIndex)
+            .ThenBy(operation => operation.Offset)
+            .ThenBy(operation => operation.OperationIndex)
+            .GroupBy(operation => operation.TargetCacheSlot)
+            .ToDictionary(group => group.Key, group => group.Last());
+        var normalCount = 0;
+        var constantColorCount = 0;
+        var unresolvedCount = 0;
+
+        foreach (var vertex in topology.LogicalVertices.OrderBy(vertex => vertex.LogicalVertexIndex))
+        {
+            var logicalVertexIndex = vertex.LogicalVertexIndex;
+            if (logicalVertexIndex < 0 || logicalVertexIndex >= normals.Length)
+            {
+                continue;
+            }
+
+            if (!TieGltfNormalRemapTargetResolver.TryGetPacketUploadTarget(
+                    vertex,
+                    packetUploadLayouts,
+                    out var targetSlot)
+                || !recipesByTargetSlot.TryGetValue(targetSlot, out var recipe))
+            {
+                MarkState(TieGltfSourceNormalState.LightingRecipeUnresolved);
+                unresolvedCount++;
+                continue;
+            }
+
+            if (recipe.SourceSlots.Contains(LightingRecipeConstantColorSourceSlot))
+            {
+                MarkState(TieGltfSourceNormalState.LightingRecipeConstantColor);
+                constantColorCount++;
+                continue;
+            }
+
+            var sum = Vector3.Zero;
+            var resolved = true;
+            foreach (var sourceSlot in recipe.SourceSlots)
+            {
+                if (sourceSlot < 0 || sourceSlot >= tie.VertexNormals.Count)
+                {
+                    resolved = false;
+                    break;
+                }
+
+                var sourceNormal = TieGltfRawSourceNormalLayout.Default.Apply(
+                    tie.VertexNormals[sourceSlot],
+                    usePackedSource: true);
+                if (sourceNormal.LengthSquared() <= 1e-12f)
+                {
+                    resolved = false;
+                    break;
+                }
+
+                sum += Vector3.Normalize(sourceNormal);
+            }
+
+            if (!resolved || sum.LengthSquared() <= 1e-12f)
+            {
+                MarkState(TieGltfSourceNormalState.LightingRecipeUnresolved);
+                unresolvedCount++;
+                continue;
+            }
+
+            // LightTies' packed table vectors use the lighting-facing direction,
+            // opposite the outward glTF surface-normal convention.
+            var normal = -Vector3.Normalize(sum);
+            normals[logicalVertexIndex] = normal;
+            sourceVertexIndices.Add(logicalVertexIndex);
+            MarkState(TieGltfSourceNormalState.LightingRecipeExact, normal);
+            normalCount++;
+
+            void MarkState(TieGltfSourceNormalState state, Vector3? indexNormal = null)
+            {
+                sourceVertexStates[logicalVertexIndex] = state;
+                if (!indexOffsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
+                {
+                    return;
+                }
+
+                foreach (var indexOffset in indexOffsets)
+                {
+                    if (indexOffset < 0 || indexOffset >= sourceIndexStates.Length)
+                    {
+                        continue;
+                    }
+
+                    sourceIndexStates[indexOffset] = state;
+                    if (indexNormal.HasValue && indexOffset < indexNormals.Length)
+                    {
+                        indexNormals[indexOffset] = indexNormal.Value;
+                        sourceIndexOffsets.Add(indexOffset);
+                    }
+                }
+            }
+        }
+
+        return new TieGltfLightingRecipeNormalApplyResult(normalCount, constantColorCount, unresolvedCount);
     }
 
     private static int ApplyDuplicatePositionExactNormals(
@@ -288,8 +410,7 @@ internal static class TieGltfNormalBuilder
 
     private static bool CanApplyDuplicatePositionExactNormal(TieGltfSourceNormalState state)
     {
-        return state is TieGltfSourceNormalState.Missing
-            or TieGltfSourceNormalState.RgbaRecipeConstantColor;
+        return state == TieGltfSourceNormalState.Missing;
     }
 
     private static bool IsExactPositionSourceState(TieGltfSourceNormalState state)
@@ -402,279 +523,6 @@ internal static class TieGltfNormalBuilder
 
             return true;
         }
-    }
-
-    private static TieGltfRgbaRecipeNormalApplyResult ApplyRgbaRecipeSourceNormals(
-        TieClass tie,
-        TieLodTopology topology,
-        TieGltfRawSourceNormalLayout tableNormalLayout,
-        bool usePackedVertexNormalTableSource,
-        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
-        IReadOnlyList<Vector3> generatedNormals,
-        IReadOnlyList<Vector3> generatedIndexNormals,
-        Vector3[] normals,
-        Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices,
-        HashSet<int> sourceIndexOffsets,
-        TieGltfSourceNormalState[] sourceVertexStates,
-        TieGltfSourceNormalState[] sourceIndexStates)
-    {
-        if (tie.RgbaRemapOperations.Count == 0 || tie.VertexNormals.Count == 0)
-        {
-            return TieGltfRgbaRecipeNormalApplyResult.Empty;
-        }
-
-        var packetUploadLayouts = TieGltfNormalRemapTargetResolver.BuildPacketUploadLayouts(tie, topology);
-        var recipesByTargetSlot = tie.RgbaRemapOperations
-            .Where(operation => operation.LodIndex == topology.LodIndex)
-            .OrderBy(operation => operation.GroupIndex)
-            .ThenBy(operation => operation.Offset)
-            .ThenBy(operation => operation.OperationIndex)
-            .GroupBy(operation => operation.TargetCacheSlot)
-            .ToDictionary(group => group.Key, group => group.Last());
-        if (recipesByTargetSlot.Count == 0)
-        {
-            return TieGltfRgbaRecipeNormalApplyResult.Empty;
-        }
-
-        var normalCount = 0;
-        var constantColorCount = 0;
-        var degenerateBlendCount = 0;
-        foreach (var vertex in topology.LogicalVertices.OrderBy(vertex => vertex.LogicalVertexIndex))
-        {
-            var logicalVertexIndex = vertex.LogicalVertexIndex;
-            if (logicalVertexIndex < 0
-                || logicalVertexIndex >= normals.Length
-                || !CanApplyRgbaRecipeSourceNormal(sourceVertexStates[logicalVertexIndex])
-                || !TieGltfNormalRemapTargetResolver.TryGetPacketUploadTarget(vertex, packetUploadLayouts, out var targetSlot)
-                || !recipesByTargetSlot.TryGetValue(targetSlot, out var recipe))
-            {
-                continue;
-            }
-
-            var resolution = ResolveRgbaRecipeSourceNormal(
-                tie,
-                recipe,
-                tableNormalLayout,
-                usePackedVertexNormalTableSource,
-                out var sourceNormal);
-            if (resolution == TieGltfRgbaRecipeNormalResolution.Unresolved)
-            {
-                continue;
-            }
-
-            if (resolution == TieGltfRgbaRecipeNormalResolution.ConstantColor)
-            {
-                MarkRgbaRecipeNonNormalState(
-                    logicalVertexIndex,
-                    TieGltfSourceNormalState.RgbaRecipeConstantColor,
-                    indexOffsetsByVertex,
-                    sourceIndexStates);
-                constantColorCount++;
-                continue;
-            }
-
-            if (resolution == TieGltfRgbaRecipeNormalResolution.DegenerateBlend)
-            {
-                MarkRgbaRecipeNonNormalState(
-                    logicalVertexIndex,
-                    TieGltfSourceNormalState.RgbaRecipeDegenerateBlend,
-                    indexOffsetsByVertex,
-                    sourceIndexStates);
-                degenerateBlendCount++;
-                continue;
-            }
-
-            if (ApplyRgbaRecipeSourceNormal(
-                    logicalVertexIndex,
-                    sourceNormal,
-                    indexOffsetsByVertex,
-                    generatedNormals,
-                    generatedIndexNormals,
-                    normals,
-                    indexNormals,
-                    sourceVertexIndices,
-                    sourceIndexOffsets,
-                    sourceVertexStates,
-                    sourceIndexStates))
-            {
-                normalCount++;
-            }
-        }
-
-        return new TieGltfRgbaRecipeNormalApplyResult(
-            normalCount,
-            constantColorCount,
-            degenerateBlendCount);
-
-        static bool CanApplyRgbaRecipeSourceNormal(TieGltfSourceNormalState state)
-        {
-            return state is TieGltfSourceNormalState.Missing
-                or TieGltfSourceNormalState.AmbiguousRemap
-                or TieGltfSourceNormalState.RejectedRemap
-                or TieGltfSourceNormalState.RgbaRecipeConstantColor
-                or TieGltfSourceNormalState.RgbaRecipeDegenerateBlend;
-        }
-
-        void MarkRgbaRecipeNonNormalState(
-            int logicalVertexIndex,
-            TieGltfSourceNormalState state,
-            IReadOnlyDictionary<int, List<int>> offsetsByVertex,
-            TieGltfSourceNormalState[] indexStates)
-        {
-            sourceVertexStates[logicalVertexIndex] = state;
-            if (!offsetsByVertex.TryGetValue(logicalVertexIndex, out var indexOffsets))
-            {
-                return;
-            }
-
-            foreach (var indexOffset in indexOffsets)
-            {
-                if (indexOffset < 0 || indexOffset >= indexStates.Length)
-                {
-                    continue;
-                }
-
-                indexStates[indexOffset] = state;
-            }
-        }
-    }
-
-    private static bool ApplyRgbaRecipeSourceNormal(
-        int logicalVertexIndex,
-        Vector3 sourceNormal,
-        IReadOnlyDictionary<int, List<int>> indexOffsetsByVertex,
-        IReadOnlyList<Vector3> generatedNormals,
-        IReadOnlyList<Vector3> generatedIndexNormals,
-        Vector3[] normals,
-        Vector3[] indexNormals,
-        HashSet<int> sourceVertexIndices,
-        HashSet<int> sourceIndexOffsets,
-        TieGltfSourceNormalState[] sourceVertexStates,
-        TieGltfSourceNormalState[] sourceIndexStates)
-    {
-        if (logicalVertexIndex < 0 || logicalVertexIndex >= normals.Length)
-        {
-            return false;
-        }
-
-        if (!TieGltfSourceNormalBuilder.TryApplySourceNormal(
-                logicalVertexIndex,
-                sourceNormal,
-                indexOffsetsByVertex,
-                generatedNormals,
-                generatedIndexNormals,
-                normals,
-                indexNormals,
-                RgbaRecipeSourceNormalMinimumGeneratedDot,
-                out var orientedNormal,
-                sourceIndexOffsets,
-                sourceIndexStates,
-                TieGltfSourceNormalState.TableExact))
-        {
-            return false;
-        }
-
-        normals[logicalVertexIndex] = orientedNormal;
-        sourceVertexIndices.Add(logicalVertexIndex);
-        sourceVertexStates[logicalVertexIndex] = TieGltfSourceNormalState.TableExact;
-        return true;
-    }
-
-    private static TieGltfRgbaRecipeNormalResolution ResolveRgbaRecipeSourceNormal(
-        TieClass tie,
-        TieRgbaRemapOperation recipe,
-        TieGltfRawSourceNormalLayout tableNormalLayout,
-        bool usePackedVertexNormalTableSource,
-        out Vector3 normal)
-    {
-        normal = default;
-
-        var sum = Vector3.Zero;
-        var sourceCount = 0;
-        var hasConstantColorSource = false;
-        var hasZeroNormalSource = false;
-        foreach (var sourceSlot in recipe.SourceSlots)
-        {
-            if (!TryResolveRgbaRecipeSourceSlotNormal(
-                    tie,
-                    sourceSlot,
-                    tableNormalLayout,
-                    usePackedVertexNormalTableSource,
-                    out var sourceNormal,
-                    out var isConstantColorSource,
-                    out var isZeroNormalSource))
-            {
-                return TieGltfRgbaRecipeNormalResolution.Unresolved;
-            }
-
-            if (isConstantColorSource)
-            {
-                hasConstantColorSource = true;
-                continue;
-            }
-
-            if (isZeroNormalSource)
-            {
-                hasZeroNormalSource = true;
-                continue;
-            }
-
-            sum += sourceNormal;
-            sourceCount++;
-        }
-
-        if (hasConstantColorSource)
-        {
-            return TieGltfRgbaRecipeNormalResolution.ConstantColor;
-        }
-
-        if (hasZeroNormalSource)
-        {
-            return TieGltfRgbaRecipeNormalResolution.DegenerateBlend;
-        }
-
-        if (sourceCount == 0 || sum.LengthSquared() <= 1e-12f)
-        {
-            return TieGltfRgbaRecipeNormalResolution.DegenerateBlend;
-        }
-
-        normal = Vector3.Normalize(sum);
-        return TieGltfRgbaRecipeNormalResolution.Normal;
-    }
-
-    private static bool TryResolveRgbaRecipeSourceSlotNormal(
-        TieClass tie,
-        int sourceSlot,
-        TieGltfRawSourceNormalLayout tableNormalLayout,
-        bool usePackedVertexNormalTableSource,
-        out Vector3 normal,
-        out bool isConstantColorSource,
-        out bool isZeroNormalSource)
-    {
-        isConstantColorSource = false;
-        isZeroNormalSource = false;
-        if (sourceSlot >= 0
-            && sourceSlot < tie.VertexNormals.Count
-            && TryNormalizeGltfNormalSource(
-                tie.VertexNormals[sourceSlot],
-                tableNormalLayout,
-                usePackedVertexNormalTableSource,
-                out normal,
-                out isZeroNormalSource))
-        {
-            return true;
-        }
-
-        if (sourceSlot == RgbaRecipeConstantColorSourceSlot)
-        {
-            isConstantColorSource = true;
-            normal = default;
-            return true;
-        }
-
-        normal = default;
-        return false;
     }
 
     private static int ApplyCrossLodExactPositionNormals(
@@ -936,26 +784,6 @@ internal static class TieGltfNormalBuilder
         }
 
         normal = Vector3.Normalize(normal);
-        return true;
-    }
-
-    private static bool TryNormalizeGltfNormalSource(
-        TieVertexNormal source,
-        TieGltfRawSourceNormalLayout layout,
-        bool usePackedVertexNormalTableSource,
-        out Vector3 normal,
-        out bool isZeroNormalSource)
-    {
-        normal = layout.Apply(source, usePackedVertexNormalTableSource);
-        if (normal.LengthSquared() <= 1e-12f)
-        {
-            normal = default;
-            isZeroNormalSource = true;
-            return true;
-        }
-
-        normal = Vector3.Normalize(normal);
-        isZeroNormalSource = false;
         return true;
     }
 

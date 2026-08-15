@@ -16,6 +16,8 @@ public enum TieMaterialAlphaUsage
 public sealed class TieGltfExportOptions
 {
     public int LodIndex { get; init; }
+    /// <summary>Quantized instance distance used to resolve the game's distance-dependent culling in static glTF.</summary>
+    public int BackfaceCullDistanceBucket { get; init; } = 3;
     public string? BufferFileName { get; init; }
     public string GameLabel { get; init; } = TieGameProfile.Default.GameLabel;
     public TieGameProfile? GameProfile { get; init; }
@@ -85,7 +87,10 @@ public static class TieGltfExporter
         AddTiming(options, "tie.glow", "Tie glow colors", glowStart);
 
         var sourceNormalPhaseStart = Stopwatch.GetTimestamp();
-        var sourceNormalPhaseAnalysis = TieGltfSourceNormalPhaseAnalyzer.Analyze(tie, topology, positions, profile);
+        var sourceNormalPhaseAnalysis = profile.UsePackedVertexNormalTableSource
+            && tie.RgbaRemapOperations.Any(operation => operation.LodIndex == topology.LodIndex)
+                ? TieGltfSourceNormalPhaseAnalysis.Empty
+                : TieGltfSourceNormalPhaseAnalyzer.Analyze(tie, topology, positions, profile);
         AddTiming(
             options,
             "tie.source-normal-phase",
@@ -172,6 +177,7 @@ public static class TieGltfExporter
             positions.Count,
             binFileName,
             profile,
+            options.BackfaceCullDistanceBucket,
             options.ExternalTextureUris,
             options.ExternalTextureSizes,
             options.ExternalTextureAlpha,

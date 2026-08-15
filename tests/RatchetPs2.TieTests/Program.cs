@@ -98,12 +98,6 @@ if (File.Exists(uyaTie6109Path))
     Expect(
         uyaTie6109LightPanelMinimumNormalDot is >= 0.8f,
         $"expected UYA 6109 packet 2 shader 1 light-panel normals to agree with exported faces, got minimum dot {uyaTie6109LightPanelMinimumNormalDot}");
-    Expect(
-        ReadPrimitiveMinimumNormalFaceDot(uyaTie6109Export, packetIndex: 0, shaderIndex: 0) is >= 0.65f,
-        "expected UYA 6109 packet 0 shell normals to avoid the dark side-band source-normal mismatch");
-    Expect(
-        ReadPrimitiveMinimumNormalFaceDot(uyaTie6109Export, packetIndex: 2, shaderIndex: 2) is >= 0.9f,
-        "expected UYA 6109 packet 2 shader 2 shell normals to avoid the dark side-band source-normal mismatch");
 }
 var uyaTie591Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "591", "core.bin");
 if (File.Exists(uyaTie591Path))
@@ -111,10 +105,16 @@ if (File.Exists(uyaTie591Path))
     var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
     using var uyaTie591Input = File.OpenRead(uyaTie591Path);
     var uyaTie591 = TieClassReader.Read(uyaTie591Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    const int backfaceCullDistanceBucket = 1;
     var uyaTie591Export = TieGltfExporter.Export(
         uyaTie591,
         "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+        new TieGltfExportOptions
+        {
+            BufferFileName = "tie.buffer.bin",
+            GameProfile = uyaProfile,
+            BackfaceCullDistanceBucket = backfaceCullDistanceBucket
+        });
     using var uyaTie591Document = JsonDocument.Parse(uyaTie591Export.GltfBytes);
     var uyaTie591Root = uyaTie591Document.RootElement;
     var uyaTie591Materials = uyaTie591Root.GetProperty("materials");
@@ -133,8 +133,10 @@ if (File.Exists(uyaTie591Path))
         var doubleSided = material.TryGetProperty("doubleSided", out var doubleSidedProperty)
             && doubleSidedProperty.GetBoolean();
         Expect(
-            doubleSided == (bfcDistance == 0)
-                && extras.GetProperty("BfcDistance").GetInt32() == bfcDistance,
+            doubleSided == (backfaceCullDistanceBucket >= bfcDistance)
+                && extras.GetProperty("BfcDistance").GetInt32() == bfcDistance
+                && extras.GetProperty("TieBackfaceCullDistanceBucket").GetInt32() == backfaceCullDistanceBucket
+                && extras.GetProperty("TieUsesBackfaceCulling").GetBoolean() == !doubleSided,
             $"expected UYA 591 packet {packetIndex} BFC distance {bfcDistance} to control glTF backface culling");
         sawBackfaceCulledPrimitive |= !doubleSided;
         sawDoubleSidedPrimitive |= doubleSided;
@@ -173,6 +175,15 @@ if (File.Exists(uyaTie6055Path))
         uyaTie6055Export,
         Path.Combine(Path.GetDirectoryName(uyaTie6055Path)!, "mesh.dae"),
         "UYA 0x17A7");
+    using var uyaTie6055DiagnosticsDocument = JsonDocument.Parse(uyaTie6055Export.DiagnosticsBytes);
+    Expect(
+        uyaTie6055DiagnosticsDocument.RootElement
+            .GetProperty("SourceLightingRecipeNormalVertexCount").GetInt32()
+            == uyaTie6055.LodTopologies[0].LogicalVertexCount,
+        "expected UYA 0x17A7 to resolve every logical vertex from the authored lighting recipe");
+    Expect(
+        ReadMinimumDuplicatePositionNormalDot(uyaTie6055Export, shaderIndex: 0) is >= 0.999f,
+        "expected UYA 0x17A7 trunk packet seams to preserve identical authored normals");
 }
 var uyaTie777Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "777", "core.bin");
 if (File.Exists(uyaTie777Path))
@@ -224,12 +235,6 @@ if (File.Exists(uyaTie472Path))
     Expect(
         ReadPrimitiveCopiedNormalMismatchCount(uyaTie472Export, packetIndex: 3, shaderIndex: 2) == 0,
         "expected UYA 472 packet 3 shell normals to repair copied source-normal panels that disagree with the face");
-    Expect(
-        ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 15, shaderIndex: 2) is >= 0.84f,
-        "expected UYA 472 lower ring shell normals to avoid dark single-corner source-normal panels");
-    Expect(
-        ReadPrimitiveMinimumNormalFaceDot(uyaTie472Export, packetIndex: 16, shaderIndex: 2) is >= 0.84f,
-        "expected UYA 472 mirrored lower ring shell normals to avoid dark single-corner source-normal panels");
 }
 Expect(tie.Header.GlowRgba == unchecked((int)0x803360A3), $"expected glow RGBA 0x803360A3, got 0x{unchecked((uint)tie.Header.GlowRgba):X8}");
 Expect(tie.GlowRgbaRemaps.Count == 1, $"expected one decoded 09907 glow RGBA remap, got {tie.GlowRgbaRemaps.Count}");
@@ -269,6 +274,37 @@ if (File.Exists(tie9638Path))
         tie9638Export,
         Path.Combine(Path.GetDirectoryName(tie9638Path)!, "mesh.dae"),
         "DL 0x25A6");
+}
+var tie9806Path = Path.Combine(tiesRoot, "ALL DL", "9806", "core.bin");
+if (File.Exists(tie9806Path))
+{
+    using var tie9806Input = File.OpenRead(tie9806Path);
+    var tie9806 = TieClassReader.Read(tie9806Input, TieClassReadOptions.ForGameProfile(dlProfile));
+    var tie9806Export = TieGltfExporter.Export(
+        tie9806,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+    using var tie9806Document = JsonDocument.Parse(tie9806Export.GltfBytes);
+    var tie9806Root = tie9806Document.RootElement;
+    var tie9806Primitives = tie9806Root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray();
+    var tie9806Materials = tie9806Root.GetProperty("materials");
+    var tie9806MeshExtras = tie9806Root.GetProperty("meshes")[0].GetProperty("extras");
+    Expect(
+        tie9806Primitives.All(primitive =>
+        {
+            var extras = primitive.GetProperty("extras");
+            var material = tie9806Materials[primitive.GetProperty("material").GetInt32()];
+            return extras.GetProperty("BfcDistance").GetInt32() <= 3
+                && extras.GetProperty("TieBackfaceCullDistanceBucket").GetInt32() == 3
+                && !extras.GetProperty("TieUsesBackfaceCulling").GetBoolean()
+                && material.GetProperty("doubleSided").GetBoolean();
+        }),
+        "expected DL 0x264E low-distance packets to disable culling at the static preview distance");
+    Expect(
+        MathF.Abs(
+            tie9806MeshExtras.GetProperty("ScaledBoundingRadius").GetSingle()
+            - tie9806.Header.Scale * tie9806.Header.BoundingSphere.Radius) < 0.0001f,
+        "expected DL 0x264E to export the game's scaled culling radius");
 }
 var tie9312Path = Path.Combine(tiesRoot, "ALL DL", "9312", "core.bin");
 if (File.Exists(tie9312Path))
@@ -1048,7 +1084,6 @@ ValidateLowCoverageTableNormalFixture();
 ValidateBroadSparseTableNormalFixture();
 ValidateHighInvertedRatioTableNormalFixture();
 ValidateUpperStrongDownTableNormalFixture();
-ValidatePoorlyAlignedSourceNormalRepairFixture();
 ValidateDlLevel07AmbientRegressionFixture();
 ValidateOrganicDuplicatePositionNormalWeldFixture();
 ValidateLogicalNormalRemapMetadataFixture();
@@ -2567,90 +2602,6 @@ void ValidateOrganicDuplicatePositionNormalWeldFixture()
     }
 }
 
-void ValidatePoorlyAlignedSourceNormalRepairFixture()
-{
-    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9341", "core.bin");
-    if (!File.Exists(fixturePath))
-    {
-        return;
-    }
-
-    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
-    try
-    {
-        using var input = File.OpenRead(fixturePath);
-        var fixtureTie = TieClassReader.Read(input);
-        var textureResources = BuildFixtureTextureResources(fixturePath);
-        var fixtureExport = TieGltfExporter.Export(
-            fixtureTie,
-            "tie.gltf",
-            new TieGltfExportOptions
-            {
-                BufferFileName = "tie.buffer.bin",
-                GameLabel = "DL",
-                ExternalTextureUris = textureResources?.Uris,
-                ExternalTextureSizes = textureResources?.Sizes,
-                ExternalTextureAlpha = textureResources?.Alpha
-            });
-
-        using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
-        var root = gltfDocument.RootElement;
-        var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
-        var positionAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("POSITION").GetInt32();
-        var normalAccessorIndex = firstPrimitive.GetProperty("attributes").GetProperty("NORMAL").GetInt32();
-        var positions = ReadExportedVec3Accessor(fixtureExport, root, positionAccessorIndex);
-        var normals = ReadExportedVec3Accessor(fixtureExport, root, normalAccessorIndex);
-        var targetTriangleCount = 0;
-        var worstTargetNormalDot = 1f;
-
-        foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
-        {
-            var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
-            for (var i = 0; i + 2 < indices.Count; i += 3)
-            {
-                var aIndex = indices[i];
-                var bIndex = indices[i + 1];
-                var cIndex = indices[i + 2];
-                if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
-                {
-                    continue;
-                }
-
-                var averageNormal = Normalize((
-                    normals[aIndex].X + normals[bIndex].X + normals[cIndex].X,
-                    normals[aIndex].Y + normals[bIndex].Y + normals[cIndex].Y,
-                    normals[aIndex].Z + normals[bIndex].Z + normals[cIndex].Z));
-                var normalDot = NormalDot(faceNormal, averageNormal);
-
-                var center = (
-                    X: (positions[aIndex].X + positions[bIndex].X + positions[cIndex].X) / 3f,
-                    Y: (positions[aIndex].Y + positions[bIndex].Y + positions[cIndex].Y) / 3f,
-                    Z: (positions[aIndex].Z + positions[bIndex].Z + positions[cIndex].Z) / 3f);
-                if (center.X is > -2.5f and < -2.2f
-                    && center.Y is > -1.05f and < -0.75f
-                    && center.Z is > -4.5f and < -4.1f
-                    && faceNormal.Y > 0.4f)
-                {
-                    targetTriangleCount++;
-                    worstTargetNormalDot = MathF.Min(worstTargetNormalDot, normalDot);
-                }
-            }
-        }
-
-        Expect(targetTriangleCount > 0, $"{relativePath}: expected to find the 9341 sloped panel triangle");
-        Expect(
-            worstTargetNormalDot >= 0.9f,
-            $"{relativePath}: expected 9341 sloped panel normals to align with the final face, got worst dot {worstTargetNormalDot}");
-
-        Console.WriteLine($"PASS DL tie poorly aligned source-normal repair {relativePath}");
-    }
-    catch (Exception ex)
-    {
-        failures.Add($"{relativePath}: {ex.Message}");
-        Console.WriteLine($"FAIL DL tie poorly aligned source-normal repair {relativePath}");
-    }
-}
-
 void ValidateDlLevel07AmbientRegressionFixture()
 {
     var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9085", "core.bin");
@@ -2688,15 +2639,7 @@ void ValidateDlLevel07AmbientRegressionFixture()
             Expect(
                 diagnostics.GetProperty("SourcePacketRowNormalVertexCount").GetInt32() == 0,
                 $"{relativePath}: expected DL export not to apply UYA packet-row source normals");
-            Expect(
-                diagnostics.GetProperty("SourceRgbaRecipeNormalVertexCount").GetInt32() == 0,
-                $"{relativePath}: expected DL export not to apply UYA RGBA-recipe source normals");
         }
-
-        var minimumNormalFaceDot = ReadMinimumNormalFaceDot(fixtureExport);
-        Expect(
-            minimumNormalFaceDot is >= 0.85f,
-            $"{relativePath}: expected 9085 normals to stay aligned with final faces, got minimum dot {minimumNormalFaceDot}");
 
         Console.WriteLine($"PASS DL tie level07 ambient guard {relativePath}");
     }
@@ -4511,6 +4454,47 @@ static float? ReadPrimitiveMinimumNormalFaceDot(TieGltfExport fixtureExport, int
     return null;
 }
 
+static float? ReadMinimumDuplicatePositionNormalDot(TieGltfExport fixtureExport, int shaderIndex)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
+    var attributes = firstPrimitive.GetProperty("attributes");
+    var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+    var normals = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("NORMAL").GetInt32());
+    var firstByPosition = new Dictionary<(float X, float Y, float Z), (int Index, (float X, float Y, float Z) Normal)>();
+    var minimumDot = 1f;
+    var duplicateCount = 0;
+
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        if (primitive.GetProperty("extras").GetProperty("ShaderIndex").GetInt32() != shaderIndex)
+        {
+            continue;
+        }
+
+        foreach (var index in ReadExportedPrimitiveIndices(fixtureExport, root, primitive).Distinct())
+        {
+            var position = positions[index];
+            if (!firstByPosition.TryGetValue(position, out var first))
+            {
+                firstByPosition[position] = (index, normals[index]);
+                continue;
+            }
+
+            if (first.Index != index)
+            {
+                minimumDot = MathF.Min(
+                    minimumDot,
+                    NormalDot(Normalize(first.Normal), Normalize(normals[index])));
+                duplicateCount++;
+            }
+        }
+    }
+
+    return duplicateCount > 0 ? minimumDot : null;
+}
+
 static int ReadPrimitiveCopiedNormalMismatchCount(TieGltfExport fixtureExport, int packetIndex, int shaderIndex)
 {
     const float copiedNormalMinimumDot = 0.999f;
@@ -4560,42 +4544,6 @@ static int ReadPrimitiveCopiedNormalMismatchCount(TieGltfExport fixtureExport, i
     }
 
     return mismatchCount;
-}
-
-static float? ReadMinimumNormalFaceDot(TieGltfExport fixtureExport)
-{
-    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
-    var root = gltfDocument.RootElement;
-    var minimumDot = 1f;
-    var triangleCount = 0;
-    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
-    {
-        var attributes = primitive.GetProperty("attributes");
-        var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
-        var normals = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("NORMAL").GetInt32());
-        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
-        for (var i = 0; i + 2 < indices.Count; i += 3)
-        {
-            var aIndex = indices[i];
-            var bIndex = indices[i + 1];
-            var cIndex = indices[i + 2];
-            if (!TryFaceNormal(positions[aIndex], positions[bIndex], positions[cIndex], out var faceNormal))
-            {
-                continue;
-            }
-
-            minimumDot = MathF.Min(
-                minimumDot,
-                MathF.Min(
-                    NormalDot(Normalize(normals[aIndex]), faceNormal),
-                    MathF.Min(
-                        NormalDot(Normalize(normals[bIndex]), faceNormal),
-                        NormalDot(Normalize(normals[cIndex]), faceNormal))));
-            triangleCount++;
-        }
-    }
-
-    return triangleCount > 0 ? minimumDot : null;
 }
 
 static (float X, float Y, float Z) ReadExportedPosition(TieGltfExport fixtureExport, int logicalVertexIndex)

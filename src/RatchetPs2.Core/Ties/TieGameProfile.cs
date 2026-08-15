@@ -23,7 +23,6 @@ public sealed record TieGameProfile
     public bool InvertDecodedFatVertexSourceNormals { get; init; }
     public bool UsePackedVertexNormalTableSource { get; init; }
     public bool UsePacketRowSourceNormals { get; init; } = true;
-    public bool UseRgbaRecipeSourceNormals { get; init; }
     public int VertexNormalHeaderSize { get; init; } = 0x10;
 
     public static TieGameProfile ForGame(GameId gameId)
@@ -42,7 +41,6 @@ public sealed record TieGameProfile
             InvertDecodedFatVertexSourceNormals = normalized is "DL" or "UYA",
             UsePackedVertexNormalTableSource = normalized is "DL" or "UYA",
             UsePacketRowSourceNormals = normalized == "UYA",
-            UseRgbaRecipeSourceNormals = normalized == "UYA",
             UseAmbientIndexAttribute = normalized is "DL" or "UYA",
             VertexNormalHeaderSize = normalized is "GC" or "UYA" ? 0 : 0x10
         };

@@ -25,10 +25,9 @@ internal static class TieGltfGeneratedNormalBuilder
 
     public static List<Vector3> BuildGeneratedNormals(
         IReadOnlyList<Vector3> positions,
-        IReadOnlyList<uint> indices)
+        IReadOnlyList<uint> indices,
+        bool weldDuplicatePositions)
     {
-        var bounds = GetPositionBounds(positions);
-        var weldDuplicatePositions = IsFlatHorizontalBounds(bounds);
         var normals = new Vector3[positions.Count];
         for (var i = 0; i + 2 < indices.Count; i += 3)
         {

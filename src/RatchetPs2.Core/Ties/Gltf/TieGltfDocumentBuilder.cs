@@ -21,6 +21,7 @@ internal static class TieGltfDocumentBuilder
         int sourcePositionCount,
         string binFileName,
         TieGameProfile profile,
+        int backfaceCullDistanceBucket,
         IReadOnlyDictionary<int, string>? externalTextureUris,
         IReadOnlyDictionary<int, TextureSize>? externalTextureSizes,
         IReadOnlyDictionary<int, TextureAlphaInfo>? externalTextureAlpha,
@@ -134,6 +135,7 @@ internal static class TieGltfDocumentBuilder
         {
             packetsByIndex.TryGetValue(group.PacketIndex, out var packet);
             var bfcDistance = packet?.BfcDistance ?? 0;
+            var usesBackfaceCulling = backfaceCullDistanceBucket < bfcDistance;
             var indexAccessor = gltfBufferWriter.WriteUInt32IndexAccessor(group.Indices);
             var materialIndex = materialBuilder.GetMaterialIndex(
                 group.ShaderIndex,
@@ -142,7 +144,7 @@ internal static class TieGltfDocumentBuilder
                 group.MultipassUvSize,
                 group.EnvPassBleedColor,
                 tie.Header.ModeBits,
-                doubleSided: bfcDistance == 0,
+                doubleSided: !usesBackfaceCulling,
                 group.UseGlowEmission ? glowEmission : null);
             var glowRgbaIndexCount = TieGltfGlowBuilder.CountActiveIndices(group.Indices, geometry.GlowColors);
             var primitiveDefinition = new Dictionary<string, object>
@@ -152,13 +154,21 @@ internal static class TieGltfDocumentBuilder
                 ["mode"] = 4,
                 ["material"] = materialIndex
             };
-            if (ShouldWriteFullMetadata(metadataMode))
+            if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
+            {
+                primitiveDefinition["extras"] = new
+                {
+                    BfcDistance = bfcDistance
+                };
+            }
+            else if (ShouldWriteFullMetadata(metadataMode))
             {
                 primitiveDefinition["extras"] = new
                 {
                     group.PacketIndex,
                     BfcDistance = bfcDistance,
-                    TieUsesBackfaceCulling = bfcDistance > 0,
+                    TieBackfaceCullDistanceBucket = backfaceCullDistanceBucket,
+                    TieUsesBackfaceCulling = usesBackfaceCulling,
                     group.ShaderIndex,
                     group.MultipassOffset,
                     MultipassType = group.PassFlags,
@@ -265,9 +275,9 @@ internal static class TieGltfDocumentBuilder
             SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             SourcePacketRowNormalVertexCount = normalResult.PacketRowNormalVertexCount,
             SourceTableNormalVertexCount = normalResult.TableNormalVertexCount,
-            SourceRgbaRecipeNormalVertexCount = normalResult.RgbaRecipeNormalVertexCount,
-            SourceRgbaRecipeConstantColorVertexCount = normalResult.RgbaRecipeConstantColorVertexCount,
-            SourceRgbaRecipeDegenerateBlendVertexCount = normalResult.RgbaRecipeDegenerateBlendVertexCount,
+            SourceLightingRecipeNormalVertexCount = normalResult.LightingRecipeNormalVertexCount,
+            SourceLightingRecipeConstantColorVertexCount = normalResult.LightingRecipeConstantColorVertexCount,
+            SourceLightingRecipeUnresolvedVertexCount = normalResult.LightingRecipeUnresolvedVertexCount,
             SourceCrossLodExactNormalVertexCount = normalResult.CrossLodExactNormalVertexCount,
             SourceDuplicatePositionExactNormalVertexCount = normalResult.DuplicatePositionExactNormalVertexCount,
             SourceTableNormalLayout = normalResult.TableNormalLayout,
@@ -302,8 +312,9 @@ internal static class TieGltfDocumentBuilder
             SourceNormalStateRejectedRemapVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RejectedRemap),
             SourceNormalStateCrossLodExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.CrossLodExact),
             SourceNormalStateDuplicatePositionExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.DuplicatePositionExact),
-            SourceNormalStateRgbaRecipeConstantColorVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RgbaRecipeConstantColor),
-            SourceNormalStateRgbaRecipeDegenerateBlendVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.RgbaRecipeDegenerateBlend),
+            SourceNormalStateLightingRecipeExactVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.LightingRecipeExact),
+            SourceNormalStateLightingRecipeConstantColorVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.LightingRecipeConstantColor),
+            SourceNormalStateLightingRecipeUnresolvedVertexCount = CountSourceNormalState(geometry, TieGltfSourceNormalState.LightingRecipeUnresolved),
             SourceNormalMissingDecodedDinkyVertexCount = CountSourceNormalStateVertices(
                 topology,
                 normalResult.SourceNormalVertexStates,
@@ -1426,11 +1437,27 @@ internal static class TieGltfDocumentBuilder
             return null!;
         }
 
+        var boundingSphere = tie.Header.BoundingSphere;
+        var scaledBoundingSphereCenter = GltfCoordinateBasis.FromPs2Position(
+            boundingSphere.X * tie.Header.Scale,
+            boundingSphere.Y * tie.Header.Scale,
+            boundingSphere.Z * tie.Header.Scale);
+        var scaledBoundingSphereCenterArray = new[]
+        {
+            scaledBoundingSphereCenter.X,
+            scaledBoundingSphereCenter.Y,
+            scaledBoundingSphereCenter.Z
+        };
+
         if (metadataMode == GltfExportMetadataMode.RuntimeOnly)
         {
             return new
             {
                 topology.LodIndex,
+                tie.Header.Scale,
+                BoundingRadius = boundingSphere.Radius,
+                ScaledBoundingSphereCenter = scaledBoundingSphereCenterArray,
+                ScaledBoundingRadius = tie.Header.Scale * boundingSphere.Radius,
                 AmbientWordCount = ambientIndexResult.AmbientWordCount,
                 AmbientSlotCount = ambientIndexResult.AmbientSlotCount,
                 AmbientColorRecipes = ambientIndexResult.ColorRecipes
@@ -1453,9 +1480,9 @@ internal static class TieGltfDocumentBuilder
             SourceNormalIndexOffsetCount = normalResult.SourceNormalIndexOffsets.Count,
             normalResult.PacketRowNormalVertexCount,
             normalResult.TableNormalVertexCount,
-            normalResult.RgbaRecipeNormalVertexCount,
-            normalResult.RgbaRecipeConstantColorVertexCount,
-            normalResult.RgbaRecipeDegenerateBlendVertexCount,
+            normalResult.LightingRecipeNormalVertexCount,
+            normalResult.LightingRecipeConstantColorVertexCount,
+            normalResult.LightingRecipeUnresolvedVertexCount,
             normalResult.CrossLodExactNormalVertexCount,
             normalResult.DuplicatePositionExactNormalVertexCount,
             normalResult.TableNormalLayout,
@@ -1489,8 +1516,9 @@ internal static class TieGltfDocumentBuilder
             SourceNormalStateRejectedRemapVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RejectedRemap),
             SourceNormalStateCrossLodExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.CrossLodExact),
             SourceNormalStateDuplicatePositionExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.DuplicatePositionExact),
-            SourceNormalStateRgbaRecipeConstantColorVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RgbaRecipeConstantColor),
-            SourceNormalStateRgbaRecipeDegenerateBlendVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.RgbaRecipeDegenerateBlend),
+            SourceNormalStateLightingRecipeExactVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.LightingRecipeExact),
+            SourceNormalStateLightingRecipeConstantColorVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.LightingRecipeConstantColor),
+            SourceNormalStateLightingRecipeUnresolvedVertexCount = CountSourceNormalState(normalResult.SourceNormalVertexStates, TieGltfSourceNormalState.LightingRecipeUnresolved),
             SourceNormalMissingDecodedDinkyVertexCount = CountSourceNormalStateVertices(
                 topology,
                 normalResult.SourceNormalVertexStates,
@@ -1542,7 +1570,10 @@ internal static class TieGltfDocumentBuilder
             UsesDlGlow0 = glowColorResult.ResolvedVertexCount > 0,
             UsesGlowEmission = usesGlowEmission,
             GlowRgbaEmissionStrength = TieGltfGlowBuilder.GetEmissionStrength(glowColorResult.Rgba),
-            tie.Header.Scale
+            tie.Header.Scale,
+            BoundingRadius = boundingSphere.Radius,
+            ScaledBoundingSphereCenter = scaledBoundingSphereCenterArray,
+            ScaledBoundingRadius = tie.Header.Scale * boundingSphere.Radius
         };
     }
 

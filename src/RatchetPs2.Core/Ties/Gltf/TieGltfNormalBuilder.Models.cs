@@ -13,9 +13,9 @@ internal sealed record TieGltfNormalBuildResult(
     int SourceNormalVertexCount,
     int PacketRowNormalVertexCount,
     int TableNormalVertexCount,
-    int RgbaRecipeNormalVertexCount,
-    int RgbaRecipeConstantColorVertexCount,
-    int RgbaRecipeDegenerateBlendVertexCount,
+    int LightingRecipeNormalVertexCount,
+    int LightingRecipeConstantColorVertexCount,
+    int LightingRecipeUnresolvedVertexCount,
     int CrossLodExactNormalVertexCount,
     int DuplicatePositionExactNormalVertexCount,
     string? TableNormalLayout,
@@ -34,20 +34,12 @@ internal sealed record TieGltfNormalBuildResult(
     float DuplicatePositionWeldedAverageFaceDot,
     float DuplicatePositionWeldedMinimumFaceDot);
 
-internal readonly record struct TieGltfRgbaRecipeNormalApplyResult(
+internal readonly record struct TieGltfLightingRecipeNormalApplyResult(
     int NormalVertexCount,
     int ConstantColorVertexCount,
-    int DegenerateBlendVertexCount)
+    int UnresolvedVertexCount)
 {
-    public static TieGltfRgbaRecipeNormalApplyResult Empty { get; } = new(0, 0, 0);
-}
-
-internal enum TieGltfRgbaRecipeNormalResolution
-{
-    Unresolved,
-    Normal,
-    ConstantColor,
-    DegenerateBlend
+    public static TieGltfLightingRecipeNormalApplyResult Empty { get; } = new(0, 0, 0);
 }
 
 internal enum TieGltfSourceNormalState
@@ -59,6 +51,7 @@ internal enum TieGltfSourceNormalState
     RejectedRemap = 4,
     CrossLodExact = 5,
     DuplicatePositionExact = 6,
-    RgbaRecipeConstantColor = 7,
-    RgbaRecipeDegenerateBlend = 8
+    LightingRecipeExact = 7,
+    LightingRecipeConstantColor = 8,
+    LightingRecipeUnresolved = 9
 }
