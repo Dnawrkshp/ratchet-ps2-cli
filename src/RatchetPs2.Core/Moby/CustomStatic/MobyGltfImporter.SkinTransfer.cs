@@ -2134,7 +2134,7 @@ public static partial class MobyGltfImporter
             return [];
         }
 
-        var decoded = DecodeTemplateMeshes(entries, scale);
+        var decoded = DecodeTemplateMeshes(entries, scale, skinReference.JointCount);
         var preferredTypes = decoded
             .Where(pair => entries[pair.Key].MeshType == MobyMeshType.HighLod)
             .ToList();

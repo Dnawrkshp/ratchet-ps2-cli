@@ -43,7 +43,7 @@ public static class MobySkinAnalyzer
         }
 
         var scale = decodeScale ?? ((Math.Abs(model.Scale) > 1e-8f ? model.Scale : 1f) / 1024f);
-        var decoded = MobyGltfImporter.DecodeTemplateMeshes(entries, scale);
+        var decoded = MobyGltfImporter.DecodeTemplateMeshes(entries, scale, model.JointCount);
         var preferredTypes = decoded
             .Where(pair => entries[pair.Key].MeshType == MobyMeshType.HighLod)
             .ToList();

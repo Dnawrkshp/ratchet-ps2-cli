@@ -109,6 +109,17 @@ try
 
     try
     {
+        ValidateMetalMeshExport(repoRoot);
+        Console.WriteLine("PASS metal mesh glTF export");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"Metal mesh glTF export: {ex.Message}");
+        Console.WriteLine("FAIL metal mesh glTF export");
+    }
+
+    try
+    {
         ValidateUyaToDlConversion(cases);
         Console.WriteLine("PASS UYA 0x171C to DL conversion");
     }
@@ -1009,6 +1020,50 @@ static void ValidateMeshTableOrdering()
         || !packed.ShadowPrefixData.SequenceEqual(model.ShadowPrefixData!))
     {
         throw new InvalidDataException("mesh table was not decoded as base, metal, far LOD, then bangle meshes.");
+    }
+}
+
+static void ValidateMetalMeshExport(string repoRoot)
+{
+    using var input = File.OpenRead(Path.Combine(repoRoot, "test-assets", "DL Skins", "18", "core.bin"));
+    var export = DlMobyGltfExporter.Export(
+        input,
+        options: new MobyGltfExportOptions { AnimationFormat = MobyAnimationFormat.Compact, SkipAnimationSequences = true });
+    using var gltf = JsonDocument.Parse(export.GltfBytes);
+    var root = gltf.RootElement;
+    var metalGroup = root.GetProperty("nodes").EnumerateArray()
+        .Single(node => node.TryGetProperty("name", out var name) && name.GetString() == "metals");
+    var metalMesh = root.GetProperty("meshes").EnumerateArray()
+        .Single(mesh => mesh.GetProperty("extras").GetProperty("RatchetPs2").GetProperty("moby")
+            .GetProperty("meshType").GetString() == "Metal");
+    var attributes = metalMesh.GetProperty("primitives")[0].GetProperty("attributes");
+    var positionAccessor = attributes.GetProperty("POSITION").GetInt32();
+    var normalAccessor = root.GetProperty("accessors")[attributes.GetProperty("NORMAL").GetInt32()];
+    var reflectionScaleAccessor = root.GetProperty("accessors")[
+        attributes.GetProperty("_MOBY_METAL_REFLECTION_SCALE").GetInt32()];
+    var normalView = root.GetProperty("bufferViews")[normalAccessor.GetProperty("bufferView").GetInt32()];
+    var normalOffset = normalView.GetProperty("byteOffset").GetInt32()
+        + (normalAccessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0);
+    var actualNormal = ReadBufferVector3(export.BinBytes, normalOffset, 0);
+    using var sourceInput = File.OpenRead(Path.Combine(repoRoot, "test-assets", "DL Skins", "18", "core.bin"));
+    var source = MobyModelReader.Read(
+        sourceInput,
+        new MobyModelReadOptions { AnimationFormat = MobyAnimationFormat.Compact, SkipAnimationSequences = true });
+    var sourceMetal = source.MeshTable!.Entries.Single(entry => entry.MeshType == MobyMeshType.Metal);
+    var azimuth = sourceMetal.VertexData[0x16] * MathF.PI / 128f;
+    var elevation = sourceMetal.VertexData[0x17] * MathF.PI / 128f;
+    var expectedNormal = new Vector3(
+        MathF.Cos(azimuth) * MathF.Cos(elevation),
+        MathF.Sin(elevation),
+        -MathF.Sin(azimuth) * MathF.Cos(elevation));
+    if (metalGroup.GetProperty("children").GetArrayLength() != 1
+        || root.GetProperty("accessors")[positionAccessor].GetProperty("count").GetInt32() != 21
+        || reflectionScaleAccessor.GetProperty("count").GetInt32() != 21
+        || reflectionScaleAccessor.GetProperty("min")[0].GetSingle() != 0.5f
+        || reflectionScaleAccessor.GetProperty("max")[0].GetSingle() != 0.5f
+        || Vector3.Distance(actualNormal, expectedNormal) > 0.000001f)
+    {
+        throw new InvalidDataException("DL metal mesh geometry or its authored reflection scale was not exported correctly.");
     }
 }
 

@@ -290,6 +290,41 @@ public static class MobyGltfExporter
                 type = "VEC3"
             });
 
+            int? metalReflectionScaleAccessor = null;
+            if (entry.MeshType == MobyMeshType.Metal)
+            {
+                Align(writer, 4);
+                var reflectionScaleByteOffset = checked((int)writer.BaseStream.Position);
+                var reflectionScales = new float[positions.Count];
+                for (var i = 0; i < reflectionScales.Length; i++)
+                {
+                    // The VU maps the unit reflection vector from [-1, 1] into texture space.
+                    reflectionScales[i] = 0.5f;
+                    writer.Write(reflectionScales[i]);
+                }
+
+                var reflectionScaleBufferView = bufferViews.Count;
+                bufferViews.Add(new
+                {
+                    buffer = 0,
+                    byteOffset = reflectionScaleByteOffset,
+                    byteLength = reflectionScales.Length * sizeof(float),
+                    target = 34962
+                });
+
+                metalReflectionScaleAccessor = accessors.Count;
+                accessors.Add(new
+                {
+                    bufferView = reflectionScaleBufferView,
+                    byteOffset = 0,
+                    componentType = 5126,
+                    count = reflectionScales.Length,
+                    type = "SCALAR",
+                    min = new[] { reflectionScales.Min() },
+                    max = new[] { reflectionScales.Max() }
+                });
+            }
+
             int? jointsAccessor = null;
             int? weightsAccessor = null;
             int? texCoordAccessor = null;
@@ -430,6 +465,11 @@ public static class MobyGltfExporter
             if (texCoordAccessor.HasValue)
             {
                 attributes["TEXCOORD_0"] = texCoordAccessor.Value;
+            }
+
+            if (metalReflectionScaleAccessor.HasValue)
+            {
+                attributes["_MOBY_METAL_REFLECTION_SCALE"] = metalReflectionScaleAccessor.Value;
             }
 
             if (debugColorAccessor.HasValue)
@@ -1802,6 +1842,17 @@ public static class MobyGltfExporter
     private static object BuildMobyVertexLayoutExtras(MobyMeshTableEntry entry)
     {
         var data = entry.VertexData;
+        if (entry.MeshType == MobyMeshType.Metal)
+        {
+            return new Dictionary<string, object?>
+            {
+                ["supported"] = data.Length >= 0x10 + entry.VertexCount * 0x10,
+                ["format"] = "metal",
+                ["vertexCount"] = data.Length >= 2 ? BitConverter.ToUInt16(data, 0x00) : 0,
+                ["headerBytesBase64"] = Convert.ToBase64String(data.AsSpan(0, Math.Min(data.Length, 0x10)))
+            };
+        }
+
         if (data.Length < 0x10)
         {
             return new Dictionary<string, object?>
@@ -1931,6 +1982,11 @@ public static class MobyGltfExporter
         joints = [];
         weights = [];
         duplicateCacheMisses = 0;
+
+        if (entry.MeshType == MobyMeshType.Metal)
+        {
+            return TryDecodeMetalVertexTable(entry, scale, positions, normals, validMask, joints, weights);
+        }
 
         var data = entry.VertexData;
         if (data.Length < 0x20)
@@ -2101,6 +2157,44 @@ public static class MobyGltfExporter
         {
             return false;
         }
+    }
+
+    private static bool TryDecodeMetalVertexTable(
+        MobyMeshTableEntry entry,
+        float scale,
+        List<Vector3> positions,
+        List<Vector3> normals,
+        List<bool> validMask,
+        List<ushort[]> joints,
+        List<float[]> weights)
+    {
+        var data = entry.VertexData;
+        if (data.Length < 0x10)
+        {
+            return false;
+        }
+
+        var vertexCount = BitConverter.ToUInt16(data, 0x00);
+        if (vertexCount != entry.VertexCount || data.Length < 0x10 + vertexCount * 0x10)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < vertexCount; i++)
+        {
+            var offset = 0x10 + i * 0x10;
+            positions.Add(GltfCoordinateBasis.FromPs2Position(
+                BitConverter.ToInt16(data, offset),
+                BitConverter.ToInt16(data, offset + 2),
+                BitConverter.ToInt16(data, offset + 4),
+                scale));
+            normals.Add(DecodeNormal(data[offset + 6], data[offset + 7]));
+            validMask.Add(true);
+            joints.Add([entry.CommonTransformJointIndex, 0, 0, 0]);
+            weights.Add(DefaultWeights());
+        }
+
+        return vertexCount >= 3;
     }
 
     private static (ushort[] Joints, float[] Weights) DecodeSkinRow(
@@ -2552,9 +2646,14 @@ public static class MobyGltfExporter
 
     private static Vector3 DecodeNormal(byte[] vertex)
     {
+        return DecodeNormal(vertex[0x08], vertex[0x09]);
+    }
+
+    private static Vector3 DecodeNormal(byte azimuthByte, byte elevationByte)
+    {
         const float AngleScale = MathF.PI / 128f;
-        var azimuth = vertex[0x08] * AngleScale;
-        var elevation = vertex[0x09] * AngleScale;
+        var azimuth = azimuthByte * AngleScale;
+        var elevation = elevationByte * AngleScale;
         var cosElevation = MathF.Cos(elevation);
         return GltfCoordinateBasis.FromPs2Position(
             MathF.Cos(azimuth) * cosElevation,

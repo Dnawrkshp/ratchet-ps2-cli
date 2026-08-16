@@ -245,6 +245,7 @@ public static class DlLevelWadRenderPackageBuilder
             header.GsRamOffset,
             Math.Max(0, header.GsRamCount + header.ExtraMipmapCount));
         var gsStashDefinitions = allMipmapDefinitions.Skip(header.GsRamCount).ToArray();
+        var environmentTextures = BuildEnvironmentTextures(files, header, paletteBytes, gsStashDefinitions);
         var mobyGsStashClassIds = DlAssetReader.ReadMobyGsStashClassIds(
             headerBytes,
             header.MobyGsStashListOffset);
@@ -399,6 +400,7 @@ public static class DlLevelWadRenderPackageBuilder
         {
             ["Game"] = gameId.ToString(),
             ["TextureIsSwizzled"] = textureIsSwizzled,
+            ["EnvironmentTextures"] = environmentTextures,
             ["Header"] = header,
             ["HeaderLength"] = headerBytes.Length,
             ["HeaderTables"] = new
@@ -424,6 +426,39 @@ public static class DlLevelWadRenderPackageBuilder
         rootManifest["AssetHeader"] = header;
         rootManifest["TextureIsSwizzled"] = textureIsSwizzled;
         return mobyEntries;
+    }
+
+    private static IReadOnlyDictionary<string, string> BuildEnvironmentTextures(
+        List<PackedFile> files,
+        DlAssetHeader header,
+        byte[] paletteBytes,
+        IReadOnlyList<DlAssetMipmapDefinition> gsStashDefinitions)
+    {
+        var paths = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (name, textureOffset, paletteOffset) in new[]
+        {
+            ("chrome", header.ChromeTextureOffset, header.ChromePaletteOffset),
+            ("glass", header.GlassTextureOffset, header.GlassPaletteOffset)
+        })
+        {
+            var definition = gsStashDefinitions.FirstOrDefault(item => item.Offset2 == textureOffset);
+            if (definition is null)
+            {
+                continue;
+            }
+
+            var path = $"environment/{name}.png";
+            var texture = DlAssetReader.BuildGsStashTexture(
+                name,
+                0,
+                definition,
+                paletteOffset,
+                paletteBytes);
+            AddFile(files, $"assets/{path}", texture.PngBytes, "image/png");
+            paths[name] = path;
+        }
+
+        return paths;
     }
 
     private static GltfExportRoute BuildTfrag(

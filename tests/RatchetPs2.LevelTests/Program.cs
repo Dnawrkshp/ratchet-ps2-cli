@@ -41,6 +41,7 @@ ValidateCodeSegmentParsing();
 ValidateHudBankParsing();
 ValidateWorldInstanceParsing();
 ValidateAssetSlicing();
+ValidateEnvironmentTextureRenderPackage();
 ValidateMobyGsStashTextures();
 ValidateDzoGlbExportWhenAvailable();
 ValidatePifMipRoundtrip();
@@ -1262,6 +1263,46 @@ static void ValidateMobyGsStashTextures()
 
     Expect(exportedPng.SequenceEqual(unswizzledPng), "GS-stashed moby textures should be exported without swizzle");
     Expect(!exportedPng.SequenceEqual(swizzledPng), "GS-stashed moby textures should not use the normal DL swizzle");
+}
+
+static void ValidateEnvironmentTextureRenderPackage()
+{
+    var headerBytes = new byte[0xe0];
+    WriteInt32(headerBytes, 0x04, 0xc0);
+    WriteInt32(headerBytes, 0x84, 2);
+    WriteInt32(headerBytes, 0x90, 0);
+    WriteInt32(headerBytes, 0x94, 0);
+    WriteInt32(headerBytes, 0x98, 0x222);
+    WriteInt32(headerBytes, 0x9c, 0x400);
+
+    WriteInt16(headerBytes, 0xc4, 2);
+    WriteInt16(headerBytes, 0xc6, 2);
+    WriteInt32(headerBytes, 0xc8, 0x800);
+    WriteInt32(headerBytes, 0xcc, 0);
+    WriteInt16(headerBytes, 0xd4, 2);
+    WriteInt16(headerBytes, 0xd6, 2);
+    WriteInt32(headerBytes, 0xd8, 0x804);
+    WriteInt32(headerBytes, 0xdc, 0x222);
+
+    var paletteBytes = new byte[0x808];
+    CreatePalette().CopyTo(paletteBytes, 0);
+    CreatePalette().CopyTo(paletteBytes, 0x400);
+    new byte[] { 1, 2, 3, 4, 5, 6, 7, 8 }.CopyTo(paletteBytes, 0x800);
+
+    var files = DlLevelWadRenderPackageBuilder.BuildAssetFiles(
+        GameId.DL,
+        levelIndex: 1,
+        headerBytes,
+        paletteBytes,
+        assetBytes: []);
+    var byPath = files.ToDictionary(file => file.Path, StringComparer.Ordinal);
+    Expect(byPath.ContainsKey("assets/environment/chrome.png"), "render package should export the level chrome texture");
+    Expect(byPath.ContainsKey("assets/environment/glass.png"), "render package should export the level glass texture");
+
+    using var manifest = JsonDocument.Parse(byPath["assets/manifest.json"].Bytes);
+    var textures = manifest.RootElement.GetProperty("EnvironmentTextures");
+    Expect(textures.GetProperty("chrome").GetString() == "environment/chrome.png", "asset manifest should locate chrome");
+    Expect(textures.GetProperty("glass").GetString() == "environment/glass.png", "asset manifest should locate glass");
 }
 
 static void ValidateDzoGlbExportWhenAvailable()

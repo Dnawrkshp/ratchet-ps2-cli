@@ -4,7 +4,10 @@ namespace RatchetPs2.Core.Moby;
 
 public static partial class MobyGltfImporter
 {
-    internal static Dictionary<int, TemplateDecodedMesh> DecodeTemplateMeshes(IReadOnlyList<MobyMeshTableEntry> entries, float scale)
+    internal static Dictionary<int, TemplateDecodedMesh> DecodeTemplateMeshes(
+        IReadOnlyList<MobyMeshTableEntry> entries,
+        float scale,
+        int jointCount)
     {
         var result = new Dictionary<int, TemplateDecodedMesh>();
         var rollingVertexCache = new Vector3?[512];
@@ -14,7 +17,7 @@ public static partial class MobyGltfImporter
 
         for (var i = 0; i < entries.Count; i++)
         {
-            if (TryDecodeTemplateMesh(entries[i], scale, rollingVertexCache, rollingJointCache, rollingWeightCache, rollingBlendCache, out var mesh))
+            if (TryDecodeTemplateMesh(entries[i], scale, jointCount, rollingVertexCache, rollingJointCache, rollingWeightCache, rollingBlendCache, out var mesh))
             {
                 result[i] = mesh;
             }
@@ -26,6 +29,7 @@ public static partial class MobyGltfImporter
     private static bool TryDecodeTemplateMesh(
         MobyMeshTableEntry entry,
         float scale,
+        int jointCount,
         Vector3?[] rollingVertexCache,
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
@@ -34,6 +38,37 @@ public static partial class MobyGltfImporter
     {
         mesh = new TemplateDecodedMesh([], [], []);
         var data = entry.VertexData;
+        if (entry.MeshType == MobyMeshType.Metal)
+        {
+            if (data.Length < 0x10
+                || BitConverter.ToUInt16(data, 0x00) != entry.VertexCount
+                || data.Length < 0x10 + entry.VertexCount * 0x10)
+            {
+                return false;
+            }
+
+            var positions = new List<Vector3>(entry.VertexCount);
+            for (var i = 0; i < entry.VertexCount; i++)
+            {
+                var offset = 0x10 + i * 0x10;
+                positions.Add(new Vector3(
+                    BitConverter.ToInt16(data, offset) * scale,
+                    BitConverter.ToInt16(data, offset + 4) * scale,
+                    -BitConverter.ToInt16(data, offset + 2) * scale));
+            }
+
+            mesh = new TemplateDecodedMesh(
+                positions,
+                Enumerable.Repeat<ushort[]>([
+                    entry.CommonTransformJointIndex < jointCount ? entry.CommonTransformJointIndex : (ushort)0,
+                    0,
+                    0,
+                    0
+                ], entry.VertexCount).ToList(),
+                Enumerable.Repeat<float[]>([1f, 0f, 0f, 0f], entry.VertexCount).ToList());
+            return true;
+        }
+
         if (data.Length < 0x20)
         {
             return false;

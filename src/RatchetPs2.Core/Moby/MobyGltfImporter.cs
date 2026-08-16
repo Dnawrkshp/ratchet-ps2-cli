@@ -265,7 +265,7 @@ public static partial class MobyGltfImporter
                 }
             }
         }
-        var templateMeshes = DecodeTemplateMeshes(model.MeshTable?.Entries ?? [], templateDecodeScale);
+        var templateMeshes = DecodeTemplateMeshes(model.MeshTable?.Entries ?? [], templateDecodeScale, model.JointCount);
         var customStaticTemplateReplaceIndex = options.CustomStaticSplitMeshes
             ? -1
             : customStaticReplaceMeshIndex;
