@@ -110,6 +110,61 @@ internal static class TieGltfTexCoordBuilder
         return assignedAny ? texCoords : [];
     }
 
+    public static List<Vector3> BuildEnvironmentNormals(TieClass tie, TieLodTopology topology)
+    {
+        var normals = Enumerable.Repeat(Vector3.Zero, topology.LogicalVertices.Count).ToList();
+        var packets = tie.PacketTables
+            .FirstOrDefault(table => table.LodIndex == topology.LodIndex)?
+            .Packets
+            .ToDictionary(packet => packet.PacketIndex) ?? [];
+        var blocks = tie.PacketDataBlocks
+            .Where(block => block.LodIndex == topology.LodIndex)
+            .ToDictionary(block => block.PacketIndex);
+        var assignedAny = false;
+
+        foreach (var vertex in topology.LogicalVertices)
+        {
+            if (vertex.DecodedVertex is not { } decodedVertex
+                || !packets.TryGetValue(vertex.PacketIndex, out var packet)
+                || !TiePassFlags.UsesEnvironmentPass(packet.PassFlags)
+                || !blocks.TryGetValue(vertex.PacketIndex, out var block))
+            {
+                continue;
+            }
+
+            var payloadOffset = (packet.MultipassOffset + TiePassFlags.GeneratedEnvPassHeaderQwords) * 0x10;
+            var packedOffset = payloadOffset + decodedVertex.Index * sizeof(uint);
+            var payloadEnd = payloadOffset + packet.MultipassUvSize * 0x10;
+            if (packedOffset < payloadOffset || packedOffset + sizeof(uint) > payloadEnd || packedOffset + sizeof(uint) > block.Bytes.Length)
+            {
+                continue;
+            }
+
+            // FUN_005947d0 / retail 0x005e9d70 unpacks signed 11/11/10 XYZ;
+            // VU0 entry 0x2a reflects this authored vector for the env UV.
+            var packed = BinaryPrimitives.ReadUInt32LittleEndian(block.Bytes.AsSpan(packedOffset, sizeof(uint)));
+            var normal = new Vector3(
+                SignExtend(packed, 11) / 1024f,
+                SignExtend(packed >> 22, 10) / 512f,
+                -SignExtend(packed >> 11, 11) / 1024f);
+            if (normal.LengthSquared() <= 1e-12f)
+            {
+                continue;
+            }
+
+            normals[vertex.LogicalVertexIndex] = Vector3.Normalize(normal);
+            assignedAny = true;
+        }
+
+        return assignedAny ? normals : [];
+    }
+
+    private static int SignExtend(uint value, int bitCount)
+    {
+        var shift = 32 - bitCount;
+        return (int)(value << shift) >> shift;
+    }
+
     private static void UnwrapPacketTexCoords(
         TieLodTopology topology,
         List<Vector2> texCoords,

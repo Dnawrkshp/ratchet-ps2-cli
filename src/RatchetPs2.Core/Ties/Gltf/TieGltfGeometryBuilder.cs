@@ -11,6 +11,7 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<TieShader> shaders,
         IReadOnlyList<Vector3> positions,
         IReadOnlyList<Vector3> normals,
+        IReadOnlyList<Vector3> environmentNormals,
         IReadOnlyList<Vector3> indexNormals,
         IReadOnlyList<int> sourceNormalVertexIndices,
         IReadOnlyList<int> sourceNormalIndexOffsets,
@@ -28,6 +29,7 @@ internal static class TieGltfGeometryBuilder
         ArgumentNullException.ThrowIfNull(shaders);
         ArgumentNullException.ThrowIfNull(positions);
         ArgumentNullException.ThrowIfNull(normals);
+        ArgumentNullException.ThrowIfNull(environmentNormals);
         ArgumentNullException.ThrowIfNull(indexNormals);
         ArgumentNullException.ThrowIfNull(sourceNormalIndexOffsets);
         ArgumentNullException.ThrowIfNull(sourceNormalVertexStates);
@@ -40,6 +42,7 @@ internal static class TieGltfGeometryBuilder
         ArgumentNullException.ThrowIfNull(packetIndexGroups);
 
         var includeGlowColors = glowColors.Count == positions.Count;
+        var includeEnvironmentNormals = environmentNormals.Count == positions.Count;
         var includeMultipassTexCoords = multipassTexCoords.Count == positions.Count;
         var sourceIndexCount = packetIndexGroups.Sum(group => group.Indices.Count);
         var includeSourceAmbientIndices = ambientIndices.Count == positions.Count
@@ -49,6 +52,9 @@ internal static class TieGltfGeometryBuilder
         var includeAmbientIndices = includeSourceAmbientIndices || includeIndexAmbientIndices;
         var expandedPositions = positions.ToList();
         var expandedNormals = normals.ToList();
+        var expandedEnvironmentNormals = includeEnvironmentNormals
+            ? environmentNormals.ToList()
+            : new List<Vector3>();
         var sourceNormalVertexIndexSet = sourceNormalVertexIndices.ToHashSet();
         var sourceNormalIndexOffsetSet = sourceNormalIndexOffsets.ToHashSet();
         var expandedSourceOnlyNormals = BuildSourceOnlyNormals();
@@ -175,6 +181,7 @@ internal static class TieGltfGeometryBuilder
         return new GltfGeometry(
             expandedPositions,
             expandedNormals,
+            expandedEnvironmentNormals,
             expandedSourceNormalMask,
             expandedSourceNormalStates,
             expandedTexCoords,
@@ -257,6 +264,10 @@ internal static class TieGltfGeometryBuilder
             var expandedIndex = checked((uint)expandedPositions.Count);
             expandedPositions.Add(positions[sourceIndex]);
             expandedNormals.Add(normal);
+            if (includeEnvironmentNormals)
+            {
+                expandedEnvironmentNormals.Add(environmentNormals[sourceIndex]);
+            }
             expandedSourceOnlyNormals.Add(sourceNormalPresent
                 ? normal
                 : Vector3.Zero);
@@ -483,6 +494,7 @@ internal static class TieGltfGeometryBuilder
 internal sealed record GltfGeometry(
     List<Vector3> Positions,
     List<Vector3> Normals,
+    List<Vector3> EnvironmentNormals,
     List<float> SourceNormalMask,
     List<float> SourceNormalStates,
     List<Vector2> TexCoords,

@@ -80,6 +80,9 @@ public static class TieGltfExporter
         var texCoordStart = Stopwatch.GetTimestamp();
         var texCoords = TieGltfTexCoordBuilder.BuildTexCoords(tie, topology);
         var multipassTexCoords = TieGltfTexCoordBuilder.BuildMultipassTexCoords(tie, topology, texCoords);
+        var environmentNormals = profile.GameLabel == "DL"
+            ? TieGltfTexCoordBuilder.BuildEnvironmentNormals(tie, topology)
+            : [];
         AddTiming(options, "tie.texcoords", "Tie texture coordinates", texCoordStart, $"{texCoords.Count} vertices");
 
         var glowStart = Stopwatch.GetTimestamp();
@@ -143,6 +146,7 @@ public static class TieGltfExporter
             tie.Shaders,
             positions,
             normalResult.Normals,
+            environmentNormals,
             normalResult.IndexNormals,
             normalResult.SourceNormalVertexIndices,
             normalResult.SourceNormalIndexOffsets,

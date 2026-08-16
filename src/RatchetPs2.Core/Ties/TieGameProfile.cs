@@ -10,6 +10,7 @@ public sealed record TieGameProfile
     public string GameLabel { get; init; } = "TIE";
     public string GlowEmissionAttributeName { get; init; } = "_TIE_GLOW_0";
     public string AmbientIndexAttributeName { get; init; } = "_TIE_AMBIENT_INDEX";
+    public string EnvironmentNormalAttributeName { get; init; } = "_TIE_ENV_NORMAL";
     public bool UseAmbientIndexAttribute { get; init; }
     public string SourceNormalAttributeName { get; init; } = "_TIE_SOURCE_NORMAL_PRESENT";
     public string SourceNormalStateAttributeName { get; init; } = "_TIE_SOURCE_NORMAL_STATE";

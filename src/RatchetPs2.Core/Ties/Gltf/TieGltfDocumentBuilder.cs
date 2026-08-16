@@ -58,6 +58,13 @@ internal static class TieGltfDocumentBuilder
             geometry.Normals,
             target: GltfBufferWriter.ArrayBufferTarget,
             includeMinMax: false);
+        var useEnvironmentNormalAttribute = geometry.EnvironmentNormals.Count == geometry.Positions.Count;
+        var environmentNormalAccessor = useEnvironmentNormalAttribute
+            ? gltfBufferWriter.WriteVector3Accessor(
+                geometry.EnvironmentNormals,
+                target: GltfBufferWriter.ArrayBufferTarget,
+                includeMinMax: false)
+            : (int?)null;
         var useSourceNormalMaskAttribute = geometry.SourceNormalMask.Count == geometry.Positions.Count
             && geometry.SourceNormalMask.Any(value => value < 0.5f);
         var sourceNormalMaskAccessor = useSourceNormalMaskAttribute
@@ -105,6 +112,10 @@ internal static class TieGltfDocumentBuilder
             ["NORMAL"] = normalAccessor,
             ["TEXCOORD_0"] = texCoordAccessor
         };
+        if (environmentNormalAccessor.HasValue)
+        {
+            attributes[profile.EnvironmentNormalAttributeName] = environmentNormalAccessor.Value;
+        }
         if (multipassTexCoordAccessor.HasValue)
         {
             attributes["TEXCOORD_1"] = multipassTexCoordAccessor.Value;

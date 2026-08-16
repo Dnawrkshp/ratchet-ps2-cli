@@ -1071,6 +1071,7 @@ foreach (var fixturePath in tiePaths)
 }
 
 ValidateReflectiveMaskFixture();
+ValidateGeneratedEnvironmentNormalFixture();
 ValidateSecondSlotQPivotFixture();
 ValidateWideSecondSlotQPivotFixture();
 ValidateZeroCoordinatePositionFixture();
@@ -1344,6 +1345,56 @@ void ValidateReflectiveMaskFixture()
     {
         failures.Add($"{relativePath}: {ex.Message}");
         Console.WriteLine($"FAIL DL tie reflective alpha mask {relativePath}");
+    }
+}
+
+void ValidateGeneratedEnvironmentNormalFixture()
+{
+    var fixturePath = Path.Combine(tiesRoot, "ALL DL", "9328", "core.bin");
+    if (!File.Exists(fixturePath))
+    {
+        return;
+    }
+
+    var relativePath = Path.GetRelativePath(repoRoot, fixturePath);
+    try
+    {
+        using var input = File.OpenRead(fixturePath);
+        var fixtureTie = TieClassReader.Read(input, TieClassReadOptions.ForGameProfile(dlProfile));
+        var fixtureExport = TieGltfExporter.Export(
+            fixtureTie,
+            "tie.gltf",
+            new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
+        using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+        var root = gltfDocument.RootElement;
+        var attributes = root.GetProperty("meshes")[0].GetProperty("primitives")[0].GetProperty("attributes");
+        var exported = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("_TIE_ENV_NORMAL").GetInt32())[0];
+
+        var vertex = fixtureTie.LodTopologies[0].LogicalVertices[0];
+        var packet = fixtureTie.PacketTables[0].Packets[vertex.PacketIndex];
+        var block = fixtureTie.PacketDataBlocks.First(item => item.LodIndex == 0 && item.PacketIndex == vertex.PacketIndex);
+        var packedOffset = (packet.MultipassOffset + 3) * 0x10
+            + vertex.DecodedVertex!.Index * sizeof(uint);
+        var packed = BitConverter.ToUInt32(block.Bytes, packedOffset);
+        var x = SignExtend(packed, 11) / 1024f;
+        var y = SignExtend(packed >> 11, 11) / 1024f;
+        var z = SignExtend(packed >> 22, 10) / 512f;
+        var length = MathF.Sqrt(x * x + y * y + z * z);
+        var dot = exported.X * x / length + exported.Y * z / length - exported.Z * y / length;
+        Expect(dot > 0.99999f, $"{relativePath}: expected exported normal to use the packed generated-env normal, dot={dot}");
+
+        Console.WriteLine($"PASS DL tie generated environment normal {relativePath}");
+    }
+    catch (Exception ex)
+    {
+        failures.Add($"{relativePath}: {ex.Message}");
+        Console.WriteLine($"FAIL DL tie generated environment normal {relativePath}");
+    }
+
+    static int SignExtend(uint value, int bitCount)
+    {
+        var shift = 32 - bitCount;
+        return (int)(value << shift) >> shift;
     }
 }
 
