@@ -10,6 +10,7 @@ using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 using RatchetPs2.Games.DL.Moby;
+using RatchetPs2.Games.GC.Level;
 using RatchetPs2.Games.UYA.Gameplay;
 using RatchetPs2.Games.UYA.Level;
 
@@ -17,9 +18,11 @@ ValidateLevelInfoLookup();
 ValidateLevelWadParsing();
 ValidateLooseLevelWadExtraction();
 ValidateLooseLevelWadUnpacking();
+ValidateGcLevelInfoLookup();
 ValidateUyaLevelInfoLookup();
 ValidateUyaLevelWadParsing();
 ValidateUyaLooseLevelWadExtraction();
+ValidateUyaDetachedWadExtraction();
 ValidateUyaLooseLevelWadUnpacking();
 ValidateUyaStandaloneLevelDataUnpacking();
 ValidateUyaStandaloneGameplayUnpacking();
@@ -225,6 +228,30 @@ static void ValidateUyaLevelInfoLookup()
     ExpectThrows<ArgumentOutOfRangeException>(() => UyaLevelInfoReader.ReadLevelSet(stream, UyaLevelConstants.LevelInfoCount));
 }
 
+static void ValidateGcLevelInfoLookup()
+{
+    var iso = new byte[GcLevelCatalog.RetailLevelInfoTableOffset
+        + ((GcLevelCatalog.Levels.Max(level => level.TableIndex) + 1) * GcLevelCatalog.LevelInfoSize)];
+    var museum = GcLevelCatalog.GetById(30);
+    var offset = GcLevelCatalog.RetailLevelInfoTableOffset + (museum.TableIndex * GcLevelCatalog.LevelInfoSize);
+    WriteInt32(iso, offset + 0x00, 31);
+    WriteInt32(iso, offset + 0x04, 2);
+    WriteInt32(iso, offset + 0x08, 32);
+    WriteInt32(iso, offset + 0x0c, 3);
+    WriteInt32(iso, offset + 0x10, 33);
+    WriteInt32(iso, offset + 0x14, 4);
+
+    using var stream = new MemoryStream(iso, writable: false);
+    var levelInfo = GcLevelInfoReader.ReadLevel(stream, 30);
+
+    Expect(GcLevelCatalog.Levels.Count == 27, "GC level catalog should include every Wrench level");
+    Expect(levelInfo.Level.TableIndex == 21, "GC Museum level id 30 should map to table index 21");
+    Expect(levelInfo.LevelWad == new GcFileBlock(31, 2), "GC level WAD should be the first table block");
+    Expect(levelInfo.LevelAudioWad == new GcFileBlock(32, 3), "GC audio WAD should be the second table block");
+    Expect(levelInfo.LevelSceneWad == new GcFileBlock(33, 4), "GC scene WAD should be the third table block");
+    ExpectThrows<ArgumentOutOfRangeException>(() => GcLevelCatalog.GetById(21));
+}
+
 static void ValidateUyaLevelWadParsing()
 {
     var levelWadBytes = CreateSyntheticUyaLooseLevelWad(payloadBaseSector: 0x1234);
@@ -276,6 +303,25 @@ static void ValidateUyaLooseLevelWadExtraction()
     Expect(extracted.PayloadBaseSector == payloadBaseSector, "UYA loose WAD extraction should report the payload base sector");
     Expect(extracted.SectorCount == looseWadBytes.Length / UyaLevelConstants.SectorSize, "UYA loose WAD extraction should copy through the last referenced sector");
     Expect(extracted.Bytes.SequenceEqual(looseWadBytes), "UYA loose WAD extraction should preserve referenced WAD bytes in a self-contained layout");
+}
+
+static void ValidateUyaDetachedWadExtraction()
+{
+    const int headerSector = 2;
+    const int payloadBaseSector = 8;
+    var iso = new byte[11 * UyaLevelConstants.SectorSize];
+    var headerOffset = headerSector * UyaLevelConstants.SectorSize;
+    WriteInt32(iso, headerOffset, UyaLevelConstants.SectorSize * 2);
+    WriteInt32(iso, headerOffset + sizeof(int), payloadBaseSector);
+    iso[headerOffset + UyaLevelConstants.SectorSize] = 0x42;
+    iso[(payloadBaseSector + 2) * UyaLevelConstants.SectorSize] = 0x73;
+
+    using var stream = new MemoryStream(iso, writable: false);
+    var wad = UyaLooseLevelWadExtractor.ExtractDetached(stream, new UyaFileBlock(headerSector, 3));
+
+    Expect(wad.Length == 3 * UyaLevelConstants.SectorSize, "detached WAD extraction should preserve the table size");
+    Expect(wad[UyaLevelConstants.SectorSize] == 0x42, "detached WAD extraction should copy the full detached header");
+    Expect(wad[2 * UyaLevelConstants.SectorSize] == 0x73, "detached WAD extraction should preserve payload sectors");
 }
 
 static void ValidateUyaLooseLevelWadUnpacking()
@@ -452,6 +498,13 @@ static void ValidateUyaGameplayTypedParsing()
     Expect(settings.CoreSoundsCount == 59, "UYA level settings core sound count should be parsed");
     Expect(settings.Rac3ThirdPart == 1234, "UYA level settings R&C3 tail field should be parsed");
     Expect(settings.TrailingBytes.SequenceEqual(new byte[] { 0xaa, 0xbb }), "UYA level settings trailing bytes should be preserved");
+
+    var gcLevelSettingsBytes = new byte[0xa0];
+    WriteInt32(gcLevelSettingsBytes, 0x68, 2);
+    WriteInt32(gcLevelSettingsBytes, 0x9c, 59);
+    var gcSettings = UyaLevelSettingsReader.Read(gcLevelSettingsBytes);
+    Expect(gcSettings.ChunkPlanes.Count == 2, "GC level settings chunk planes should be parsed");
+    Expect(gcSettings.CoreSoundsCount == 59 && gcSettings.Rac3ThirdPart == 0, "GC level settings should allow the UYA-only tail field to be absent");
 
     Expect(mobyInstances is not null, "UYA core moby_instances block should be parsed into a typed model");
     Expect(mobyInstances!.StaticCount == 1, "UYA moby instance static count should be parsed");
@@ -1199,6 +1252,16 @@ static void ValidateAssetSlicing()
 
     var nonZeroSlice = DlAssetReader.ReadAssetSlice(assetData, 10, knownOffsets);
     Expect(nonZeroSlice.SequenceEqual(assetData[10..20]), "non-zero asset slices should stop at the next known asset offset");
+
+    var headerBytes = new byte[0xc0];
+    WriteInt32(headerBytes, 0x10, 0x100);
+    WriteInt32(headerBytes, 0x14, 0x1000);
+    WriteInt32(headerBytes, 0x78, 0x200);
+    var header = DlAssetReader.ReadHeader(headerBytes);
+    var gcOffsets = DlAssetReader.CollectKnownAssetOffsets(GameId.GC, header, 0x2000, [], [], []);
+    var dlOffsets = DlAssetReader.CollectKnownAssetOffsets(GameId.DL, header, 0x2000, [], [], []);
+    Expect(!gcOffsets.Contains(0x200), "GC ratchet sequence table pointers should not truncate asset slices");
+    Expect(dlOffsets.Contains(0x200), "DL light cuboid offsets should remain asset slice boundaries");
 }
 
 static void ValidateMobyGsStashTextures()

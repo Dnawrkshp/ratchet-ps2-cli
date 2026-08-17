@@ -1038,13 +1038,58 @@ static void ValidateMetalMeshExport(string repoRoot)
             .GetProperty("meshType").GetString() == "Metal");
     var attributes = metalMesh.GetProperty("primitives")[0].GetProperty("attributes");
     var positionAccessor = attributes.GetProperty("POSITION").GetInt32();
+    var jointAccessor = root.GetProperty("accessors")[attributes.GetProperty("JOINTS_0").GetInt32()];
     var normalAccessor = root.GetProperty("accessors")[attributes.GetProperty("NORMAL").GetInt32()];
     var reflectionScaleAccessor = root.GetProperty("accessors")[
         attributes.GetProperty("_MOBY_METAL_REFLECTION_SCALE").GetInt32()];
     var normalView = root.GetProperty("bufferViews")[normalAccessor.GetProperty("bufferView").GetInt32()];
     var normalOffset = normalView.GetProperty("byteOffset").GetInt32()
         + (normalAccessor.TryGetProperty("byteOffset", out var accessorOffset) ? accessorOffset.GetInt32() : 0);
+    var jointView = root.GetProperty("bufferViews")[jointAccessor.GetProperty("bufferView").GetInt32()];
+    var jointOffset = jointView.GetProperty("byteOffset").GetInt32()
+        + (jointAccessor.TryGetProperty("byteOffset", out var jointAccessorOffset) ? jointAccessorOffset.GetInt32() : 0);
     var actualNormal = ReadBufferVector3(export.BinBytes, normalOffset, 0);
+
+    int AccessorOffset(JsonElement accessor)
+    {
+        var view = root.GetProperty("bufferViews")[accessor.GetProperty("bufferView").GetInt32()];
+        return view.GetProperty("byteOffset").GetInt32()
+            + (accessor.TryGetProperty("byteOffset", out var offset) ? offset.GetInt32() : 0);
+    }
+
+    var metalMeshIndex = metalMesh.GetProperty("extras").GetProperty("RatchetPs2").GetProperty("moby")
+        .GetProperty("meshIndex").GetInt32();
+    var sourceJointByPosition = new Dictionary<Vector3, ushort>();
+    foreach (var sourceMesh in root.GetProperty("meshes").EnumerateArray())
+    {
+        var metadata = sourceMesh.GetProperty("extras").GetProperty("RatchetPs2").GetProperty("moby");
+        if (metadata.GetProperty("meshIndex").GetInt32() >= metalMeshIndex)
+        {
+            continue;
+        }
+
+        foreach (var primitive in sourceMesh.GetProperty("primitives").EnumerateArray())
+        {
+            var sourceAttributes = primitive.GetProperty("attributes");
+            var sourcePositionAccessor = root.GetProperty("accessors")[sourceAttributes.GetProperty("POSITION").GetInt32()];
+            var sourceJointAccessor = root.GetProperty("accessors")[sourceAttributes.GetProperty("JOINTS_0").GetInt32()];
+            var sourcePositionOffset = AccessorOffset(sourcePositionAccessor);
+            var sourceJointOffset = AccessorOffset(sourceJointAccessor);
+            for (var i = 0; i < sourcePositionAccessor.GetProperty("count").GetInt32(); i++)
+            {
+                sourceJointByPosition[ReadBufferVector3(export.BinBytes, sourcePositionOffset, (uint)i)] =
+                    BitConverter.ToUInt16(export.BinBytes, sourceJointOffset + i * 4 * sizeof(ushort));
+            }
+        }
+    }
+
+    var positionOffset = AccessorOffset(root.GetProperty("accessors")[positionAccessor]);
+    var metalSkinMatchesSource = Enumerable.Range(0, 21).All(i =>
+    {
+        var position = ReadBufferVector3(export.BinBytes, positionOffset, (uint)i);
+        var actualJoint = BitConverter.ToUInt16(export.BinBytes, jointOffset + i * 4 * sizeof(ushort));
+        return sourceJointByPosition.TryGetValue(position, out var expectedJoint) && actualJoint == expectedJoint;
+    });
     using var sourceInput = File.OpenRead(Path.Combine(repoRoot, "test-assets", "DL Skins", "18", "core.bin"));
     var source = MobyModelReader.Read(
         sourceInput,
@@ -1061,9 +1106,10 @@ static void ValidateMetalMeshExport(string repoRoot)
         || reflectionScaleAccessor.GetProperty("count").GetInt32() != 21
         || reflectionScaleAccessor.GetProperty("min")[0].GetSingle() != 0.5f
         || reflectionScaleAccessor.GetProperty("max")[0].GetSingle() != 0.5f
+        || !metalSkinMatchesSource
         || Vector3.Distance(actualNormal, expectedNormal) > 0.000001f)
     {
-        throw new InvalidDataException("DL metal mesh geometry or its authored reflection scale was not exported correctly.");
+        throw new InvalidDataException("DL metal mesh geometry, skinning, or authored reflection scale was not exported correctly.");
     }
 }
 

@@ -1,3 +1,4 @@
+using RatchetPs2.Core.Games;
 using RatchetPs2.Games.DL.Level;
 namespace RatchetPs2.Cli.Abstractions;
 
@@ -107,6 +108,7 @@ internal static partial class DlMapExtractionWriter
         };
 
         var knownAssetOffsets = DlAssetReader.CollectKnownAssetOffsets(
+            GameId.DL,
             header,
             assetBytes.Length,
             mobyDefinitions,

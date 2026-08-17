@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\RatchetPs2.Games.DL\RatchetPs2.Games.DL.csproj" SetTargetFramework="TargetFramework=net9.0" />
+    <ProjectReference Include="..\..\src\RatchetPs2.Games.GC\RatchetPs2.Games.GC.csproj" SetTargetFramework="TargetFramework=net9.0" />
     <ProjectReference Include="..\..\src\RatchetPs2.Games.UYA\RatchetPs2.Games.UYA.csproj" SetTargetFramework="TargetFramework=net9.0" />
   </ItemGroup>
 

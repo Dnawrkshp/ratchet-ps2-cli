@@ -17,6 +17,8 @@ if (!File.Exists(skyboxPath))
 }
 
 var failures = new List<string>();
+var gcProfile = SkyboxGameProfile.ForGame(GameId.GC);
+Expect(gcProfile.GameLabel == "GC" && !gcProfile.TextureIsSwizzled, "expected GC skyboxes to use the unswizzled UYA profile");
 using (var input = File.OpenRead(skyboxPath))
 {
     var skybox = SkyboxReader.Read(input);

@@ -1,6 +1,7 @@
 using System.Buffers.Binary;
 using System.Diagnostics;
 using System.Text.Json;
+using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Wad.Models;
 
 namespace RatchetPs2.Games.UYA.Level;
@@ -15,18 +16,24 @@ public static class UyaLevelWadRenderPackageBuilder
     public static PackedFilePackage BuildPacked(
         int levelIndex,
         IReadOnlyList<PackedFile> unpackedFiles,
-        Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles)
+        Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles,
+        GameId gameId = GameId.UYA)
     {
-        return PackedFilePackageBuilder.Pack(BuildFiles(levelIndex, unpackedFiles, buildAssetFiles));
+        return PackedFilePackageBuilder.Pack(BuildFiles(levelIndex, unpackedFiles, buildAssetFiles, gameId));
     }
 
     public static IReadOnlyList<PackedFile> BuildFiles(
         int levelIndex,
         IReadOnlyList<PackedFile> unpackedFiles,
-        Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles)
+        Func<UyaLevelAssetSourceFiles, IReadOnlyList<PackedFile>> buildAssetFiles,
+        GameId gameId = GameId.UYA)
     {
         ArgumentNullException.ThrowIfNull(unpackedFiles);
         ArgumentNullException.ThrowIfNull(buildAssetFiles);
+        if (gameId is not (GameId.GC or GameId.UYA))
+        {
+            throw new ArgumentOutOfRangeException(nameof(gameId), "GC/UYA render packages require GC or UYA.");
+        }
 
         var totalStart = Stopwatch.GetTimestamp();
         var timings = new List<RenderPackageTiming>();
@@ -34,7 +41,7 @@ public static class UyaLevelWadRenderPackageBuilder
         var files = new List<PackedFile>();
         var manifest = new Dictionary<string, object?>
         {
-            ["Game"] = "UYA",
+            ["Game"] = gameId.ToString(),
             ["Source"] = "loose_level_wad",
             ["RenderPackageVersion"] = 1,
             ["Level"] = levelIndex,

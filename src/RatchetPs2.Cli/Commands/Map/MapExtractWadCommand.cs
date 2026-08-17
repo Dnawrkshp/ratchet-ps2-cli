@@ -2,6 +2,7 @@ using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.GC.Level;
 using RatchetPs2.Games.UYA.Level;
 using System.CommandLine;
 
@@ -15,7 +16,7 @@ internal static class MapExtractWadCommand
         var inputOption = CommonOptions.InputFile("Path to the game ISO.");
         var levelOption = new Option<int>("--level")
         {
-            Description = "Level index to extract.",
+            Description = "Level ID/index to extract.",
             Required = true
         };
         var outputOption = CommonOptions.OutputFile("Path to write the loose level WAD.");
@@ -58,6 +59,17 @@ internal static class MapExtractWadCommand
                 outputFile.Directory?.Create();
                 using var isoStream = inputFile.OpenRead();
 
+                if (gameId == GameId.GC)
+                {
+                    var levelInfo = GcLevelInfoReader.ReadLevel(isoStream, level);
+                    var gcLevelSet = UyaMapExtractionWriter.ToUyaLevelInfo(levelInfo);
+                    var gcLooseWad = UyaLooseLevelWadExtractor.ExtractPrimary(isoStream, gcLevelSet);
+                    File.WriteAllBytes(outputFile.FullName, gcLooseWad.Bytes);
+                    Console.WriteLine(
+                        $"Extracted GC level {level} WAD to '{outputFile.FullName}' ({gcLooseWad.SectorCount} sectors, {gcLooseWad.ByteLength} bytes, header sector 0x{gcLooseWad.HeaderSector:X}, payload base 0x{gcLooseWad.PayloadBaseSector:X}).");
+                    return 0;
+                }
+
                 if (gameId == GameId.UYA)
                 {
                     var uyaLooseWad = UyaLooseLevelWadExtractor.ExtractPrimary(isoStream, level);
@@ -89,13 +101,13 @@ internal static class MapExtractWadCommand
 
         if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out gameId))
         {
-            error = $"Unsupported --game value '{gameValue}'. Map WAD extraction currently supports UYA and DL.";
+            error = $"Unsupported --game value '{gameValue}'. Map WAD extraction currently supports GC, UYA, and DL.";
             return false;
         }
 
-        if (gameId is not (GameId.UYA or GameId.DL))
+        if (gameId is not (GameId.GC or GameId.UYA or GameId.DL))
         {
-            error = "Map WAD extraction currently supports only --game UYA or --game DL.";
+            error = "Map WAD extraction currently supports only --game GC, --game UYA, or --game DL.";
             return false;
         }
 

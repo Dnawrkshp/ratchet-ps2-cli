@@ -1265,6 +1265,47 @@
       ]
     },
     {
+      "jsMethodName": "buildGcLevelWadRenderPackage",
+      "returnType": "Promise<PackedFilePackageResult>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "const result = await DotNet.invokeMethodAsync(",
+        "  \"RatchetPs2.Wasm\",",
+        "  \"BuildGcLevelWadRenderPackage\",",
+        "  input",
+        ");",
+        "return {",
+        "  packedBytes: toUint8Array(result.packedBytes),",
+        "  entries: result.entries.map((entry) => ({",
+        "    path: entry.path,",
+        "    offset: entry.offset,",
+        "    length: entry.length,",
+        "    contentType: entry.contentType,",
+        "  })),",
+        "};"
+      ]
+    },
+    {
+      "jsMethodName": "buildGcLevelWadRenderPackageEnvelope",
+      "returnType": "Promise<WasmByteArray>",
+      "parameters": [
+        {
+          "name": "levelWadBytes",
+          "type": "Uint8Array | ArrayBuffer"
+        }
+      ],
+      "customImplementation": [
+        "const input = toUint8Array(levelWadBytes);",
+        "return invokeRatchetPs2JsExport(\"BuildGcLevelWadRenderPackageEnvelope\", input);"
+      ]
+    },
+    {
       "jsMethodName": "buildUyaLevelWadRenderPackage",
       "returnType": "Promise<PackedFilePackageResult>",
       "parameters": [

@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
@@ -71,6 +72,7 @@ public static class DlDzoMobyExporter
             header.MobyTextureOffset,
             header.MobyTextureCount);
         var knownOffsets = DlAssetReader.CollectKnownAssetOffsets(
+            GameId.DL,
             header,
             assetBytes.Length,
             mobyDefinitions,

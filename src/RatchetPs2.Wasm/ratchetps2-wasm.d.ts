@@ -303,6 +303,10 @@ export function buildDlLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBu
 
 export function buildDlLevelWadRenderPackageEnvelope(levelWadBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;
 
+export function buildGcLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
+
+export function buildGcLevelWadRenderPackageEnvelope(levelWadBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;
+
 export function buildUyaLevelWadRenderPackage(levelWadBytes: Uint8Array | ArrayBuffer): Promise<PackedFilePackageResult>;
 
 export function buildUyaLevelWadRenderPackageEnvelope(levelWadBytes: Uint8Array | ArrayBuffer): Promise<WasmByteArray>;

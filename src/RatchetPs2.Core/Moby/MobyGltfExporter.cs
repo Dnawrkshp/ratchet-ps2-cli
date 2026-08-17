@@ -125,6 +125,7 @@ public static class MobyGltfExporter
         var rollingJointCache = new ushort[512][];
         var rollingWeightCache = new float[512][];
         var rollingBlendCache = new SkinBlend?[64];
+        var sourceSkinByPosition = new Dictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)>();
         var highLodTextureBounds = new List<TextureBounds>();
         var highLodTextureTriangles = new List<TextureTriangle>();
 
@@ -177,6 +178,7 @@ public static class MobyGltfExporter
                     rollingJointCache,
                     rollingWeightCache,
                     rollingBlendCache,
+                    sourceSkinByPosition,
                     effectiveTextureId,
                     out var positions,
                     out var normals,
@@ -1610,6 +1612,7 @@ public static class MobyGltfExporter
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         SkinBlend?[] rollingBlendCache,
+        Dictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)> sourceSkinByPosition,
         int? initialTextureId,
         out List<Vector3> positions,
         out List<Vector3> normals,
@@ -1639,6 +1642,7 @@ public static class MobyGltfExporter
                 rollingJointCache,
                 rollingWeightCache,
                 rollingBlendCache,
+                sourceSkinByPosition,
                 out positions,
                 out normals,
                 out validMask,
@@ -1969,6 +1973,7 @@ public static class MobyGltfExporter
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         SkinBlend?[] rollingBlendCache,
+        Dictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)> sourceSkinByPosition,
         out List<Vector3> positions,
         out List<Vector3> normals,
         out List<bool> validMask,
@@ -1985,7 +1990,15 @@ public static class MobyGltfExporter
 
         if (entry.MeshType == MobyMeshType.Metal)
         {
-            return TryDecodeMetalVertexTable(entry, scale, positions, normals, validMask, joints, weights);
+            return TryDecodeMetalVertexTable(
+                entry,
+                scale,
+                sourceSkinByPosition,
+                positions,
+                normals,
+                validMask,
+                joints,
+                weights);
         }
 
         var data = entry.VertexData;
@@ -2122,6 +2135,10 @@ public static class MobyGltfExporter
                 validMask.Add(true);
                 joints.Add(jointRow);
                 weights.Add(weightRow);
+                sourceSkinByPosition[(
+                    BitConverter.ToInt16(vertex, 0x0A),
+                    BitConverter.ToInt16(vertex, 0x0C),
+                    BitConverter.ToInt16(vertex, 0x0E))] = (jointRow, weightRow);
                 if (vertexIndex >= 0 && vertexIndex < rollingVertexCache.Length)
                 {
                     rollingVertexCache[vertexIndex] = position;
@@ -2162,6 +2179,7 @@ public static class MobyGltfExporter
     private static bool TryDecodeMetalVertexTable(
         MobyMeshTableEntry entry,
         float scale,
+        IReadOnlyDictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)> sourceSkinByPosition,
         List<Vector3> positions,
         List<Vector3> normals,
         List<bool> validMask,
@@ -2183,15 +2201,21 @@ public static class MobyGltfExporter
         for (var i = 0; i < vertexCount; i++)
         {
             var offset = 0x10 + i * 0x10;
-            positions.Add(GltfCoordinateBasis.FromPs2Position(
-                BitConverter.ToInt16(data, offset),
-                BitConverter.ToInt16(data, offset + 2),
-                BitConverter.ToInt16(data, offset + 4),
-                scale));
+            var sourcePosition = (
+                X: BitConverter.ToInt16(data, offset),
+                Y: BitConverter.ToInt16(data, offset + 2),
+                Z: BitConverter.ToInt16(data, offset + 4));
+            var position = GltfCoordinateBasis.FromPs2Position(
+                sourcePosition.X,
+                sourcePosition.Y,
+                sourcePosition.Z,
+                scale);
+            positions.Add(position);
             normals.Add(DecodeNormal(data[offset + 6], data[offset + 7]));
             validMask.Add(true);
-            joints.Add([entry.CommonTransformJointIndex, 0, 0, 0]);
-            weights.Add(DefaultWeights());
+            var hasSourceSkin = sourceSkinByPosition.TryGetValue(sourcePosition, out var skin);
+            joints.Add(hasSourceSkin ? skin.Joints : DefaultJoints());
+            weights.Add(hasSourceSkin ? skin.Weights : DefaultWeights());
         }
 
         return vertexCount >= 3;

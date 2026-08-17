@@ -429,6 +429,33 @@ export async function buildDlLevelWadRenderPackageEnvelope(levelWadBytes) {
   return invokeRatchetPs2JsExport("BuildDlLevelWadRenderPackageEnvelope", input);
 }
 
+export async function buildGcLevelWadRenderPackage(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  const result = await DotNet.invokeMethodAsync(
+    "RatchetPs2.Wasm",
+    "BuildGcLevelWadRenderPackage",
+    input
+  );
+  return {
+    packedBytes: toUint8Array(result.packedBytes),
+    entries: result.entries.map((entry) => ({
+      path: entry.path,
+      offset: entry.offset,
+      length: entry.length,
+      contentType: entry.contentType,
+    })),
+  };
+}
+
+export async function buildGcLevelWadRenderPackageEnvelope(levelWadBytes) {
+  await ensureStarted();
+
+  const input = toUint8Array(levelWadBytes);
+  return invokeRatchetPs2JsExport("BuildGcLevelWadRenderPackageEnvelope", input);
+}
+
 export async function buildUyaLevelWadRenderPackage(levelWadBytes) {
   await ensureStarted();
 

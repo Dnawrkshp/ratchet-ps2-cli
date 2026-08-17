@@ -100,6 +100,19 @@ public static partial class Exports
         return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
     }
 
+    [JSInvokable("BuildGcLevelWadRenderPackage")]
+    public static PackedFilePackage BuildGcLevelWadRenderPackage(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        var package = UyaLevelWadUnpacker.Unpack(levelWadBytes);
+        var renderPackage = BuildUyaRenderPackage(
+            package.LevelWad.Level,
+            package.Files,
+            GameId.GC);
+        return AppendPackedFiles(renderPackage, package.Files.Where(IsGameplayMetadataFile));
+    }
+
     [JSInvokable("BuildUyaCustomMapZipRenderPackage")]
     public static PackedFilePackage BuildUyaCustomMapZipRenderPackage(byte[] zipBytes)
     {
@@ -112,19 +125,21 @@ public static partial class Exports
 
     private static PackedFilePackage BuildUyaRenderPackage(
         int levelIndex,
-        IReadOnlyList<PackedFile> unpackedFiles)
+        IReadOnlyList<PackedFile> unpackedFiles,
+        GameId gameId = GameId.UYA)
     {
         return UyaLevelWadRenderPackageBuilder.BuildPacked(
             levelIndex,
             unpackedFiles,
             assetFiles => DlLevelWadRenderPackageBuilder.BuildAssetFiles(
-                GameId.UYA,
+                gameId,
                 levelIndex,
                 assetFiles.HeaderBytes,
                 assetFiles.PaletteBytes,
                 assetFiles.AssetWadBytes,
                 DlLevelWadRenderPackageBuildOptions.Browser,
-                assetFiles.ChunkWads));
+                assetFiles.ChunkWads),
+            gameId);
     }
 
     [JSInvokable("ExportMobyGltf")]

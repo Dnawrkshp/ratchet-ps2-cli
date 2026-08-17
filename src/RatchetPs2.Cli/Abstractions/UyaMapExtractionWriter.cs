@@ -2,6 +2,7 @@ using System.Text.Json;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.GC.Level;
 using RatchetPs2.Games.UYA.Level;
 
 namespace RatchetPs2.Cli.Abstractions;
@@ -15,6 +16,31 @@ internal static class UyaMapExtractionWriter
 
     public static UyaMapExtractionSummary Extract(FileInfo isoFile, int levelIndex, DirectoryInfo outputDirectory)
     {
+        return Extract(
+            isoFile,
+            GameId.UYA,
+            levelIndex,
+            UyaLevelInfoReader.ReadLevelSet,
+            outputDirectory);
+    }
+
+    public static UyaMapExtractionSummary ExtractGc(FileInfo isoFile, int levelId, DirectoryInfo outputDirectory)
+    {
+        return Extract(
+            isoFile,
+            GameId.GC,
+            levelId,
+            (stream, id) => ToUyaLevelInfo(GcLevelInfoReader.ReadLevel(stream, id)),
+            outputDirectory);
+    }
+
+    private static UyaMapExtractionSummary Extract(
+        FileInfo isoFile,
+        GameId gameId,
+        int levelId,
+        Func<Stream, int, UyaLevelInfoSet> readLevelInfo,
+        DirectoryInfo outputDirectory)
+    {
         ArgumentNullException.ThrowIfNull(isoFile);
         ArgumentNullException.ThrowIfNull(outputDirectory);
 
@@ -26,12 +52,12 @@ internal static class UyaMapExtractionWriter
         outputDirectory.Create();
 
         using var isoStream = isoFile.OpenRead();
-        var levelInfo = UyaLevelInfoReader.ReadLevelSet(isoStream, levelIndex);
-        var looseWad = UyaLooseLevelWadExtractor.ExtractPrimary(isoStream, levelIndex);
+        var levelInfo = readLevelInfo(isoStream, levelId);
+        var looseWad = UyaLooseLevelWadExtractor.ExtractPrimary(isoStream, levelInfo);
         var package = UyaLevelWadUnpacker.Unpack(looseWad.Bytes);
 
         PackedFilePackageWriter.WriteFiles(package.Files, outputDirectory);
-        var assetFiles = BuildAssetFiles(levelIndex, package.Files);
+        var assetFiles = BuildAssetFiles(gameId, levelId, package.Files);
         PackedFilePackageWriter.WriteFiles(assetFiles, outputDirectory);
 
         var optionalFileCount = 0;
@@ -48,8 +74,9 @@ internal static class UyaMapExtractionWriter
 
         var manifest = new Dictionary<string, object?>
         {
-            ["Game"] = "UYA",
+            ["Game"] = gameId.ToString(),
             ["SourceIso"] = isoFile.FullName,
+            ["RequestedLevelId"] = levelId,
             ["RequestedLevelIndex"] = levelInfo.RequestedLevelIndex,
             ["LevelInfo"] = levelInfo,
             ["LevelWad"] = looseWad.LevelWad,
@@ -90,7 +117,7 @@ internal static class UyaMapExtractionWriter
 
         PackedFilePackageWriter.WriteFiles(package.LevelDataFiles, outputDirectory);
         PackedFilePackageWriter.WriteFiles(package.GameplayFiles, outputDirectory);
-        var assetFiles = BuildAssetFiles(levelIndex: 0, package.LevelDataFiles);
+        var assetFiles = BuildAssetFiles(GameId.UYA, levelIndex: 0, package.LevelDataFiles);
         PackedFilePackageWriter.WriteFiles(assetFiles, outputDirectory);
 
         var manifest = new Dictionary<string, object?>
@@ -118,7 +145,10 @@ internal static class UyaMapExtractionWriter
             0);
     }
 
-    private static IReadOnlyList<PackedFile> BuildAssetFiles(int levelIndex, IReadOnlyList<PackedFile> files)
+    private static IReadOnlyList<PackedFile> BuildAssetFiles(
+        GameId gameId,
+        int levelIndex,
+        IReadOnlyList<PackedFile> files)
     {
         var byPath = files.ToDictionary(file => file.Path, StringComparer.Ordinal);
         if (!byPath.TryGetValue("assets/asset_header.bin", out var header)
@@ -129,7 +159,7 @@ internal static class UyaMapExtractionWriter
         }
 
         return DlLevelWadRenderPackageBuilder.BuildAssetFiles(
-            GameId.UYA,
+            gameId,
             levelIndex,
             header.Bytes,
             palette.Bytes,
@@ -172,7 +202,7 @@ internal static class UyaMapExtractionWriter
             return 0;
         }
 
-        var bytes = UyaLevelInfoReader.ReadSectorBlock(isoStream, block);
+        var bytes = UyaLooseLevelWadExtractor.ExtractDetached(isoStream, block);
         if (bytes.Length == 0)
         {
             return 0;
@@ -183,5 +213,16 @@ internal static class UyaMapExtractionWriter
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         File.WriteAllBytes(outputPath, bytes);
         return 1;
+    }
+
+    internal static UyaLevelInfoSet ToUyaLevelInfo(GcLevelInfoEntry levelInfo)
+    {
+        return new UyaLevelInfoSet(
+            levelInfo.Level.TableIndex,
+            new UyaLevelInfoEntry(
+                levelInfo.Level.TableIndex,
+                new UyaFileBlock(levelInfo.LevelAudioWad.Offset, levelInfo.LevelAudioWad.Length),
+                new UyaFileBlock(levelInfo.LevelWad.Offset, levelInfo.LevelWad.Length),
+                new UyaFileBlock(levelInfo.LevelSceneWad.Offset, levelInfo.LevelSceneWad.Length)));
     }
 }

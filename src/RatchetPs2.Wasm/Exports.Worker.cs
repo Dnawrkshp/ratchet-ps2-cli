@@ -51,6 +51,14 @@ public static partial class Exports
     }
 
     [JSExport]
+    public static byte[] BuildGcLevelWadRenderPackageEnvelope(byte[] levelWadBytes)
+    {
+        ArgumentNullException.ThrowIfNull(levelWadBytes);
+
+        return BuildRenderPackageEnvelope(BuildGcLevelWadRenderPackage(levelWadBytes));
+    }
+
+    [JSExport]
     public static byte[] BuildUyaCustomMapZipRenderPackageEnvelope(byte[] zipBytes)
     {
         ArgumentNullException.ThrowIfNull(zipBytes);

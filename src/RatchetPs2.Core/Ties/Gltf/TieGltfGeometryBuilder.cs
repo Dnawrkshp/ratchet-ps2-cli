@@ -18,6 +18,7 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalVertexStates,
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
         bool suppressGeneratedNormalFallback,
+        bool orientTriangleWindingToNormals,
         IReadOnlyList<Vector2> texCoords,
         IReadOnlyList<Vector2> multipassTexCoords,
         IReadOnlyList<Vector4> glowColors,
@@ -176,6 +177,11 @@ internal static class TieGltfGeometryBuilder
                     suppressedGeneratedNormalFallbackVertexCount++;
                 }
             }
+        }
+
+        if (orientTriangleWindingToNormals)
+        {
+            OrientTrianglesToNormals(expandedPositions, expandedNormals, expandedGroups);
         }
 
         return new GltfGeometry(
@@ -357,6 +363,29 @@ internal static class TieGltfGeometryBuilder
             }
 
             return Enumerable.Repeat(-1f, positions.Count).ToList();
+        }
+    }
+
+    private static void OrientTrianglesToNormals(
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector3> normals,
+        IReadOnlyList<PacketIndexGroup> groups)
+    {
+        foreach (var group in groups)
+        {
+            for (var i = 0; i + 2 < group.Indices.Count; i += 3)
+            {
+                var a = checked((int)group.Indices[i]);
+                var b = checked((int)group.Indices[i + 1]);
+                var c = checked((int)group.Indices[i + 2]);
+                var faceNormal = Vector3.Cross(positions[b] - positions[a], positions[c] - positions[a]);
+                var vertexNormal = normals[a] + normals[b] + normals[c];
+                if (Vector3.Dot(faceNormal, vertexNormal) < 0f)
+                {
+                    (group.Indices[i + 1], group.Indices[i + 2]) =
+                        (group.Indices[i + 2], group.Indices[i + 1]);
+                }
+            }
         }
     }
 

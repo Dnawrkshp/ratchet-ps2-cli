@@ -24,7 +24,7 @@ public sealed record SkyboxGameProfile
                 TextureIsSwizzled = true,
                 UseDlLevel7LoaderRotationPatch = true
             },
-            GameId.UYA => Default with
+            GameId.GC or GameId.UYA => Default with
             {
                 GameLabel = gameId.ToString()
             },

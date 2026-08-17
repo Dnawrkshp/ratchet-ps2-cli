@@ -259,6 +259,7 @@ public static class DlLevelWadRenderPackageBuilder
         var fxDefinitions = DlAssetReader.ReadFxTextureDefinitions(headerBytes, header.FxTextureDefOffset, header.FxTextureCount);
         var textureIsSwizzled = ShouldSwizzleAssetTextures(gameId);
         var knownAssetOffsets = DlAssetReader.CollectKnownAssetOffsets(
+            gameId,
             header,
             assetBytes.Length,
             mobyDefinitions,

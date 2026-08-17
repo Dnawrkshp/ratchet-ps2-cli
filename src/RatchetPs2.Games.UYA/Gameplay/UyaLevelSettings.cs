@@ -44,8 +44,9 @@ public static class UyaLevelSettingsReader
 
         var coreSoundsCount = ReadInt32LittleEndian(data, chunkPlaneCursor);
         var rac3ThirdPartOffset = chunkPlaneCursor + sizeof(int);
-        var rac3ThirdPart = ReadInt32LittleEndian(data, rac3ThirdPartOffset);
-        var trailingOffset = rac3ThirdPartOffset + sizeof(int);
+        var hasRac3ThirdPart = data.Length >= rac3ThirdPartOffset + sizeof(int);
+        var rac3ThirdPart = hasRac3ThirdPart ? ReadInt32LittleEndian(data, rac3ThirdPartOffset) : 0;
+        var trailingOffset = hasRac3ThirdPart ? rac3ThirdPartOffset + sizeof(int) : data.Length;
 
         return new UyaLevelSettings(
             ReadRgb(data, 0x00),

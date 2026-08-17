@@ -90,7 +90,7 @@ internal static class MapUnpackWadCommand
             {
                 var bytes = File.ReadAllBytes(inputFile.FullName);
 
-                if (gameId == GameId.UYA)
+                if (gameId is GameId.GC or GameId.UYA)
                 {
                     var uyaPackage = UyaLevelWadUnpacker.Unpack(bytes);
                     if (render)
@@ -102,7 +102,7 @@ internal static class MapUnpackWadCommand
                         };
                         IReadOnlyList<PackedFile> BuildAssetFiles(UyaLevelAssetSourceFiles assetFiles) =>
                             DlLevelWadRenderPackageBuilder.BuildAssetFiles(
-                                GameId.UYA,
+                                gameId,
                                 uyaPackage.LevelWad.Level,
                                 assetFiles.HeaderBytes,
                                 assetFiles.PaletteBytes,
@@ -115,33 +115,35 @@ internal static class MapUnpackWadCommand
                             var renderPackage = UyaLevelWadRenderPackageBuilder.BuildPacked(
                                 uyaPackage.LevelWad.Level,
                                 uyaPackage.Files,
-                                BuildAssetFiles);
+                                BuildAssetFiles,
+                                gameId);
                             PackedFilePackageWriter.WriteIndexed(renderPackage, outputDirectory);
                             Console.WriteLine(
-                                $"Built UYA render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderPackage.Entries.Count} entries).");
+                                $"Built {gameId} render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderPackage.Entries.Count} entries).");
                         }
                         else
                         {
                             var renderFiles = UyaLevelWadRenderPackageBuilder.BuildFiles(
                                 uyaPackage.LevelWad.Level,
                                 uyaPackage.Files,
-                                BuildAssetFiles);
+                                BuildAssetFiles,
+                                gameId);
                             PackedFilePackageWriter.WriteFiles(renderFiles, outputDirectory);
                             Console.WriteLine(
-                                $"Built UYA render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderFiles.Count} files).");
+                                $"Built {gameId} render package from '{inputFile.FullName}' at '{outputDirectory.FullName}' ({renderFiles.Count} files).");
                         }
                     }
                     else if (normalizedFormat == "indexed")
                     {
                         PackedFilePackageWriter.WriteIndexed(uyaPackage.ToPackedPackage(), outputDirectory);
                         Console.WriteLine(
-                            $"Unpacked UYA level WAD '{inputFile.FullName}' to indexed package '{outputDirectory.FullName}' ({uyaPackage.Files.Count} entries).");
+                            $"Unpacked {gameId} level WAD '{inputFile.FullName}' to indexed package '{outputDirectory.FullName}' ({uyaPackage.Files.Count} entries).");
                     }
                     else
                     {
                         PackedFilePackageWriter.WriteFiles(uyaPackage.Files, outputDirectory);
                         Console.WriteLine(
-                            $"Unpacked UYA level WAD '{inputFile.FullName}' to '{outputDirectory.FullName}' ({uyaPackage.Files.Count} files).");
+                            $"Unpacked {gameId} level WAD '{inputFile.FullName}' to '{outputDirectory.FullName}' ({uyaPackage.Files.Count} files).");
                     }
 
                     return 0;
@@ -205,13 +207,13 @@ internal static class MapUnpackWadCommand
 
         if (string.IsNullOrWhiteSpace(gameValue) || !GameIdParser.TryParse(gameValue, out gameId))
         {
-            error = $"Unsupported --game value '{gameValue}'. Map WAD unpack currently supports UYA and DL.";
+            error = $"Unsupported --game value '{gameValue}'. Map WAD unpack currently supports GC, UYA, and DL.";
             return false;
         }
 
-        if (gameId is not (GameId.UYA or GameId.DL))
+        if (gameId is not (GameId.GC or GameId.UYA or GameId.DL))
         {
-            error = "Map WAD unpack currently supports only --game UYA or --game DL.";
+            error = "Map WAD unpack currently supports only --game GC, --game UYA, or --game DL.";
             return false;
         }
 

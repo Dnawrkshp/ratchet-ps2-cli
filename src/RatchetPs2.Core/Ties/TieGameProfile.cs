@@ -24,6 +24,7 @@ public sealed record TieGameProfile
     public bool InvertDecodedFatVertexSourceNormals { get; init; }
     public bool UsePackedVertexNormalTableSource { get; init; }
     public bool UsePacketRowSourceNormals { get; init; } = true;
+    public bool OrientTriangleWindingToNormals { get; init; }
     public int VertexNormalHeaderSize { get; init; } = 0x10;
 
     public static TieGameProfile ForGame(GameId gameId)
@@ -37,12 +38,12 @@ public sealed record TieGameProfile
         return this with
         {
             GameLabel = normalized,
-            SuppressGeneratedNormalFallback = normalized == "GC",
-            PreferVuAddressSourceNormalRemaps = normalized is "DL" or "UYA",
-            InvertDecodedFatVertexSourceNormals = normalized is "DL" or "UYA",
-            UsePackedVertexNormalTableSource = normalized is "DL" or "UYA",
-            UsePacketRowSourceNormals = normalized == "UYA",
-            UseAmbientIndexAttribute = normalized is "DL" or "UYA",
+            PreferVuAddressSourceNormalRemaps = normalized is "DL" or "GC" or "UYA",
+            InvertDecodedFatVertexSourceNormals = normalized is "DL" or "GC" or "UYA",
+            UsePackedVertexNormalTableSource = normalized is "DL" or "GC" or "UYA",
+            UsePacketRowSourceNormals = normalized is "GC" or "UYA",
+            UseAmbientIndexAttribute = normalized is "DL" or "GC" or "UYA",
+            OrientTriangleWindingToNormals = normalized == "GC",
             VertexNormalHeaderSize = normalized is "GC" or "UYA" ? 0 : 0x10
         };
     }

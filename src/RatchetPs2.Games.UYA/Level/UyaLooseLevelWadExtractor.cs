@@ -1,17 +1,24 @@
+using System.Buffers.Binary;
+
 namespace RatchetPs2.Games.UYA.Level;
 
 public static class UyaLooseLevelWadExtractor
 {
     public static UyaLooseLevelWad ExtractPrimary(Stream isoStream, int levelIndex)
     {
+        return ExtractPrimary(isoStream, UyaLevelInfoReader.ReadLevelSet(isoStream, levelIndex));
+    }
+
+    public static UyaLooseLevelWad ExtractPrimary(Stream isoStream, UyaLevelInfoSet levelInfo)
+    {
         ArgumentNullException.ThrowIfNull(isoStream);
+        ArgumentNullException.ThrowIfNull(levelInfo);
 
         if (!isoStream.CanRead || !isoStream.CanSeek)
         {
             throw new ArgumentException("The provided ISO stream must be readable and seekable.", nameof(isoStream));
         }
 
-        var levelInfo = UyaLevelInfoReader.ReadLevelSet(isoStream, levelIndex);
         var headerSector = levelInfo.RequestedLevel.LevelWad.Offset;
         var headerBytes = UyaLevelInfoReader.ReadSectorHeader(
             isoStream,
@@ -30,13 +37,44 @@ public static class UyaLooseLevelWadExtractor
         CopyPrimaryPayloads(isoStream, levelWad, bytes);
 
         return new UyaLooseLevelWad(
-            levelIndex,
+            levelInfo.RequestedLevelIndex,
             headerSector,
             levelWad.Sector,
             sectorCount,
             levelInfo,
             levelWad,
             bytes);
+    }
+
+    public static byte[] ExtractDetached(Stream isoStream, UyaFileBlock block)
+    {
+        ArgumentNullException.ThrowIfNull(isoStream);
+
+        if (block.IsEmpty)
+        {
+            return [];
+        }
+
+        var firstHeaderSector = UyaLevelInfoReader.ReadSectorHeader(isoStream, block, 1);
+        var headerSize = BinaryPrimitives.ReadInt32LittleEndian(firstHeaderSector);
+        if (headerSize <= 0 || headerSize > block.SectorLengthBytes)
+        {
+            throw new InvalidDataException($"UYA detached WAD header size 0x{headerSize:X} is invalid.");
+        }
+
+        var payloadBaseSector = BinaryPrimitives.ReadInt32LittleEndian(firstHeaderSector.AsSpan(sizeof(int)));
+        if (payloadBaseSector < 0)
+        {
+            throw new InvalidDataException("UYA detached WAD payload base sector cannot be negative.");
+        }
+
+        var headerBytes = UyaLevelInfoReader.ReadSectorHeader(
+            isoStream,
+            block,
+            AlignToSectorCount(headerSize));
+        var bytes = UyaLevelInfoReader.ReadAbsoluteSectorRange(isoStream, payloadBaseSector, block.Length);
+        headerBytes.AsSpan(0, headerSize).CopyTo(bytes);
+        return bytes;
     }
 
     private static int CalculatePrimarySectorCount(UyaLevelWad levelWad)

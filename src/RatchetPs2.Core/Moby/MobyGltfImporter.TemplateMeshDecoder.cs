@@ -7,17 +7,26 @@ public static partial class MobyGltfImporter
     internal static Dictionary<int, TemplateDecodedMesh> DecodeTemplateMeshes(
         IReadOnlyList<MobyMeshTableEntry> entries,
         float scale,
-        int jointCount)
+        int _)
     {
         var result = new Dictionary<int, TemplateDecodedMesh>();
         var rollingVertexCache = new Vector3?[512];
         var rollingJointCache = new ushort[512][];
         var rollingWeightCache = new float[512][];
         var rollingBlendCache = new TemplateSkinBlend?[512];
+        var sourceSkinByPosition = new Dictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)>();
 
         for (var i = 0; i < entries.Count; i++)
         {
-            if (TryDecodeTemplateMesh(entries[i], scale, jointCount, rollingVertexCache, rollingJointCache, rollingWeightCache, rollingBlendCache, out var mesh))
+            if (TryDecodeTemplateMesh(
+                    entries[i],
+                    scale,
+                    rollingVertexCache,
+                    rollingJointCache,
+                    rollingWeightCache,
+                    rollingBlendCache,
+                    sourceSkinByPosition,
+                    out var mesh))
             {
                 result[i] = mesh;
             }
@@ -29,11 +38,11 @@ public static partial class MobyGltfImporter
     private static bool TryDecodeTemplateMesh(
         MobyMeshTableEntry entry,
         float scale,
-        int jointCount,
         Vector3?[] rollingVertexCache,
         ushort[][] rollingJointCache,
         float[][] rollingWeightCache,
         TemplateSkinBlend?[] rollingBlendCache,
+        Dictionary<(short X, short Y, short Z), (ushort[] Joints, float[] Weights)> sourceSkinByPosition,
         out TemplateDecodedMesh mesh)
     {
         mesh = new TemplateDecodedMesh([], [], []);
@@ -48,24 +57,25 @@ public static partial class MobyGltfImporter
             }
 
             var positions = new List<Vector3>(entry.VertexCount);
+            var joints = new List<ushort[]>(entry.VertexCount);
+            var weights = new List<float[]>(entry.VertexCount);
             for (var i = 0; i < entry.VertexCount; i++)
             {
                 var offset = 0x10 + i * 0x10;
+                var sourcePosition = (
+                    X: BitConverter.ToInt16(data, offset),
+                    Y: BitConverter.ToInt16(data, offset + 2),
+                    Z: BitConverter.ToInt16(data, offset + 4));
                 positions.Add(new Vector3(
-                    BitConverter.ToInt16(data, offset) * scale,
-                    BitConverter.ToInt16(data, offset + 4) * scale,
-                    -BitConverter.ToInt16(data, offset + 2) * scale));
+                    sourcePosition.X * scale,
+                    sourcePosition.Z * scale,
+                    -sourcePosition.Y * scale));
+                var hasSourceSkin = sourceSkinByPosition.TryGetValue(sourcePosition, out var skin);
+                joints.Add(hasSourceSkin ? skin.Joints : DefaultTemplateJoints());
+                weights.Add(hasSourceSkin ? skin.Weights : DefaultTemplateWeights());
             }
 
-            mesh = new TemplateDecodedMesh(
-                positions,
-                Enumerable.Repeat<ushort[]>([
-                    entry.CommonTransformJointIndex < jointCount ? entry.CommonTransformJointIndex : (ushort)0,
-                    0,
-                    0,
-                    0
-                ], entry.VertexCount).ToList(),
-                Enumerable.Repeat<float[]>([1f, 0f, 0f, 0f], entry.VertexCount).ToList());
+            mesh = new TemplateDecodedMesh(positions, joints, weights);
             return true;
         }
 
@@ -201,6 +211,10 @@ public static partial class MobyGltfImporter
                 positions.Add(position);
                 joints.Add(jointRow);
                 weights.Add(weightRow);
+                sourceSkinByPosition[(
+                    BitConverter.ToInt16(vertex, 0x0A),
+                    BitConverter.ToInt16(vertex, 0x0C),
+                    BitConverter.ToInt16(vertex, 0x0E))] = (jointRow, weightRow);
                 if (vertexIndex >= 0 && vertexIndex < rollingVertexCache.Length)
                 {
                     rollingVertexCache[vertexIndex] = position;

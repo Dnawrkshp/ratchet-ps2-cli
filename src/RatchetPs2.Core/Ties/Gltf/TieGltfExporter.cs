@@ -153,6 +153,7 @@ public static class TieGltfExporter
             normalResult.SourceNormalVertexStates,
             normalResult.SourceNormalIndexStates,
             profile.SuppressGeneratedNormalFallback,
+            profile.OrientTriangleWindingToNormals,
             texCoords,
             multipassTexCoords,
             glowColorResult.Colors,

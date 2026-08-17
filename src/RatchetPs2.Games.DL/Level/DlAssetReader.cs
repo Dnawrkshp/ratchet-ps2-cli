@@ -1,4 +1,5 @@
 using System.Buffers.Binary;
+using RatchetPs2.Core.Games;
 using RatchetPs2.Core.IO;
 using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Pif;
@@ -470,6 +471,7 @@ public static class DlAssetReader
     }
 
     public static IReadOnlyList<int> CollectKnownAssetOffsets(
+        GameId gameId,
         DlAssetHeader header,
         int assetLength,
         IEnumerable<DlAssetModelDefinition> mobyDefinitions,
@@ -485,13 +487,16 @@ public static class DlAssetReader
             header.TextureDataOffset,
             header.ParticleTextureDataOffset,
             header.FxTextureDataOffset,
-            header.LightCuboidsOffset,
             header.HeightmapOffset,
             header.OcclusionOctreeOffset,
             header.OcclusionRadiusOffset,
             header.OcclusionRadius2Offset,
             assetLength
         };
+        if (gameId == GameId.DL)
+        {
+            offsets.Add(header.LightCuboidsOffset);
+        }
         offsets.AddRange(mobyDefinitions.Select(definition => definition.ModelOffset));
         offsets.AddRange(tieDefinitions.Select(definition => definition.ModelOffset));
         offsets.AddRange(shrubDefinitions.Select(definition => definition.ModelOffset));
