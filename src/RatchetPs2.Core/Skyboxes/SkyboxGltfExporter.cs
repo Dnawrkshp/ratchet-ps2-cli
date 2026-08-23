@@ -1,3 +1,4 @@
+using System.Numerics;
 using System.Text.Json;
 using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures;
@@ -49,7 +50,8 @@ public sealed record SkyboxShellRotationOverride(
     short? RotationX = null,
     short? RotationY = null,
     short? RotationZ = null,
-    string Reason = "");
+    string Reason = "",
+    Vector3? RotationDeltaRadiansPerFrame = null);
 
 public static partial class SkyboxGltfExporter
 {
@@ -189,7 +191,7 @@ public static partial class SkyboxGltfExporter
                 ["children"] = Enumerable.Range(1, shellNodes.Count).ToArray()
             }
         };
-        if (options.MetadataMode == GltfExportMetadataMode.Full)
+        if (options.MetadataMode != GltfExportMetadataMode.None)
         {
             nodes[0]["extras"] = BuildNodeExtras(skybox, gameLabel, options.PositionScale, options.RuntimeFrameRate, shellRotationOverrides);
         }

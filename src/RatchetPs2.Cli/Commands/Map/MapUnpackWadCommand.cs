@@ -3,6 +3,7 @@ using RatchetPs2.Cli.GameSelection;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.GC.Skyboxes;
 using RatchetPs2.Games.UYA.Level;
 using System.CommandLine;
 
@@ -108,7 +109,8 @@ internal static class MapUnpackWadCommand
                                 assetFiles.PaletteBytes,
                                 assetFiles.AssetWadBytes,
                                 renderOptions,
-                                assetFiles.ChunkWads);
+                                assetFiles.ChunkWads,
+                                gameId == GameId.GC ? GcSkyRotationReader.ReadRadiansPerFrame(assetFiles.CodeBytes) : null);
 
                         if (normalizedFormat == "indexed")
                         {

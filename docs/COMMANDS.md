@@ -149,19 +149,19 @@ Subcommands:
 - `export-gltf`: Export skybox geometry to a glTF model.
 - `export-gltf-batch`: Export a directory of skybox binaries and write a viewer manifest.
 
-Skybox support currently accepts `UYA` and `DL`.
+Skybox support currently accepts `GC`, `UYA`, and `DL`.
 
 ### `skybox export-gltf`
 
 Export skybox geometry to a glTF model.
 
 ```bash
-ratchet-ps2 skybox export-gltf --game <UYA|DL> --input <input> --output <output>
+ratchet-ps2 skybox export-gltf --game <GC|UYA|DL> --input <input> --output <output>
 ```
 
 Options:
 
-- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
 - `--input <input>`: Required path to the input `sky.bin` binary.
 - `--output <output>`: Required path to write the output `.gltf` file.
 
@@ -170,9 +170,11 @@ Output behavior:
 - A sibling `.buffer.bin` is written for binary glTF buffers.
 - A sibling `.diagnostics.json` is written with shell, cluster, triangle, and texture counts.
 - Embedded skybox textures are converted to PNGs in a sibling `textures/` folder and referenced by glTF materials.
-- UYA and DL texture payloads are decoded with the palette-index remap used by the PIF texture utilities; DL also uses RAC4 pixel unswizzling.
-- UYA and DL skybox texture alpha and RGB are preserved from the decoded source texture without alpha expansion or transparent RGB dilation.
+- GC, UYA, and DL texture payloads are decoded with the palette-index remap used by the PIF texture utilities; DL also uses RAC4 pixel unswizzling.
+- GC, UYA, and DL skybox texture alpha and RGB are preserved from the decoded source texture without alpha expansion or transparent RGB dilation.
 - Skybox glTF textures use clamp-to-edge samplers so ST values on `0`/`4096` shell edges do not wrap-filter against the opposite texture edge.
+- Skybox glTF textures use full-resolution linear sampling without mipmaps, matching the PS2 sky renderer.
+- GC map render packages recover per-shell angular velocities from the level `code/code.bin` overlay; standalone `sky.bin` exports cannot include them because GC stores no rotation data in the sky file.
 - UYA/DL shell flag `0x2` exports a separate bloom material variant with emissive texture metadata and `KHR_materials_emissive_strength`.
 - Untextured gouraud sky shells export the packed RGBA values stored in the cluster `st_ofs` table as `COLOR_0`; RGB source bytes are converted from sRGB-style values to glTF linear color.
 - Triangle records are grouped by texture id; texture id `255` is exported as an untextured material.
@@ -189,12 +191,12 @@ Export a directory of skybox binaries to glTF and write a manifest for
 `tools/skybox-viewer`.
 
 ```bash
-ratchet-ps2 skybox export-gltf-batch --game <UYA|DL> --input-root <input-root> --output-root <output-root> [--sky-file-name <name>] [--manifest-name <name>] [--limit <count>]
+ratchet-ps2 skybox export-gltf-batch --game <GC|UYA|DL> --input-root <input-root> --output-root <output-root> [--sky-file-name <name>] [--manifest-name <name>] [--limit <count>]
 ```
 
 Options:
 
-- `--game <game>`: Required game ID. Currently `UYA` and `DL` are supported.
+- `--game <game>`: Required game ID. Currently `GC`, `UYA`, and `DL` are supported.
 - `--input-root <input-root>`: Required directory to scan recursively.
 - `--output-root <output-root>`: Required directory for exported models and the manifest.
 - `--sky-file-name <name>`: Skybox binary file name to scan for. Defaults to `sky.bin`.

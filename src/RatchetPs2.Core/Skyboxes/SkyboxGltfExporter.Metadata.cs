@@ -1,3 +1,4 @@
+using System.Numerics;
 using RatchetPs2.Core.Gltf;
 
 namespace RatchetPs2.Core.Skyboxes;
@@ -11,6 +12,11 @@ public static partial class SkyboxGltfExporter
         float runtimeFrameRate,
         IReadOnlyDictionary<int, SkyboxShellRotationOverride> shellRotationOverrides)
     {
+        var nightSpriteCount = gameLabel.Equals("DL", StringComparison.OrdinalIgnoreCase)
+            && skybox.Header.FxCount > 1
+            && skybox.Header.TextureCount > 1
+            ? Math.Max(skybox.Header.SpriteMax, (short)0)
+            : 0;
         return new
         {
             Game = gameLabel,
@@ -19,8 +25,10 @@ public static partial class SkyboxGltfExporter
             PositionScale = positionScale,
             RuntimeFrameRate = runtimeFrameRate,
             RotationTickRadians = RotationTickRadians,
-            RuntimeRotatingShellCount = skybox.Shells.Count(HasShellRuntimeRotation),
+            RuntimeRotatingShellCount = skybox.Shells.Count(shell => HasShellRuntimeRotation(shell, shellRotationOverrides)),
             RuntimeRotationPatchCount = skybox.Shells.Count(shell => shellRotationOverrides.ContainsKey(shell.Index)),
+            SkyboxNightSpriteCount = nightSpriteCount,
+            SkyboxNightSpriteTextureIds = nightSpriteCount > 0 ? new[] { 0, 1 } : Array.Empty<int>(),
             skybox.Header.ShellCount,
             skybox.Header.TextureCount
         };
@@ -42,7 +50,7 @@ public static partial class SkyboxGltfExporter
             mesh.UsesUntexturedGouraudColors,
             RuntimeFrameRate = runtimeFrameRate,
             RotationTickRadians = RotationTickRadians,
-            RuntimeRotatingShellCount = skybox.Shells.Count(HasShellRuntimeRotation),
+            RuntimeRotatingShellCount = skybox.Shells.Count(shell => HasShellRuntimeRotation(shell, shellRotationOverrides)),
             RuntimeRotationPatchCount = skybox.Shells.Count(shell => shellRotationOverrides.ContainsKey(shell.Index)),
             TextureIds = mesh.TextureIds.Select(textureId => textureId == UntexturedTextureId ? "untextured" : textureId.ToString()).ToArray()
         };
@@ -65,6 +73,7 @@ public static partial class SkyboxGltfExporter
             rotation.SkyboxShellRotationRaw,
             rotation.SkyboxShellRotationRadians,
             rotation.SkyboxShellRotationDeltaRaw,
+            rotation.SkyboxShellSourceAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellHasRuntimeRotation,
             rotation.SkyboxShellRotationPatchApplied,
@@ -99,6 +108,7 @@ public static partial class SkyboxGltfExporter
             rotation.SkyboxShellRotationRaw,
             rotation.SkyboxShellRotationRadians,
             rotation.SkyboxShellRotationDeltaRaw,
+            rotation.SkyboxShellSourceAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellHasRuntimeRotation,
             rotation.SkyboxShellRotationPatchApplied,
@@ -131,6 +141,7 @@ public static partial class SkyboxGltfExporter
             rotation.SkyboxShellRotationRaw,
             rotation.SkyboxShellRotationRadians,
             rotation.SkyboxShellRotationDeltaRaw,
+            rotation.SkyboxShellSourceAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellHasRuntimeRotation,
             rotation.SkyboxShellRotationPatchApplied,
@@ -152,6 +163,7 @@ public static partial class SkyboxGltfExporter
             rotation.SkyboxShellRotationRaw,
             rotation.SkyboxShellRotationRadians,
             rotation.SkyboxShellRotationDeltaRaw,
+            rotation.SkyboxShellSourceAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellAngularVelocityRadiansPerSecond,
             rotation.SkyboxShellHasRuntimeRotation,
             rotation.SkyboxShellRotationPatchApplied,
@@ -170,14 +182,26 @@ public static partial class SkyboxGltfExporter
         var rotationX = rotationOverride?.RotationX ?? shell.RotationX;
         var rotationY = rotationOverride?.RotationY ?? shell.RotationY;
         var rotationZ = rotationOverride?.RotationZ ?? shell.RotationZ;
+        var sourceAngularVelocity = (rotationOverride?.RotationDeltaRadiansPerFrame ?? Vector3.Zero) * runtimeFrameRate;
+        var angularVelocity = sourceAngularVelocity == Vector3.Zero
+            ? GltfCoordinateBasis.FromPs2Position(
+                shell.RotationDeltaX,
+                shell.RotationDeltaY,
+                shell.RotationDeltaZ,
+                RotationTickRadians * runtimeFrameRate)
+            : GltfCoordinateBasis.FromPs2Position(
+                sourceAngularVelocity.X,
+                sourceAngularVelocity.Y,
+                sourceAngularVelocity.Z);
 
         return new SkyboxShellRotationMetadata(
             SourceVector(shell.RotationX, shell.RotationY, shell.RotationZ),
             SourceVector(rotationX, rotationY, rotationZ),
             ToGltfRotationVector(rotationX, rotationY, rotationZ, RotationTickRadians),
             SourceVector(shell.RotationDeltaX, shell.RotationDeltaY, shell.RotationDeltaZ),
-            ToGltfRotationVector(shell.RotationDeltaX, shell.RotationDeltaY, shell.RotationDeltaZ, RotationTickRadians * runtimeFrameRate),
-            HasShellRuntimeRotation(shell),
+            [sourceAngularVelocity.X, sourceAngularVelocity.Y, sourceAngularVelocity.Z],
+            [angularVelocity.X, angularVelocity.Y, angularVelocity.Z],
+            HasShellRuntimeRotation(shell, shellRotationOverrides),
             hasRotationOverride,
             hasRotationOverride ? rotationOverride?.Reason ?? string.Empty : string.Empty);
     }

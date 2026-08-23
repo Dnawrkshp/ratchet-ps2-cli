@@ -1,3 +1,4 @@
+using System.Numerics;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Textures;
@@ -46,14 +47,29 @@ public sealed record SkyboxGameProfile
         int shellCount,
         bool includeDiagnostics = true,
         bool minify = false,
-        GltfExportMetadataMode metadataMode = GltfExportMetadataMode.Full)
+        GltfExportMetadataMode metadataMode = GltfExportMetadataMode.Full,
+        IReadOnlyDictionary<int, Vector3>? rotationDeltasRadiansPerFrame = null)
     {
+        var rotationOverrides = new Dictionary<int, SkyboxShellRotationOverride>(
+            ShellRotationOverridesFor(levelNumber, shellCount));
+        if (rotationDeltasRadiansPerFrame is not null)
+        {
+            foreach (var (shellIndex, rotationDelta) in rotationDeltasRadiansPerFrame)
+            {
+                rotationOverrides[shellIndex] = rotationOverrides.TryGetValue(shellIndex, out var existing)
+                    ? existing with { RotationDeltaRadiansPerFrame = rotationDelta }
+                    : new SkyboxShellRotationOverride(
+                        Reason: "GC level overlay sky rotation table",
+                        RotationDeltaRadiansPerFrame: rotationDelta);
+            }
+        }
+
         return new SkyboxGltfExportOptions
         {
             BufferFileName = bufferFileName,
             GameLabel = GameLabel,
             TextureConversionOptions = CreateTextureConversionOptions(),
-            ShellRotationOverrides = ShellRotationOverridesFor(levelNumber, shellCount),
+            ShellRotationOverrides = rotationOverrides,
             IncludeDiagnostics = includeDiagnostics,
             Minify = minify,
             MetadataMode = metadataMode

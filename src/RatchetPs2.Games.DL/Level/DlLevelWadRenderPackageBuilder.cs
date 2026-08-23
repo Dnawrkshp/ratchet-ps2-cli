@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Numerics;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using RatchetPs2.Core.Games;
@@ -112,7 +113,8 @@ public static class DlLevelWadRenderPackageBuilder
             manifest,
             timings,
             options,
-            ReadChunkWads(levelWadBytes, levelWad.Chunks));
+            ReadChunkWads(levelWadBytes, levelWad.Chunks),
+            null);
         var exportedMobyClassIds = mobyEntries
             .Where(entry => entry.Status == "written")
             .Select(entry => entry.ClassId)
@@ -178,7 +180,8 @@ public static class DlLevelWadRenderPackageBuilder
         byte[] paletteBytes,
         byte[] assetBytes,
         DlLevelWadRenderPackageBuildOptions? options = null,
-        IReadOnlyDictionary<int, byte[]>? chunkWads = null)
+        IReadOnlyDictionary<int, byte[]>? chunkWads = null,
+        IReadOnlyDictionary<int, Vector3>? skyRotationDeltasRadiansPerFrame = null)
     {
         ArgumentNullException.ThrowIfNull(headerBytes);
         ArgumentNullException.ThrowIfNull(paletteBytes);
@@ -213,7 +216,8 @@ public static class DlLevelWadRenderPackageBuilder
             manifest,
             timings,
             options,
-            chunkWads);
+            chunkWads,
+            skyRotationDeltasRadiansPerFrame);
         manifest["Mobys"] = mobyEntries;
 
         AddTiming(
@@ -237,7 +241,8 @@ public static class DlLevelWadRenderPackageBuilder
         IDictionary<string, object?> rootManifest,
         List<RenderPackageTiming> timings,
         DlLevelWadRenderPackageBuildOptions options,
-        IReadOnlyDictionary<int, byte[]>? chunkWads)
+        IReadOnlyDictionary<int, byte[]>? chunkWads,
+        IReadOnlyDictionary<int, Vector3>? skyRotationDeltasRadiansPerFrame)
     {
         var header = DlAssetReader.ReadHeader(headerBytes);
         var allMipmapDefinitions = DlAssetReader.ReadMipmapDefinitions(
@@ -268,7 +273,15 @@ public static class DlLevelWadRenderPackageBuilder
         var gltfExports = new List<GltfExportRoute>();
 
         var skyboxStart = Stopwatch.GetTimestamp();
-        gltfExports.Add(BuildSkybox(files, gameId, levelIndex, header, assetBytes, knownAssetOffsets, options));
+        gltfExports.Add(BuildSkybox(
+            files,
+            gameId,
+            levelIndex,
+            header,
+            assetBytes,
+            knownAssetOffsets,
+            options,
+            skyRotationDeltasRadiansPerFrame));
         AddTiming(
             timings,
             "managed.assets.skybox",
@@ -616,7 +629,8 @@ public static class DlLevelWadRenderPackageBuilder
         DlAssetHeader header,
         byte[] assetBytes,
         IReadOnlyList<int> knownAssetOffsets,
-        DlLevelWadRenderPackageBuildOptions options)
+        DlLevelWadRenderPackageBuildOptions options,
+        IReadOnlyDictionary<int, Vector3>? skyRotationDeltasRadiansPerFrame)
     {
         const string packageRoot = "assets/skybox";
         var skyboxBytes = DlAssetReader.ReadAssetSlice(assetBytes, header.SkyOffset, knownAssetOffsets);
@@ -632,7 +646,7 @@ public static class DlLevelWadRenderPackageBuilder
         try
         {
             using var input = new MemoryStream(skyboxBytes, writable: false);
-            var skybox = SkyboxReader.Read(input);
+            var skybox = SkyboxReader.Read(input, gameId);
             var profile = SkyboxGameProfile.ForGame(gameId);
             var export = SkyboxGltfExporter.Export(
                 skybox,
@@ -643,7 +657,8 @@ public static class DlLevelWadRenderPackageBuilder
                     skybox.Shells.Count,
                     includeDiagnostics: options.IncludeDiagnostics,
                     minify: options.MinifyGltf,
-                    metadataMode: options.GltfMetadataMode));
+                    metadataMode: options.GltfMetadataMode,
+                    rotationDeltasRadiansPerFrame: skyRotationDeltasRadiansPerFrame));
 
             AddFile(files, $"{packageRoot}/skybox.gltf", export.GltfBytes, "model/gltf+json");
             AddFile(files, $"{packageRoot}/skybox.buffer.bin", export.BinBytes);

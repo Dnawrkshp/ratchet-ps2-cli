@@ -5,11 +5,11 @@ namespace RatchetPs2.Cli.Abstractions;
 
 internal static class SkyboxGameFormats
 {
-    public const string SupportedSkyboxGames = "UYA or DL";
+    public const string SupportedSkyboxGames = "GC, UYA, or DL";
 
     public static bool IsSupported(GameId gameId)
     {
-        return gameId is GameId.UYA or GameId.DL;
+        return gameId is GameId.GC or GameId.UYA or GameId.DL;
     }
 
     public static SkyboxGameProfile ProfileFor(GameId gameId)

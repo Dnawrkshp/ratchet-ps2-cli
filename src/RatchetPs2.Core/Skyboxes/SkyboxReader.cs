@@ -1,3 +1,5 @@
+using RatchetPs2.Core.Games;
+
 namespace RatchetPs2.Core.Skyboxes;
 
 public static class SkyboxReader
@@ -14,7 +16,7 @@ public static class SkyboxReader
     private const int TriangleSize = 0x4;
     private const int SpriteSize = 0x20;
 
-    public static Skybox Read(Stream input)
+    public static Skybox Read(Stream input, GameId? gameId = null)
     {
         ArgumentNullException.ThrowIfNull(input);
 
@@ -28,7 +30,7 @@ public static class SkyboxReader
             using var copy = new MemoryStream();
             input.CopyTo(copy);
             copy.Position = 0;
-            return Read(copy);
+            return Read(copy, gameId);
         }
 
         var baseOffset = input.Position;
@@ -44,7 +46,7 @@ public static class SkyboxReader
         var textures = ReadTextures(reader, baseOffset, availableLength, header);
         var fxList = ReadFxList(reader, baseOffset, availableLength, header);
         var sprites = ReadSprites(reader, baseOffset, availableLength, header);
-        var shells = ReadShells(reader, baseOffset, availableLength, header);
+        var shells = ReadShells(reader, baseOffset, availableLength, header, gameId == GameId.GC);
 
         return new Skybox(header, shells, textures, sprites, fxList, availableLength);
     }
@@ -192,7 +194,8 @@ public static class SkyboxReader
         BinaryReader reader,
         long baseOffset,
         long availableLength,
-        SkyboxHeader header)
+        SkyboxHeader header,
+        bool usesGcShellHeader)
     {
         EnsureRange(
             ShellOffsetTableOffset,
@@ -208,15 +211,18 @@ public static class SkyboxReader
             EnsureRange(shellOffset, ShellHeaderSize, availableLength, $"skybox shell {i} header");
 
             reader.BaseStream.Position = checked(baseOffset + shellOffset);
-            var clusterCount = reader.ReadInt16();
-            ValidateCount(clusterCount, short.MaxValue, $"shell {i} cluster count");
-            var flags = reader.ReadInt16();
-            var rotationX = reader.ReadInt16();
-            var rotationY = reader.ReadInt16();
-            var rotationZ = reader.ReadInt16();
-            var rotationDeltaX = reader.ReadInt16();
-            var rotationDeltaY = reader.ReadInt16();
-            var rotationDeltaZ = reader.ReadInt16();
+            var clusterCountValue = usesGcShellHeader ? reader.ReadInt32() : reader.ReadInt16();
+            ValidateCount(clusterCountValue, short.MaxValue, $"shell {i} cluster count");
+            var clusterCount = (short)clusterCountValue;
+            var flags = usesGcShellHeader
+                ? (short)(reader.ReadInt32() != 0 ? 1 : 0)
+                : reader.ReadInt16();
+            var rotationX = usesGcShellHeader ? (short)0 : reader.ReadInt16();
+            var rotationY = usesGcShellHeader ? (short)0 : reader.ReadInt16();
+            var rotationZ = usesGcShellHeader ? (short)0 : reader.ReadInt16();
+            var rotationDeltaX = usesGcShellHeader ? (short)0 : reader.ReadInt16();
+            var rotationDeltaY = usesGcShellHeader ? (short)0 : reader.ReadInt16();
+            var rotationDeltaZ = usesGcShellHeader ? (short)0 : reader.ReadInt16();
             var clusters = ReadClusters(reader, baseOffset, availableLength, i, shellOffset, clusterCount);
 
             shells.Add(new SkyboxShell(

@@ -26,6 +26,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\RatchetPs2.Core\RatchetPs2.Core.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
+    <ProjectReference Include="..\RatchetPs2.Games.GC\RatchetPs2.Games.GC.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
     <ProjectReference Include="..\RatchetPs2.Games.DL\RatchetPs2.Games.DL.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
     <ProjectReference Include="..\RatchetPs2.Games.UYA\RatchetPs2.Games.UYA.csproj" SetTargetFramework="TargetFramework=net9.0-browser" Targets="Build" GlobalPropertiesToRemove="_IsPublishing;PublishDir;_CommandLineDefinedOutputPath;DOTNET_CLI_DISABLE_PUBLISH_AND_PACK_RELEASE;WebPublishProfileFile" />
   </ItemGroup>

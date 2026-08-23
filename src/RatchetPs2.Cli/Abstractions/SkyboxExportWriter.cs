@@ -37,7 +37,7 @@ internal static class SkyboxExportWriter
         var diagnosticsFile = new FileInfo(Path.Combine(outputDirectory.FullName, $"{outputBaseName}.diagnostics.json"));
 
         using var input = inputFile.OpenRead();
-        var skybox = SkyboxReader.Read(input);
+        var skybox = SkyboxReader.Read(input, gameId);
         var profile = SkyboxGameFormats.ProfileFor(gameId);
         var export = SkyboxGltfExporter.Export(
             skybox,

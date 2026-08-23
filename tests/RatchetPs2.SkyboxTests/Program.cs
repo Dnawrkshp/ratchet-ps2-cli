@@ -1,4 +1,5 @@
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Gltf;
 using RatchetPs2.Core.Skyboxes;
 using RatchetPs2.Core.Textures;
 using System.Text.Json;
@@ -10,15 +11,23 @@ var level7SkyboxPath = Path.Combine(repoRoot, "test-assets", "skyboxes", "DL", "
 var level53SkyboxPath = Path.Combine(repoRoot, "test-assets", "skyboxes", "DL", "level53", "sky.bin");
 var uyaLevel4SkyboxPath = Path.Combine(repoRoot, "test-assets", "skyboxes", "UYA", "level4", "sky.bin");
 var uyaLevel41SkyboxPath = Path.Combine(repoRoot, "test-assets", "skyboxes", "UYA", "level41", "sky.bin");
+var failures = new List<string>();
+var gcProfile = SkyboxGameProfile.ForGame(GameId.GC);
+Expect(gcProfile.GameLabel == "GC" && !gcProfile.TextureIsSwizzled, "expected GC skyboxes to use the unswizzled profile");
+using (var input = BuildGcSkyboxFixture())
+{
+    var skybox = SkyboxReader.Read(input, GameId.GC);
+    var shell = skybox.Shells[0];
+    Expect(shell.ClusterCount == 1 && shell.Flags == 1, "expected GC 32-bit shell header fields to decode");
+    Expect(shell.RotationX == 0 && shell.RotationY == 0 && shell.RotationZ == 0, "expected GC shell draw type not to become a rotation");
+}
+
 if (!File.Exists(skyboxPath))
 {
     Console.WriteLine("No local DL sky.bin fixture found under test-assets/skyboxes/DL/level6; skipping skybox tests.");
-    return 0;
+    return failures.Count == 0 ? 0 : 1;
 }
 
-var failures = new List<string>();
-var gcProfile = SkyboxGameProfile.ForGame(GameId.GC);
-Expect(gcProfile.GameLabel == "GC" && !gcProfile.TextureIsSwizzled, "expected GC skyboxes to use the unswizzled UYA profile");
 using (var input = File.OpenRead(skyboxPath))
 {
     var skybox = SkyboxReader.Read(input);
@@ -62,6 +71,8 @@ using (var input = File.OpenRead(skyboxPath))
     Expect(root.GetProperty("images").GetArrayLength() == 4, "expected 4 skybox glTF images");
     Expect(root.GetProperty("textures").GetArrayLength() == 4, "expected 4 skybox glTF textures");
     var sampler = root.GetProperty("samplers")[0];
+    Expect(sampler.GetProperty("magFilter").GetInt32() == 9729, "expected full-resolution linear skybox texture magnification");
+    Expect(sampler.GetProperty("minFilter").GetInt32() == 9729, "expected full-resolution linear skybox texture minification without mipmaps");
     Expect(sampler.GetProperty("wrapS").GetInt32() == 33071, "expected skybox glTF sampler U wrapping to clamp to edge");
     Expect(sampler.GetProperty("wrapT").GetInt32() == 33071, "expected skybox glTF sampler V wrapping to clamp to edge");
     var materials = root.GetProperty("materials");
@@ -153,6 +164,21 @@ if (File.Exists(level1SkyboxPath))
     ExpectGouraudColorData(root, export.BinBytes, primitives[0], "level1");
     var untexturedMaterial = FindMaterial(root.GetProperty("materials"), "sky_untextured_preview");
     Expect(untexturedMaterial.GetProperty("extras").GetProperty("SkyboxUsesUntexturedGouraudColor").GetBoolean(), "expected level1 untextured material to report gouraud vertex colors");
+
+    var runtimeExport = SkyboxGltfExporter.Export(
+        skybox,
+        "sky.gltf",
+        new SkyboxGltfExportOptions
+        {
+            GameLabel = "DL",
+            MetadataMode = GltfExportMetadataMode.RuntimeOnly,
+            IncludeDiagnostics = false,
+            TextureConversionOptions = new TextureConversionOptions { IsSwizzled = true }
+        });
+    using var runtimeGltfDocument = JsonDocument.Parse(runtimeExport.GltfBytes);
+    var nightSpriteExtras = runtimeGltfDocument.RootElement.GetProperty("nodes")[0].GetProperty("extras");
+    Expect(nightSpriteExtras.GetProperty("SkyboxNightSpriteCount").GetInt32() == 1024, "expected runtime metadata to preserve level1's generated night-star count");
+    Expect(nightSpriteExtras.GetProperty("SkyboxNightSpriteTextureIds").EnumerateArray().Select(value => value.GetInt32()).SequenceEqual(new[] { 0, 1 }), "expected runtime metadata to select level1's two embedded star textures");
 }
 
 if (File.Exists(level7SkyboxPath))
@@ -302,6 +328,46 @@ static string FindRepoRoot(string start)
     }
 
     throw new DirectoryNotFoundException("Could not locate ratchet-ps2-cli.sln from the test output directory.");
+}
+
+static MemoryStream BuildGcSkyboxFixture()
+{
+    var bytes = new byte[0x88];
+    using (var writer = new BinaryWriter(new MemoryStream(bytes, writable: true)))
+    {
+        writer.BaseStream.Position = 6;
+        writer.Write((short)1);
+        writer.BaseStream.Position = 0x20;
+        writer.Write(0x30);
+        writer.BaseStream.Position = 0x30;
+        writer.Write(1);
+        writer.Write(1);
+        writer.BaseStream.Position = 0x40;
+        writer.Write(0f);
+        writer.Write(0f);
+        writer.Write(0f);
+        writer.Write(1f);
+        writer.Write(0x60);
+        writer.Write((short)3);
+        writer.Write((short)1);
+        writer.Write((short)0);
+        writer.Write((short)24);
+        writer.Write((short)36);
+        writer.Write((short)40);
+        writer.BaseStream.Position = 0x60;
+        foreach (var vertex in new (short X, short Y, short Z)[] { (0, 0, 0), (1, 0, 0), (0, 1, 0) })
+        {
+            writer.Write(vertex.X);
+            writer.Write(vertex.Y);
+            writer.Write(vertex.Z);
+            writer.Write((short)0x80);
+        }
+
+        writer.BaseStream.Position = 0x84;
+        writer.Write(new byte[] { 0, 1, 2, 0xFF });
+    }
+
+    return new MemoryStream(bytes, writable: false);
 }
 
 static JsonElement FindMaterial(JsonElement materials, string name)

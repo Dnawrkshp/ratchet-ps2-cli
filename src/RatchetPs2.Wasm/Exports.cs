@@ -5,6 +5,7 @@ using RatchetPs2.Core.Textures;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.GC.Skyboxes;
 using RatchetPs2.Games.DL.Moby;
 using RatchetPs2.Games.UYA.Level;
 using System.Runtime.Versioning;
@@ -138,7 +139,8 @@ public static partial class Exports
                 assetFiles.PaletteBytes,
                 assetFiles.AssetWadBytes,
                 DlLevelWadRenderPackageBuildOptions.Browser,
-                assetFiles.ChunkWads),
+                assetFiles.ChunkWads,
+                gameId == GameId.GC ? GcSkyRotationReader.ReadRadiansPerFrame(assetFiles.CodeBytes) : null),
             gameId);
     }
 

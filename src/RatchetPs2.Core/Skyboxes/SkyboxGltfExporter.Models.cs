@@ -37,6 +37,16 @@ public static partial class SkyboxGltfExporter
             || shell.RotationDeltaZ != 0;
     }
 
+    private static bool HasShellRuntimeRotation(
+        SkyboxShell shell,
+        IReadOnlyDictionary<int, SkyboxShellRotationOverride> shellRotationOverrides)
+    {
+        return HasShellRuntimeRotation(shell)
+            || (shellRotationOverrides.TryGetValue(shell.Index, out var rotationOverride)
+                && rotationOverride.RotationDeltaRadiansPerFrame is { } rotationDelta
+                && rotationDelta != Vector3.Zero);
+    }
+
     private static class SkyboxDrawBlendMode
     {
         public const string SourceOver = "SourceOver";
@@ -181,6 +191,7 @@ public static partial class SkyboxGltfExporter
         int[] SkyboxShellRotationRaw,
         float[] SkyboxShellRotationRadians,
         int[] SkyboxShellRotationDeltaRaw,
+        float[] SkyboxShellSourceAngularVelocityRadiansPerSecond,
         float[] SkyboxShellAngularVelocityRadiansPerSecond,
         bool SkyboxShellHasRuntimeRotation,
         bool SkyboxShellRotationPatchApplied,

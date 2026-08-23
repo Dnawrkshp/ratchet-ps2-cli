@@ -11,6 +11,7 @@ using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 using RatchetPs2.Games.DL.Moby;
 using RatchetPs2.Games.GC.Level;
+using RatchetPs2.Games.GC.Skyboxes;
 using RatchetPs2.Games.UYA.Gameplay;
 using RatchetPs2.Games.UYA.Level;
 
@@ -19,6 +20,7 @@ ValidateLevelWadParsing();
 ValidateLooseLevelWadExtraction();
 ValidateLooseLevelWadUnpacking();
 ValidateGcLevelInfoLookup();
+ValidateGcSkyRotationParsing();
 ValidateUyaLevelInfoLookup();
 ValidateUyaLevelWadParsing();
 ValidateUyaLooseLevelWadExtraction();
@@ -51,6 +53,51 @@ ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
 
 Console.WriteLine("Level extraction tests passed.");
+
+static void ValidateGcSkyRotationParsing()
+{
+    const uint velocityPointerAddress = 0x001B1230;
+    var data = new byte[0x200];
+    WriteSingle(data, 0x10c, 0.0002f);
+    WriteSingle(data, 0x114, -0.0001f);
+
+    var code = new byte[0x200];
+    WriteUInt32(code, 0x00, 0x27BDFFC0);
+    WriteUInt32(code, 0x04, 0x2403000C);
+    WriteUInt32(code, 0x08, 0xFFB10018);
+    WriteUInt32(code, 0x0c, 0x00838818);
+    foreach (var offset in new[] { 0x14, 0x44, 0x68 })
+    {
+        WriteUInt32(code, offset, 0x3C02001B);
+        WriteUInt32(code, offset + 4, 0x8C421230);
+    }
+
+    WriteUInt32(code, 0x100, 0x3C020020);
+    WriteUInt32(code, 0x104, 0x24420100);
+    WriteUInt32(code, 0x108, 0xAF820000u | (ushort)(velocityPointerAddress - 0x001AEFF0));
+
+    using var overlay = new MemoryStream();
+    using (var writer = new BinaryWriter(overlay, System.Text.Encoding.UTF8, leaveOpen: true))
+    {
+        WriteOverlaySegment(writer, 0x00200000, data);
+        WriteOverlaySegment(writer, 0x00300000, code);
+    }
+
+    var rotations = GcSkyRotationReader.ReadRadiansPerFrame(overlay.ToArray());
+    Expect(rotations.Count == 1 && rotations.ContainsKey(1), "expected GC overlay shell rotation table");
+    var shell = rotations[1];
+    Expect(MathF.Abs(shell.X - 0.0002f) < 0.0000001f && MathF.Abs(shell.Z + 0.0001f) < 0.0000001f,
+        "expected exact GC shell angular velocity");
+}
+
+static void WriteOverlaySegment(BinaryWriter writer, uint address, byte[] data)
+{
+    writer.Write(address);
+    writer.Write(data.Length);
+    writer.Write(1);
+    writer.Write(0);
+    writer.Write(data);
+}
 
 static void ValidateLevelInfoLookup()
 {

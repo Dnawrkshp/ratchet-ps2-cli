@@ -53,6 +53,7 @@ public static class UyaLevelWadRenderPackageBuilder
             RequireSourceFile(sourceFiles, "assets/asset_header.bin").Bytes,
             RequireSourceFile(sourceFiles, "assets/palette.bin").Bytes,
             RequireSourceFile(sourceFiles, "assets/asset_wad.bin").Bytes,
+            TryGetSourceFile(sourceFiles, "code/code.bin")?.Bytes ?? [],
             CollectChunkWads(sourceFiles)));
         files.AddRange(assetFiles);
         AddMobyManifest(manifest, assetFiles);
@@ -283,4 +284,5 @@ public sealed record UyaLevelAssetSourceFiles(
     byte[] HeaderBytes,
     byte[] PaletteBytes,
     byte[] AssetWadBytes,
+    byte[] CodeBytes,
     IReadOnlyDictionary<int, byte[]> ChunkWads);

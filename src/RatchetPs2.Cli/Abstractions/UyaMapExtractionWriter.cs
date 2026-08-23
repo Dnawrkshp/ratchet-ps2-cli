@@ -2,6 +2,7 @@ using System.Text.Json;
 using RatchetPs2.Core.Games;
 using RatchetPs2.Core.Wad.Models;
 using RatchetPs2.Games.DL.Level;
+using RatchetPs2.Games.GC.Skyboxes;
 using RatchetPs2.Games.GC.Level;
 using RatchetPs2.Games.UYA.Level;
 
@@ -164,7 +165,10 @@ internal static class UyaMapExtractionWriter
             header.Bytes,
             palette.Bytes,
             assetWad.Bytes,
-            chunkWads: CollectChunkWads(byPath));
+            chunkWads: CollectChunkWads(byPath),
+            skyRotationDeltasRadiansPerFrame: gameId == GameId.GC && byPath.TryGetValue("code/code.bin", out var code)
+                ? GcSkyRotationReader.ReadRadiansPerFrame(code.Bytes)
+                : null);
     }
 
     private static IReadOnlyDictionary<int, byte[]> CollectChunkWads(IReadOnlyDictionary<string, PackedFile> files)
