@@ -4,7 +4,6 @@ namespace RatchetPs2.Core.Ties;
 
 internal static class TieGltfNormalBuilder
 {
-    private const int LightingRecipeConstantColorSourceSlot = 0x7FC / sizeof(int);
     private const float CrossLodExactPositionMinimumMissingCoverage = 0.95f;
     private const float DuplicatePositionExactNormalMinimumGeneratedDot = 0.85f;
 
@@ -246,7 +245,7 @@ internal static class TieGltfNormalBuilder
                 continue;
             }
 
-            if (recipe.SourceSlots.Contains(LightingRecipeConstantColorSourceSlot))
+            if (recipe.SourceSlots.Contains(TieRgbaRemapOperation.ConstantColorSourceSlot))
             {
                 MarkState(TieGltfSourceNormalState.LightingRecipeConstantColor);
                 constantColorCount++;

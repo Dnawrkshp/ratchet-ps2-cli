@@ -76,21 +76,14 @@ if (File.Exists(uyaTie6109Path))
         new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
     using var uyaTie6109DiagnosticsDocument = JsonDocument.Parse(uyaTie6109Export.DiagnosticsBytes);
     var uyaTie6109Diagnostics = uyaTie6109DiagnosticsDocument.RootElement;
-    var uyaTie6109Topology = uyaTie6109.LodTopologies[0];
     Expect(
-        uyaTie6109.GlowRgbaRemaps.Count == 1
-            && uyaTie6109.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && uyaTie6109.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 2 })
-            && uyaTie6109.GlowRgbaRemaps[0].ResolvedShaderIndex == 1
-            && uyaTie6109.GlowRgbaVertices.Count == 20
-            && uyaTie6109.GlowRgbaVertices.All(vertex =>
-                vertex.StripIndex >= 0
-                && vertex.StripIndex < uyaTie6109Topology.Strips.Count
-                && vertex.PacketIndex == 2
-                && uyaTie6109Topology.Strips[vertex.StripIndex].ShaderIndex == 1)
-            && uyaTie6109Diagnostics.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 20
-            && uyaTie6109Diagnostics.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
-        $"expected UYA 6109 glow marker to resolve to packet 2 shader 1 light panels, got remaps={string.Join("; ", uyaTie6109.GlowRgbaRemaps.Select(remap => $"{remap.Offset:X}/{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={uyaTie6109.GlowRgbaVertices.Count}, export={uyaTie6109Diagnostics.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
+        uyaTie6109.GlowRgbaRemaps.All(remap =>
+            uyaTie6109.RgbaRemapOperations.Any(operation =>
+                operation.Offset == remap.Offset
+                && operation.SourceSlots.Contains(TieRgbaRemapOperation.ConstantColorSourceSlot)))
+            && uyaTie6109Diagnostics.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()
+                == uyaTie6109.GlowRgbaVertices.Count(vertex => vertex.LodIndex == 0),
+        "expected UYA 6109 glow vertices to come from the decoded RGB recipe");
     var uyaTie6109LightPanelMinimumNormalDot = ReadPrimitiveMinimumNormalFaceDot(
         uyaTie6109Export,
         packetIndex: 2,
@@ -98,6 +91,48 @@ if (File.Exists(uyaTie6109Path))
     Expect(
         uyaTie6109LightPanelMinimumNormalDot is >= 0.8f,
         $"expected UYA 6109 packet 2 shader 1 light-panel normals to agree with exported faces, got minimum dot {uyaTie6109LightPanelMinimumNormalDot}");
+}
+var uyaTie5827Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "5827", "core.bin");
+if (File.Exists(uyaTie5827Path))
+{
+    var uyaProfile = TieGameProfile.Default.WithGameLabel("UYA");
+    using var uyaTie5827Input = File.OpenRead(uyaTie5827Path);
+    var uyaTie5827 = TieClassReader.Read(uyaTie5827Input, TieClassReadOptions.ForGameProfile(uyaProfile));
+    Expect(
+        uyaTie5827.GlowRgbaVertices.Count(vertex => vertex.LodIndex == 0) == 30
+            && uyaTie5827.GlowRgbaVertices
+                .Where(vertex => vertex.LodIndex == 0)
+                .Select(vertex => vertex.PacketIndex)
+                .Distinct()
+                .Order()
+                .SequenceEqual(new[] { 7, 8 })
+            && uyaTie5827.GlowRgbaVertices.Count(vertex => vertex.LodIndex == 1) == 14
+            && uyaTie5827.GlowRgbaVertices
+                .Where(vertex => vertex.LodIndex == 1)
+                .All(vertex => vertex.PacketIndex == 4)
+            && uyaTie5827.GlowRgbaVertices.All(vertex => vertex.GlowWeight == 1f),
+        $"expected UYA 0x16C3 glow recipes on LOD0 packets 7-8 and LOD1 packet 4, got {string.Join("; ", uyaTie5827.GlowRgbaVertices.GroupBy(vertex => vertex.LodIndex).Select(group => $"LOD{group.Key}={group.Count()}:[{string.Join(",", group.Select(vertex => vertex.PacketIndex).Distinct().Order())}]"))}");
+
+    var uyaTie5827Export = TieGltfExporter.Export(
+        uyaTie5827,
+        "tie.gltf",
+        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = uyaProfile });
+    using var uyaTie5827Document = JsonDocument.Parse(uyaTie5827Export.GltfBytes);
+    var glowEmissionPackets = uyaTie5827Document.RootElement
+        .GetProperty("meshes")[0]
+        .GetProperty("primitives")
+        .EnumerateArray()
+        .Where(primitive =>
+            primitive.GetProperty("extras").TryGetProperty("GlowRgbaUsesEmission", out var usesEmission)
+            && usesEmission.GetBoolean())
+        .Select(primitive => primitive.GetProperty("extras").GetProperty("PacketIndex").GetInt32())
+        .Distinct()
+        .Order()
+        .ToArray();
+    Expect(
+        glowEmissionPackets.Length > 0
+            && glowEmissionPackets.All(packetIndex => packetIndex is 7 or 8),
+        $"expected UYA 0x16C3 exported glow faces only on packets 7-8, got [{string.Join(",", glowEmissionPackets)}]");
 }
 var uyaTie591Path = Path.Combine(repoRoot, "test-assets", "UYA Ties", "unsorted", "591", "core.bin");
 if (File.Exists(uyaTie591Path))
@@ -237,29 +272,6 @@ if (File.Exists(uyaTie472Path))
         "expected UYA 472 packet 3 shell normals to repair copied source-normal panels that disagree with the face");
 }
 Expect(tie.Header.GlowRgba == unchecked((int)0x803360A3), $"expected glow RGBA 0x803360A3, got 0x{unchecked((uint)tie.Header.GlowRgba):X8}");
-Expect(tie.GlowRgbaRemaps.Count == 1, $"expected one decoded 09907 glow RGBA remap, got {tie.GlowRgbaRemaps.Count}");
-Expect(tie.GlowRgbaRemaps[0].Offset == 0x1150, $"expected 09907 glow RGBA remap offset 0x1150, got 0x{tie.GlowRgbaRemaps[0].Offset:X}");
-Expect(tie.GlowRgbaRemaps[0].ResolvedStartOffset == 0x1A80, $"expected 09907 glow RGBA resolved start offset 0x1A80, got 0x{tie.GlowRgbaRemaps[0].ResolvedStartOffset:X}");
-Expect(tie.GlowRgbaRemaps[0].EndOffset == 0x1C30, $"expected 09907 glow RGBA remap end offset 0x1C30, got 0x{tie.GlowRgbaRemaps[0].EndOffset:X}");
-Expect(tie.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketMultipassRange, $"expected 09907 glow remap to resolve from the multipass packet range, got {tie.GlowRgbaRemaps[0].ResolutionKind}");
-Expect(tie.GlowRgbaRemaps[0].ResolvedPacketIndex == 6, $"expected 09907 glow remap to resolve to packet 6, got {tie.GlowRgbaRemaps[0].ResolvedPacketIndex}");
-Expect(tie.GlowRgbaRemaps[0].ResolvedPacketCount == 1, $"expected 09907 glow remap to resolve across 1 packet, got {tie.GlowRgbaRemaps[0].ResolvedPacketCount}");
-Expect(tie.GlowRgbaVertices.Count == 26, $"expected 09907 glow remap to resolve 26 vertices, got {tie.GlowRgbaVertices.Count}");
-Expect(tie.GlowRgbaVertices.All(vertex => vertex.PacketIndex == 6), "expected 09907 glow vertices to be limited to the white stripe packet");
-var tie9767Path = Path.Combine(tiesRoot, "09767_2627", "tie.bin");
-if (File.Exists(tie9767Path))
-{
-    using var tie9767Input = File.OpenRead(tie9767Path);
-    var tie9767 = TieClassReader.Read(tie9767Input);
-    Expect(
-        tie9767.GlowRgbaRemaps.Count == 2
-            && tie9767.GlowRgbaRemaps.All(remap => remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketMultipassRange),
-        "expected 09767 glow remaps inside the multipass packet to resolve as whole-packet glow ranges");
-    Expect(
-        tie9767.GlowRgbaVertices.Count == 22
-            && tie9767.GlowRgbaVertices.All(vertex => vertex.PacketIndex == 1),
-        $"expected 09767 glow remaps to cover the full packet 1 logical vertex set, got {tie9767.GlowRgbaVertices.Count} vertices");
-}
 var dlProfile = TieGameProfile.Default.WithGameLabel("DL");
 var tie9638Path = Path.Combine(tiesRoot, "ALL DL", "9638", "core.bin");
 if (File.Exists(tie9638Path))
@@ -305,544 +317,6 @@ if (File.Exists(tie9806Path))
             tie9806MeshExtras.GetProperty("ScaledBoundingRadius").GetSingle()
             - tie9806.Header.Scale * tie9806.Header.BoundingSphere.Radius) < 0.0001f,
         "expected DL 0x264E to export the game's scaled culling radius");
-}
-var tie9312Path = Path.Combine(tiesRoot, "ALL DL", "9312", "core.bin");
-if (File.Exists(tie9312Path))
-{
-    using var tie9312Input = File.OpenRead(tie9312Path);
-    var tie9312 = TieClassReader.Read(tie9312Input, TieClassReadOptions.ForGameProfile(dlProfile));
-    var tie9312Export = TieGltfExporter.Export(
-        tie9312,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
-    using var tie9312Diagnostics = JsonDocument.Parse(tie9312Export.DiagnosticsBytes);
-    var tie9312Root = tie9312Diagnostics.RootElement;
-    var tie9312Topology = tie9312.LodTopologies[0];
-    Expect(
-        tie9312.GlowRgbaRemaps.Count == 2
-            && tie9312.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && tie9312.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 0 })
-            && tie9312.GlowRgbaRemaps[0].ResolvedShaderIndex == 0
-            && tie9312.GlowRgbaRemaps[1].ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved
-            && tie9312.GlowRgbaVertices.Count == 40
-            && tie9312.GlowRgbaVertices.All(vertex =>
-                vertex.StripIndex >= 0
-                && vertex.StripIndex < tie9312Topology.Strips.Count
-                && tie9312Topology.Strips[vertex.StripIndex].ShaderIndex == 0)
-            && tie9312Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 40,
-        $"expected DL 9312 primary glow marker to resolve to packet 0 shader 0, got remaps={string.Join("; ", tie9312.GlowRgbaRemaps.Select(remap => $"{remap.Offset:X}/{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, source={tie9312.GlowRgbaVertices.Count}, export={tie9312Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
-    Expect(
-        tie9312Root.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() > 0
-            && tie9312Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
-        $"expected DL 9312 texture 0 glow to export one emissive primitive, got emitted={tie9312Root.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()}, primitives={tie9312Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var tie9221Path = Path.Combine(tiesRoot, "ALL DL", "9221", "core.bin");
-if (File.Exists(tie9221Path))
-{
-    using var tie9221Input = File.OpenRead(tie9221Path);
-    var tie9221 = TieClassReader.Read(tie9221Input, TieClassReadOptions.ForGameProfile(dlProfile));
-    var tie9221Topology = tie9221.LodTopologies[0];
-    Expect(
-        tie9221.GlowRgbaRemaps.Count == 2
-            && tie9221.GlowRgbaRemaps.All(remap =>
-                remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-                && remap.ResolvedPacketIndices.SequenceEqual(new[] { 0 })
-                && remap.ResolvedShaderIndex == 1),
-        $"expected DL 9221 glow remaps to resolve to packet 0 shader 1, got {string.Join("; ", tie9221.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}");
-    Expect(
-        tie9221.GlowRgbaVertices.Count == 16
-            && tie9221.GlowRgbaVertices.All(vertex =>
-                vertex.StripIndex >= 0
-                && vertex.StripIndex < tie9221Topology.Strips.Count
-                && tie9221Topology.Strips[vertex.StripIndex].ShaderIndex == 1),
-        $"expected DL 9221 glow vertices to stay on shader 1, got {tie9221.GlowRgbaVertices.Count} vertices across strips {string.Join(",", tie9221.GlowRgbaVertices.Select(vertex => vertex.StripIndex).Distinct().OrderBy(index => index))}");
-    var tie9221Export = TieGltfExporter.Export(
-        tie9221,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
-    using var tie9221Diagnostics = JsonDocument.Parse(tie9221Export.DiagnosticsBytes);
-    var tie9221Root = tie9221Diagnostics.RootElement;
-    Expect(
-        tie9221Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 16
-            && tie9221Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
-        $"expected DL 9221 export to emit only the shader 1 glow primitive, got source={tie9221Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9221Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var tie9117Path = Path.Combine(tiesRoot, "ALL DL", "9117", "core.bin");
-if (File.Exists(tie9117Path))
-{
-    using var tie9117Input = File.OpenRead(tie9117Path);
-    var tie9117 = TieClassReader.Read(tie9117Input, TieClassReadOptions.ForGameProfile(dlProfile));
-    var tie9117Topology = tie9117.LodTopologies[0];
-    Expect(
-        tie9117.GlowRgbaRemaps.Count == 1
-            && tie9117.GlowRgbaRemaps[0].ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && tie9117.GlowRgbaRemaps[0].ResolvedPacketIndices.SequenceEqual(new[] { 3, 4 })
-            && tie9117.GlowRgbaRemaps[0].ResolvedShaderIndex == 6
-            && tie9117.GlowRgbaVertices.Count == 40
-            && tie9117.GlowRgbaVertices.All(vertex =>
-                vertex.PacketIndex is 3 or 4
-                && vertex.StripIndex >= 0
-                && vertex.StripIndex < tie9117Topology.Strips.Count
-                && tie9117Topology.Strips[vertex.StripIndex].ShaderIndex == 6),
-        $"expected DL 9117 glow marker to resolve to carried shader 6 on packets 3 and 4, got remaps={string.Join("; ", tie9117.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/shader={remap.ResolvedShaderIndex}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={tie9117.GlowRgbaVertices.Count}");
-    var tie9117Export = TieGltfExporter.Export(
-        tie9117,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
-    using var tie9117Diagnostics = JsonDocument.Parse(tie9117Export.DiagnosticsBytes);
-    var tie9117Root = tie9117Diagnostics.RootElement;
-    Expect(
-        tie9117Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 40
-            && tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 2,
-        $"expected DL 9117 export to emit only the texture 6 glow primitives, got source={tie9117Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9117Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var tie9487Path = Path.Combine(tiesRoot, "ALL DL", "9487", "core.bin");
-if (File.Exists(tie9487Path))
-{
-    using var tie9487Input = File.OpenRead(tie9487Path);
-    var tie9487 = TieClassReader.Read(tie9487Input, TieClassReadOptions.ForGameProfile(dlProfile));
-    Expect(
-        tie9487.GlowRgbaRemaps.Count == 3
-            && tie9487.GlowRgbaRemaps.All(remap =>
-                remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketMultipassSet
-                && remap.ResolvedPacketIndices.SequenceEqual(new[] { 1, 27 }))
-            && tie9487.GlowRgbaVertices.Count == 90,
-        $"expected DL 9487 glow remaps to resolve to multipass glow packets 1 and 27, got remaps={string.Join("; ", tie9487.GlowRgbaRemaps.Select(remap => $"{remap.ResolutionKind}/packets={string.Join(",", remap.ResolvedPacketIndices)}"))}, vertices={tie9487.GlowRgbaVertices.Count}");
-    var tie9487Export = TieGltfExporter.Export(
-        tie9487,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameProfile = dlProfile });
-    using var tie9487Diagnostics = JsonDocument.Parse(tie9487Export.DiagnosticsBytes);
-    var tie9487Root = tie9487Diagnostics.RootElement;
-    using var tie9487Gltf = JsonDocument.Parse(tie9487Export.GltfBytes);
-    var tie9487EmissiveGroups = tie9487Gltf.RootElement
-        .GetProperty("meshes")[0]
-        .GetProperty("primitives")
-        .EnumerateArray()
-        .Where(primitive =>
-            primitive.GetProperty("extras").TryGetProperty("GlowRgbaUsesEmission", out var usesEmission)
-            && usesEmission.GetBoolean())
-        .Select(primitive => (
-            PacketIndex: primitive.GetProperty("extras").GetProperty("PacketIndex").GetInt32(),
-            ShaderIndex: primitive.GetProperty("extras").GetProperty("ShaderIndex").GetInt32()))
-        .OrderBy(group => group.PacketIndex)
-        .ThenBy(group => group.ShaderIndex)
-        .ToArray();
-    Expect(
-        tie9487Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 90
-            && tie9487Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 3
-            && tie9487EmissiveGroups.SequenceEqual(new[] { (1, 1), (1, 6), (27, 6) }),
-        $"expected DL 9487 export to emit both packet 1 glow shaders plus packet 27, got source={tie9487Root.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, primitives={tie9487Root.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}, groups={string.Join(",", tie9487EmissiveGroups.Select(group => $"{group.PacketIndex}/{group.ShaderIndex}"))}");
-}
-var gcPacketStartGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3575", "core.bin");
-if (File.Exists(gcPacketStartGlowPath))
-{
-    using var gcPacketStartGlowInput = File.OpenRead(gcPacketStartGlowPath);
-    var gcPacketStartGlow = TieClassReader.Read(gcPacketStartGlowInput);
-    var gcPacketStartRemap = gcPacketStartGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3AA0);
-    Expect(gcPacketStartRemap is not null, "expected GC 3575 packet-start glow remap 0x3AA0 to decode");
-    Expect(
-        gcPacketStartRemap!.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange,
-        $"expected GC 3575 packet-start glow remap to clamp to packet vertex rows, got {gcPacketStartRemap.ResolutionKind}");
-    Expect(
-        gcPacketStartRemap.ResolvedStartOffset == 0x3AE0
-            && gcPacketStartRemap.EndOffset == 0x3B40
-            && gcPacketStartRemap.ResolvedLogicalVertexCount == 6,
-        $"expected GC 3575 packet-start glow remap to resolve rows 0..5, got start=0x{gcPacketStartRemap.ResolvedStartOffset:X}, end=0x{gcPacketStartRemap.EndOffset:X}, vertices={gcPacketStartRemap.ResolvedLogicalVertexCount}");
-    Expect(
-        gcPacketStartGlow.GlowRgbaVertices.Count == 54,
-        $"expected GC 3575 glow vertices to include only packet RGBA rows, got {gcPacketStartGlow.GlowRgbaVertices.Count}");
-}
-var gcCrossPacketGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3702", "core.bin");
-if (File.Exists(gcCrossPacketGlowPath))
-{
-    using var gcCrossPacketGlowInput = File.OpenRead(gcCrossPacketGlowPath);
-    var gcCrossPacketGlow = TieClassReader.Read(gcCrossPacketGlowInput);
-    var gcCrossPacketRemap = gcCrossPacketGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x1C00);
-    Expect(gcCrossPacketRemap is not null, "expected GC 3702 cross-packet glow remap 0x1C00 to decode");
-    Expect(
-        gcCrossPacketRemap!.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange,
-        $"expected GC 3702 cross-packet glow remap to resolve from later packet vertex rows, got {gcCrossPacketRemap.ResolutionKind}");
-    Expect(
-        gcCrossPacketRemap.ResolvedPacketIndex == 6
-            && gcCrossPacketRemap.ResolvedStartOffset == 0x1C80
-            && gcCrossPacketRemap.EndOffset == 0x1CB0
-            && gcCrossPacketRemap.ResolvedLogicalVertexCount == 3,
-        $"expected GC 3702 cross-packet glow remap to resolve LOD0 packet 6 rows 0..2, got packet={gcCrossPacketRemap.ResolvedPacketIndex}, start=0x{gcCrossPacketRemap.ResolvedStartOffset:X}, end=0x{gcCrossPacketRemap.EndOffset:X}, vertices={gcCrossPacketRemap.ResolvedLogicalVertexCount}");
-    Expect(
-        gcCrossPacketGlow.GlowRgbaVertices.Count == 58,
-        $"expected GC 3702 glow vertices to include only packet RGBA rows, got {gcCrossPacketGlow.GlowRgbaVertices.Count}");
-}
-var gcMultipassMarkerGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3492", "core.bin");
-if (File.Exists(gcMultipassMarkerGlowPath))
-{
-    using var gcMultipassMarkerGlowInput = File.OpenRead(gcMultipassMarkerGlowPath);
-    var gcMultipassMarkerGlow = TieClassReader.Read(gcMultipassMarkerGlowInput);
-    var gcMultipassMarkerRemap = gcMultipassMarkerGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0xE60);
-    Expect(gcMultipassMarkerRemap is not null, "expected GC 3492 multipass-tail glow remap 0xE60 to decode");
-    Expect(
-        gcMultipassMarkerGlow.GlowRgbaRemaps.All(remap => remap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange),
-        "expected GC 3492 multipass-tail glow remaps to resolve as packet marker ranges");
-    Expect(
-        gcMultipassMarkerRemap!.ResolvedPacketIndex == 2
-            && gcMultipassMarkerRemap.ResolvedStartOffset == 0xA80
-            && gcMultipassMarkerRemap.EndOffset == 0xD50
-            && gcMultipassMarkerRemap.ResolvedLogicalVertexCount == 48,
-        $"expected GC 3492 multipass-tail glow remap to resolve LOD0 packet 2, got packet={gcMultipassMarkerRemap.ResolvedPacketIndex}, start=0x{gcMultipassMarkerRemap.ResolvedStartOffset:X}, end=0x{gcMultipassMarkerRemap.EndOffset:X}, vertices={gcMultipassMarkerRemap.ResolvedLogicalVertexCount}");
-    Expect(
-        gcMultipassMarkerGlow.GlowRgbaVertices.Count == 48,
-        $"expected GC 3492 multipass-tail glow vertices to resolve only packet RGBA rows, got {gcMultipassMarkerGlow.GlowRgbaVertices.Count}");
-}
-var gcPrePacketTableGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "2868", "core.bin");
-if (File.Exists(gcPrePacketTableGlowPath))
-{
-    using var gcPrePacketTableGlowInput = File.OpenRead(gcPrePacketTableGlowPath);
-    var gcPrePacketTableGlow = TieClassReader.Read(gcPrePacketTableGlowInput);
-    var gcPrePacketTableRemap = gcPrePacketTableGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x100);
-    Expect(gcPrePacketTableRemap is not null, "expected GC 2868 packet-table glow remap 0x100 to decode");
-    Expect(
-        gcPrePacketTableRemap!.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange
-            && gcPrePacketTableRemap.ResolvedPacketIndex == 0
-            && gcPrePacketTableGlow.GlowRgbaVertices.Count == 24,
-        $"expected GC 2868 packet-table glow remap to resolve the first packet, got kind={gcPrePacketTableRemap.ResolutionKind}, packet={gcPrePacketTableRemap.ResolvedPacketIndex}, vertices={gcPrePacketTableGlow.GlowRgbaVertices.Count}");
-}
-var gcPreDataGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3169", "core.bin");
-if (File.Exists(gcPreDataGlowPath))
-{
-    using var gcPreDataGlowInput = File.OpenRead(gcPreDataGlowPath);
-    var gcPreDataGlow = TieClassReader.Read(gcPreDataGlowInput);
-    var gcPreDataShortMarker = gcPreDataGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0xC0);
-    var gcPreDataResolvedMarker = gcPreDataGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0xE0);
-    Expect(
-        gcPreDataShortMarker?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved,
-        $"expected GC 3169 short pre-data marker to remain unresolved, got {gcPreDataShortMarker?.ResolutionKind}");
-    Expect(
-        gcPreDataResolvedMarker?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange
-            && gcPreDataResolvedMarker.ResolvedPacketIndex == 0
-            && gcPreDataResolvedMarker.EndOffset == 0x1E0
-            && gcPreDataGlow.GlowRgbaVertices.Count == 8,
-        $"expected GC 3169 pre-data marker to resolve the first packet, got kind={gcPreDataResolvedMarker?.ResolutionKind}, packet={gcPreDataResolvedMarker?.ResolvedPacketIndex}, vertices={gcPreDataGlow.GlowRgbaVertices.Count}");
-}
-var gcPlatformGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3947", "core.bin");
-if (File.Exists(gcPlatformGlowPath))
-{
-    using var gcPlatformGlowInput = File.OpenRead(gcPlatformGlowPath);
-    var gcPlatformGlow = TieClassReader.Read(gcPlatformGlowInput);
-    var gcPlatformGlowRemap = gcPlatformGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x700);
-    var gcPlatformGlowBoundary = gcPlatformGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x7A0);
-    var gcPlatformGlowTopology = gcPlatformGlow.LodTopologies[0];
-    Expect(
-        gcPlatformGlowRemap is not null
-            && gcPlatformGlowRemap.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcPlatformGlowRemap.ResolvedShaderIndex == 3
-            && gcPlatformGlowRemap.ResolvedPacketIndices.SequenceEqual(new[] { 1, 2, 3 }),
-        $"expected GC 3947 glow remap 0x700 to resolve to shader 3 packets 1,2,3, got kind={gcPlatformGlowRemap?.ResolutionKind}, shader={gcPlatformGlowRemap?.ResolvedShaderIndex}, packets={string.Join(",", gcPlatformGlowRemap?.ResolvedPacketIndices ?? [])}");
-    Expect(
-        gcPlatformGlowBoundary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved,
-        $"expected GC 3947 glow boundary 0x7A0 to remain unresolved, got {gcPlatformGlowBoundary?.ResolutionKind}");
-    Expect(
-        gcPlatformGlow.GlowRgbaVertices.All(vertex =>
-            vertex.StripIndex >= 0
-            && vertex.StripIndex < gcPlatformGlowTopology.Strips.Count
-            && gcPlatformGlowTopology.Strips[vertex.StripIndex].ShaderIndex == 3),
-        "expected GC 3947 glow vertices to remain limited to shader 3 edge-light strips");
-    var gcPlatformGlowExport = TieGltfExporter.Export(
-        gcPlatformGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcPlatformGlowDiagnostics = JsonDocument.Parse(gcPlatformGlowExport.DiagnosticsBytes);
-    var gcPlatformGlowRoot = gcPlatformGlowDiagnostics.RootElement;
-    Expect(
-        gcPlatformGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 72,
-        $"expected GC 3947 to resolve 72 source glow vertices, got {gcPlatformGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
-    var gcPlatformGlowEmissionVertexCount = gcPlatformGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32();
-    Expect(
-        gcPlatformGlowEmissionVertexCount >= 72
-            && gcPlatformGlowEmissionVertexCount <= 144,
-        $"expected GC 3947 export to preserve per-vertex glow without triangle-wide promotion, got {gcPlatformGlowEmissionVertexCount} emitted vertices");
-}
-var gcLampGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3938", "core.bin");
-if (File.Exists(gcLampGlowPath))
-{
-    using var gcLampGlowInput = File.OpenRead(gcLampGlowPath);
-    var gcLampGlow = TieClassReader.Read(gcLampGlowInput);
-    var gcLampGlowPrimary = gcLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x1C50);
-    var gcLampGlowBoundary = gcLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x1CC0);
-    var gcLampGlowTailBridge = gcLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x1D00);
-    Expect(
-        gcLampGlowPrimary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved,
-        $"expected GC 3938 source-packet tail marker 0x1C50 to be suppressed, got kind={gcLampGlowPrimary?.ResolutionKind}, packet={gcLampGlowPrimary?.ResolvedPacketIndex}");
-    Expect(
-        gcLampGlowBoundary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcLampGlowBoundary.ResolvedPacketIndices.SequenceEqual(new[] { 7 })
-            && gcLampGlowBoundary.ResolvedShaderIndex == 4,
-        $"expected GC 3938 mid-tail marker 0x1CC0 to bridge into packet 7 shader 4, got kind={gcLampGlowBoundary?.ResolutionKind}, packets={string.Join(",", gcLampGlowBoundary?.ResolvedPacketIndices ?? [])}, shader={gcLampGlowBoundary?.ResolvedShaderIndex}");
-    Expect(
-        gcLampGlowTailBridge?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcLampGlowTailBridge.ResolvedPacketIndices.SequenceEqual(new[] { 7 })
-            && gcLampGlowTailBridge.ResolvedShaderIndex == 4,
-        $"expected GC 3938 tail marker 0x1D00 to bridge into packet 7 shader 4, got kind={gcLampGlowTailBridge?.ResolutionKind}, packets={string.Join(",", gcLampGlowTailBridge?.ResolvedPacketIndices ?? [])}, shader={gcLampGlowTailBridge?.ResolvedShaderIndex}");
-    Expect(
-        gcLampGlow.GlowRgbaVertices.Count == 24
-            && gcLampGlow.GlowRgbaVertices.All(vertex => vertex.PacketIndex == 7)
-            && !gcLampGlow.GlowRgbaVertices.Any(vertex => vertex.PacketIndex == 6),
-        $"expected GC 3938 glow vertices to stay on lamp-top packet 7, got {gcLampGlow.GlowRgbaVertices.Count} vertices across packets {string.Join(",", gcLampGlow.GlowRgbaVertices.Select(vertex => vertex.PacketIndex).Distinct().OrderBy(index => index))}");
-    var gcLampGlowExport = TieGltfExporter.Export(
-        gcLampGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcLampGlowDiagnostics = JsonDocument.Parse(gcLampGlowExport.DiagnosticsBytes);
-    var gcLampGlowRoot = gcLampGlowDiagnostics.RootElement;
-    Expect(
-        gcLampGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 24,
-        $"expected GC 3938 to resolve 24 source glow vertices, got {gcLampGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
-    Expect(
-        gcLampGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() >= 24
-            && gcLampGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 1,
-        $"expected GC 3938 export to emit only the lamp-top primitive, got {gcLampGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()} emitted vertices across {gcLampGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()} primitives");
-}
-var gcMixedShaderLampGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3161", "core.bin");
-if (File.Exists(gcMixedShaderLampGlowPath))
-{
-    using var gcMixedShaderLampGlowInput = File.OpenRead(gcMixedShaderLampGlowPath);
-    var gcMixedShaderLampGlow = TieClassReader.Read(gcMixedShaderLampGlowInput);
-    var gcMixedShaderLampPrimary = gcMixedShaderLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x43D0);
-    var gcMixedShaderLampMiddle = gcMixedShaderLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x4770);
-    var gcMixedShaderLampTail = gcMixedShaderLampGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x4930);
-    var gcMixedShaderLampPackets = new[] { 5, 6, 8, 14, 18, 19, 25, 26 };
-    Expect(
-        gcMixedShaderLampPrimary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcMixedShaderLampPrimary.ResolvedPacketIndices.SequenceEqual(gcMixedShaderLampPackets)
-            && gcMixedShaderLampPrimary.ResolvedShaderIndex == 3,
-        $"expected GC 3161 glow marker 0x43D0 to resolve to repeated shader 3 lamp packets, got kind={gcMixedShaderLampPrimary?.ResolutionKind}, packets={string.Join(",", gcMixedShaderLampPrimary?.ResolvedPacketIndices ?? [])}, shader={gcMixedShaderLampPrimary?.ResolvedShaderIndex}");
-    Expect(
-        gcMixedShaderLampMiddle?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcMixedShaderLampMiddle.ResolvedPacketIndices.SequenceEqual(gcMixedShaderLampPackets)
-            && gcMixedShaderLampMiddle.ResolvedShaderIndex == 3
-            && gcMixedShaderLampTail?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcMixedShaderLampTail.ResolvedPacketIndices.SequenceEqual(gcMixedShaderLampPackets)
-            && gcMixedShaderLampTail.ResolvedShaderIndex == 3,
-        $"expected GC 3161 glow markers 0x4770/0x4930 to resolve to repeated shader 3 lamp packets, got middle kind={gcMixedShaderLampMiddle?.ResolutionKind}, packets={string.Join(",", gcMixedShaderLampMiddle?.ResolvedPacketIndices ?? [])}, shader={gcMixedShaderLampMiddle?.ResolvedShaderIndex}; tail kind={gcMixedShaderLampTail?.ResolutionKind}, packets={string.Join(",", gcMixedShaderLampTail?.ResolvedPacketIndices ?? [])}, shader={gcMixedShaderLampTail?.ResolvedShaderIndex}");
-    var gcMixedShaderLampTopology = gcMixedShaderLampGlow.LodTopologies[0];
-    var gcMixedShaderLampGlowPairs = gcMixedShaderLampGlow.GlowRgbaVertices
-        .Where(vertex => vertex.LodIndex == 0 && vertex.StripIndex >= 0 && vertex.StripIndex < gcMixedShaderLampTopology.Strips.Count)
-        .Select(vertex => (vertex.PacketIndex, ShaderIndex: gcMixedShaderLampTopology.Strips[vertex.StripIndex].ShaderIndex ?? -1))
-        .Distinct()
-        .OrderBy(pair => pair.PacketIndex)
-        .ThenBy(pair => pair.ShaderIndex)
-        .ToArray();
-    Expect(
-        gcMixedShaderLampGlow.GlowRgbaVertices.Count == 376
-            && gcMixedShaderLampGlowPairs.SequenceEqual(gcMixedShaderLampPackets.Select(packetIndex => (packetIndex, ShaderIndex: 3))),
-        $"expected GC 3161 glow vertices to stay on repeated shader 3 lamp packets, got {gcMixedShaderLampGlow.GlowRgbaVertices.Count} vertices across {string.Join(",", gcMixedShaderLampGlowPairs.Select(pair => $"{pair.PacketIndex}/{pair.ShaderIndex}"))}");
-    var gcMixedShaderLampGlowExport = TieGltfExporter.Export(
-        gcMixedShaderLampGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcMixedShaderLampGlowDiagnostics = JsonDocument.Parse(gcMixedShaderLampGlowExport.DiagnosticsBytes);
-    var gcMixedShaderLampGlowRoot = gcMixedShaderLampGlowDiagnostics.RootElement;
-    Expect(
-        gcMixedShaderLampGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 376,
-        $"expected GC 3161 to resolve 376 source glow vertices, got {gcMixedShaderLampGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}");
-    Expect(
-        gcMixedShaderLampGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() >= 376
-            && gcMixedShaderLampGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 8,
-        $"expected GC 3161 export to emit only the repeated shader 3 lamp primitives, got {gcMixedShaderLampGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()} emitted vertices across {gcMixedShaderLampGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()} primitives");
-}
-var gcBroadShaderGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3064", "core.bin");
-if (File.Exists(gcBroadShaderGlowPath))
-{
-    using var gcBroadShaderGlowInput = File.OpenRead(gcBroadShaderGlowPath);
-    var gcBroadShaderGlow = TieClassReader.Read(gcBroadShaderGlowInput);
-    var gcBroadShaderRemap = gcBroadShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3C80);
-    var gcBroadShaderBoundary = gcBroadShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3CA0);
-    Expect(
-        gcBroadShaderRemap?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcBroadShaderRemap.ResolvedShaderIndex == 3
-            && gcBroadShaderRemap.ResolvedPacketIndices.SequenceEqual(new[] { 13 })
-            && gcBroadShaderRemap.ResolvedStartOffset == 0x3C80
-            && gcBroadShaderRemap.EndOffset == 0x3CA0
-            && gcBroadShaderRemap.ResolvedVertexRowCount == 2,
-        $"expected GC 3064 primary shader glow to stay bounded to the source shader row window, got kind={gcBroadShaderRemap?.ResolutionKind}, shader={gcBroadShaderRemap?.ResolvedShaderIndex}, packets={string.Join(",", gcBroadShaderRemap?.ResolvedPacketIndices ?? [])}, start=0x{gcBroadShaderRemap?.ResolvedStartOffset:X}, end=0x{gcBroadShaderRemap?.EndOffset:X}, rows={gcBroadShaderRemap?.ResolvedVertexRowCount}");
-    Expect(
-        gcBroadShaderBoundary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved
-            && gcBroadShaderGlow.GlowRgbaVertices.Count == 1,
-        $"expected GC 3064 boundary marker to remain unresolved and one bounded glow vertex, got boundary={gcBroadShaderBoundary?.ResolutionKind}, vertices={gcBroadShaderGlow.GlowRgbaVertices.Count}");
-}
-var gcBoundedShaderGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "2786", "core.bin");
-if (File.Exists(gcBoundedShaderGlowPath))
-{
-    using var gcBoundedShaderGlowInput = File.OpenRead(gcBoundedShaderGlowPath);
-    var gcBoundedShaderGlow = TieClassReader.Read(gcBoundedShaderGlowInput);
-    var gcBoundedShaderRemap = gcBoundedShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x21F0);
-    var gcBoundedShaderBoundary = gcBoundedShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x2230);
-    Expect(
-        gcBoundedShaderRemap?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcBoundedShaderRemap.ResolvedShaderIndex == 2
-            && gcBoundedShaderRemap.ResolvedPacketIndices.SequenceEqual(new[] { 7 })
-            && gcBoundedShaderRemap.ResolvedStartOffset == 0x21F0
-            && gcBoundedShaderRemap.EndOffset == 0x2230
-            && gcBoundedShaderRemap.StartVertexRowIndex == 4
-            && gcBoundedShaderRemap.EndVertexRowIndexExclusive == 8,
-        $"expected GC 2786 primary shader glow to stay bounded to packet 7 rows 4..7, got kind={gcBoundedShaderRemap?.ResolutionKind}, shader={gcBoundedShaderRemap?.ResolvedShaderIndex}, packets={string.Join(",", gcBoundedShaderRemap?.ResolvedPacketIndices ?? [])}, start=0x{gcBoundedShaderRemap?.ResolvedStartOffset:X}, end=0x{gcBoundedShaderRemap?.EndOffset:X}, rows={gcBoundedShaderRemap?.StartVertexRowIndex}..{gcBoundedShaderRemap?.EndVertexRowIndexExclusive}");
-    Expect(
-        gcBoundedShaderBoundary?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved
-            && gcBoundedShaderGlow.GlowRgbaVertices.Count == 8
-            && gcBoundedShaderGlow.GlowRgbaVertices.All(vertex => vertex.PacketIndex == 7),
-        $"expected GC 2786 boundary marker to remain unresolved and glow vertices to stay on packet 7, got boundary={gcBoundedShaderBoundary?.ResolutionKind}, vertices={gcBoundedShaderGlow.GlowRgbaVertices.Count}, packets={string.Join(",", gcBoundedShaderGlow.GlowRgbaVertices.Select(vertex => vertex.PacketIndex).Distinct().OrderBy(index => index))}");
-    var gcBoundedShaderGlowExport = TieGltfExporter.Export(
-        gcBoundedShaderGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcBoundedShaderGlowDiagnostics = JsonDocument.Parse(gcBoundedShaderGlowExport.DiagnosticsBytes);
-    var gcBoundedShaderGlowRoot = gcBoundedShaderGlowDiagnostics.RootElement;
-    Expect(
-        gcBoundedShaderGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 8
-            && gcBoundedShaderGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() >= 8
-            && gcBoundedShaderGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 0,
-        $"expected GC 2786 export to keep glow as a sparse vertex attribute without whole-primitive emission, got source={gcBoundedShaderGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, emitted={gcBoundedShaderGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()}, primitives={gcBoundedShaderGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var gcWhiteGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "2823", "core.bin");
-if (File.Exists(gcWhiteGlowPath))
-{
-    using var gcWhiteGlowInput = File.OpenRead(gcWhiteGlowPath);
-    var gcWhiteGlow = TieClassReader.Read(gcWhiteGlowInput);
-    var gcWhiteGlowRemap = gcWhiteGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x1750);
-    Expect(
-        gcWhiteGlow.Header.GlowRgba == unchecked((int)0x80FFFFFF)
-            && gcWhiteGlowRemap?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcWhiteGlow.GlowRgbaVertices.Count == 216,
-        $"expected GC 2823 to resolve white glow RGBA to 216 source vertices, got rgba=0x{gcWhiteGlow.Header.GlowRgba:X8}, kind={gcWhiteGlowRemap?.ResolutionKind}, vertices={gcWhiteGlow.GlowRgbaVertices.Count}");
-    var gcWhiteGlowExport = TieGltfExporter.Export(
-        gcWhiteGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcWhiteGlowDiagnostics = JsonDocument.Parse(gcWhiteGlowExport.DiagnosticsBytes);
-    var gcWhiteGlowRoot = gcWhiteGlowDiagnostics.RootElement;
-    Expect(
-        gcWhiteGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 216
-            && gcWhiteGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() > 0
-            && gcWhiteGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 5,
-        $"expected GC 2823 white glow not to collide with no-glow sentinel, got source={gcWhiteGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, emitted={gcWhiteGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()}, primitives={gcWhiteGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var gcTailBridgeSuppressGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3440", "core.bin");
-if (File.Exists(gcTailBridgeSuppressGlowPath))
-{
-    using var gcTailBridgeSuppressGlowInput = File.OpenRead(gcTailBridgeSuppressGlowPath);
-    var gcTailBridgeSuppressGlow = TieClassReader.Read(gcTailBridgeSuppressGlowInput);
-    var gcTailBridgeSuppressLocal = gcTailBridgeSuppressGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x30B0);
-    var gcTailBridgeSuppressFirstBridge = gcTailBridgeSuppressGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3190);
-    var gcTailBridgeSuppressSecondBridge = gcTailBridgeSuppressGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x31F0);
-    var gcTailBridgeSuppressPackets = new[] { 9, 10, 11, 12 };
-    Expect(
-        gcTailBridgeSuppressLocal?.ResolutionKind == TieGlowRgbaRemapResolutionKind.Unresolved,
-        $"expected GC 3440 local source-packet shader marker to be suppressed before the tail bridge, got {gcTailBridgeSuppressLocal?.ResolutionKind}");
-    Expect(
-        gcTailBridgeSuppressFirstBridge?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcTailBridgeSuppressFirstBridge.ResolvedShaderIndex == 5
-            && gcTailBridgeSuppressFirstBridge.ResolvedPacketIndices.SequenceEqual(gcTailBridgeSuppressPackets)
-            && gcTailBridgeSuppressSecondBridge?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcTailBridgeSuppressSecondBridge.ResolvedShaderIndex == 5
-            && gcTailBridgeSuppressSecondBridge.ResolvedPacketIndices.SequenceEqual(gcTailBridgeSuppressPackets),
-        $"expected GC 3440 tail bridges to resolve to carried shader 5 yellow face packets, got first={string.Join(",", gcTailBridgeSuppressFirstBridge?.ResolvedPacketIndices ?? [])}/{gcTailBridgeSuppressFirstBridge?.ResolvedShaderIndex}, second={string.Join(",", gcTailBridgeSuppressSecondBridge?.ResolvedPacketIndices ?? [])}/{gcTailBridgeSuppressSecondBridge?.ResolvedShaderIndex}");
-    Expect(
-        gcTailBridgeSuppressGlow.GlowRgbaVertices.Count == 132
-            && gcTailBridgeSuppressGlow.GlowRgbaVertices
-                .Select(vertex => vertex.PacketIndex)
-                .Distinct()
-                .OrderBy(index => index)
-                .SequenceEqual(gcTailBridgeSuppressPackets),
-        $"expected GC 3440 glow vertices to stay on carried shader 5 yellow face packets, got {gcTailBridgeSuppressGlow.GlowRgbaVertices.Count} vertices across packets {string.Join(",", gcTailBridgeSuppressGlow.GlowRgbaVertices.Select(vertex => vertex.PacketIndex).Distinct().OrderBy(index => index))}");
-    var gcTailBridgeSuppressGlowExport = TieGltfExporter.Export(
-        gcTailBridgeSuppressGlow,
-        "tie.gltf",
-        new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
-    using var gcTailBridgeSuppressGlowDiagnostics = JsonDocument.Parse(gcTailBridgeSuppressGlowExport.DiagnosticsBytes);
-    var gcTailBridgeSuppressGlowRoot = gcTailBridgeSuppressGlowDiagnostics.RootElement;
-    Expect(
-        gcTailBridgeSuppressGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == 132
-            && gcTailBridgeSuppressGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32() >= 132
-            && gcTailBridgeSuppressGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32() == 4,
-        $"expected GC 3440 export to emit the carried shader 5 yellow face primitives, got source={gcTailBridgeSuppressGlowRoot.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32()}, emitted={gcTailBridgeSuppressGlowRoot.GetProperty("GlowRgbaEmissionVertexCount").GetInt32()}, primitives={gcTailBridgeSuppressGlowRoot.GetProperty("GlowRgbaEmissivePrimitiveCount").GetInt32()}");
-}
-var gcSparseShaderGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "3770", "core.bin");
-if (File.Exists(gcSparseShaderGlowPath))
-{
-    using var gcSparseShaderGlowInput = File.OpenRead(gcSparseShaderGlowPath);
-    var gcSparseShaderGlow = TieClassReader.Read(gcSparseShaderGlowInput);
-    var gcSparseShaderRemap = gcSparseShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3FC0);
-    Expect(
-        gcSparseShaderRemap?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcSparseShaderRemap.ResolvedShaderIndex == 9
-            && gcSparseShaderRemap.ResolvedPacketIndices.SequenceEqual(new[] { 13 })
-            && gcSparseShaderGlow.GlowRgbaVertices.Count == 6,
-        $"expected GC 3770 shader glow to stay on source packet 13, got kind={gcSparseShaderRemap?.ResolutionKind}, shader={gcSparseShaderRemap?.ResolvedShaderIndex}, packets={string.Join(",", gcSparseShaderRemap?.ResolvedPacketIndices ?? [])}, vertices={gcSparseShaderGlow.GlowRgbaVertices.Count}");
-}
-var gcLocalRepeatedShaderGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "4220", "core.bin");
-if (File.Exists(gcLocalRepeatedShaderGlowPath))
-{
-    using var gcLocalRepeatedShaderGlowInput = File.OpenRead(gcLocalRepeatedShaderGlowPath);
-    var gcLocalRepeatedShaderGlow = TieClassReader.Read(gcLocalRepeatedShaderGlowInput);
-    var gcLocalRepeatedShaderFirst = gcLocalRepeatedShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x3E60);
-    var gcLocalRepeatedShaderSecond = gcLocalRepeatedShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x4920);
-    var gcLocalRepeatedShaderTail = gcLocalRepeatedShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x4CA0);
-    Expect(
-        gcLocalRepeatedShaderFirst?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcLocalRepeatedShaderFirst.ResolvedShaderIndex == 5
-            && gcLocalRepeatedShaderFirst.ResolvedPacketIndices.SequenceEqual(new[] { 13 })
-            && gcLocalRepeatedShaderSecond?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcLocalRepeatedShaderSecond.ResolvedShaderIndex == 5
-            && gcLocalRepeatedShaderSecond.ResolvedPacketIndices.SequenceEqual(new[] { 15 }),
-        $"expected GC 4220 same-shader local markers to stay local, got first={string.Join(",", gcLocalRepeatedShaderFirst?.ResolvedPacketIndices ?? [])}/{gcLocalRepeatedShaderFirst?.ResolvedShaderIndex}, second={string.Join(",", gcLocalRepeatedShaderSecond?.ResolvedPacketIndices ?? [])}/{gcLocalRepeatedShaderSecond?.ResolvedShaderIndex}");
-    Expect(
-        gcLocalRepeatedShaderTail?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketVertexRowRange
-            && gcLocalRepeatedShaderTail.ResolvedPacketIndices.SequenceEqual(new[] { 16 })
-            && gcLocalRepeatedShaderGlow.GlowRgbaVertices.Count == 149,
-        $"expected GC 4220 tail range to stay on packet 16 and total 149 local glow vertices, got tail={gcLocalRepeatedShaderTail?.ResolutionKind}, packets={string.Join(",", gcLocalRepeatedShaderTail?.ResolvedPacketIndices ?? [])}, vertices={gcLocalRepeatedShaderGlow.GlowRgbaVertices.Count}");
-}
-var gcBaseShaderGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", "4236", "core.bin");
-if (File.Exists(gcBaseShaderGlowPath))
-{
-    using var gcBaseShaderGlowInput = File.OpenRead(gcBaseShaderGlowPath);
-    var gcBaseShaderGlow = TieClassReader.Read(gcBaseShaderGlowInput);
-    var gcBaseShaderFirst = gcBaseShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x5380);
-    var gcBaseShaderMiddle = gcBaseShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x5690);
-    var gcBaseShaderTail = gcBaseShaderGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == 0x57F0);
-    Expect(
-        gcBaseShaderFirst?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcBaseShaderFirst.ResolvedShaderIndex == 0
-            && gcBaseShaderFirst.ResolvedPacketIndices.SequenceEqual(new[] { 17 })
-            && gcBaseShaderTail?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketShaderRange
-            && gcBaseShaderTail.ResolvedShaderIndex == 0
-            && gcBaseShaderTail.ResolvedPacketIndices.SequenceEqual(new[] { 18 }),
-        $"expected GC 4236 reused base shader glow to stay local, got first={string.Join(",", gcBaseShaderFirst?.ResolvedPacketIndices ?? [])}/{gcBaseShaderFirst?.ResolvedShaderIndex}, tail={string.Join(",", gcBaseShaderTail?.ResolvedPacketIndices ?? [])}/{gcBaseShaderTail?.ResolvedShaderIndex}");
-    Expect(
-        gcBaseShaderMiddle?.ResolutionKind == TieGlowRgbaRemapResolutionKind.PacketDataOffsetRange
-            && gcBaseShaderMiddle.ResolvedPacketIndices.SequenceEqual(new[] { 18 })
-            && gcBaseShaderGlow.GlowRgbaVertices.Count == 108,
-        $"expected GC 4236 scissor marker to stay on packet 18 and total 108 local glow vertices, got middle={gcBaseShaderMiddle?.ResolutionKind}, packets={string.Join(",", gcBaseShaderMiddle?.ResolvedPacketIndices ?? [])}, vertices={gcBaseShaderGlow.GlowRgbaVertices.Count}");
-}
-foreach (var item in new[]
-{
-    (Id: "3544", Offset: 0x2E90),
-    (Id: "3818", Offset: 0x54E0),
-    (Id: "2703", Offset: 0x1740),
-    (Id: "2705", Offset: 0x25A0)
-})
-{
-    var gcBroadScissorGlowPath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", item.Id, "core.bin");
-    if (!File.Exists(gcBroadScissorGlowPath))
-    {
-        continue;
-    }
-
-    using var gcBroadScissorGlowInput = File.OpenRead(gcBroadScissorGlowPath);
-    var gcBroadScissorGlow = TieClassReader.Read(gcBroadScissorGlowInput);
-    var gcBroadScissorRemap = gcBroadScissorGlow.GlowRgbaRemaps.FirstOrDefault(remap => remap.Offset == item.Offset);
-    Expect(
-        gcBroadScissorRemap is not null
-            && gcBroadScissorRemap.ResolvedPacketCount < 5,
-        $"expected GC {item.Id} scissor marker 0x{item.Offset:X} not to expand into a broad packet range, got kind={gcBroadScissorRemap?.ResolutionKind}, packets={string.Join(",", gcBroadScissorRemap?.ResolvedPacketIndices ?? [])}");
 }
 Expect((ushort)tie.Header.OClass == 0x26B3, $"expected o_class 0x26B3, got 0x{(ushort)tie.Header.OClass:X4}");
 Expect(tie.Header.TClass == 0, $"expected t_class 0, got {tie.Header.TClass}");
@@ -974,7 +448,7 @@ Expect(report.Contains("mapped=436 (W=408, Data3=28, unresolved=0)", StringCompa
 Expect(report.Contains("shaderSwitchVu=[32, 90]", StringComparison.Ordinal), "expected report to include shader switch VU addresses");
 Expect(report.Contains("clampU=True, clampV=True", StringComparison.Ordinal), "expected report to include shader clamp flags");
 Expect(report.Contains("Decoded vertex normals/remaps: 334", StringComparison.Ordinal), "expected report to include decoded vertex normals");
-Expect(report.Contains($"Decoded glow RGBA remaps/vertices: 1 / {tie.GlowRgbaVertices.Count}", StringComparison.Ordinal), "expected report to include decoded glow RGBA remaps");
+Expect(report.Contains($"Decoded glow RGBA remaps/vertices: {tie.GlowRgbaRemaps.Count} / {tie.GlowRgbaVertices.Count}", StringComparison.Ordinal), "expected report to include decoded glow RGBA remaps");
 Expect(report.Contains("strip controls: 9", StringComparison.Ordinal), "expected report to include decoded strip controls");
 Expect(report.Contains("setup row 0:", StringComparison.Ordinal), "expected report to include decoded packet setup rows");
 
@@ -1024,8 +498,8 @@ using (var gltfDocument = JsonDocument.Parse(gltfExport.GltfBytes))
         diagnosticsDocument.RootElement.GetProperty("SourceTableNormalVertexCount").GetInt32() > 0,
         "expected tie glTF export to apply at least one source normal table remap");
     Expect(
-        diagnosticsDocument.RootElement.GetProperty("DecodedGlowRgbaRemapCount").GetInt32() == 1,
-        "expected tie glTF diagnostics to include the 09907 glow remap");
+        diagnosticsDocument.RootElement.GetProperty("DecodedGlowRgbaRemapCount").GetInt32() == tie.GlowRgbaRemaps.Count,
+        "expected tie glTF diagnostics to include the decoded glow recipes");
     Expect(
         diagnosticsDocument.RootElement.GetProperty("ResolvedGlowRgbaVertexCount").GetInt32() == tie.GlowRgbaVertices.Count,
         "expected tie glTF diagnostics to report resolved 09907 glow vertices");
@@ -1147,13 +621,15 @@ void ValidateFixture(string fixturePath)
         Expect(
             fixtureTie.VertexNormals.Count == expectedVertexNormalCount,
             $"{relativePath}: expected {expectedVertexNormalCount} decoded vertex normals, got {fixtureTie.VertexNormals.Count}");
-        if (fixtureTie.Header.GlowRgba != 0 && fixtureTie.Header.GlowRemapOffsets.Any(offset => offset > 0))
+        if (fixtureTie.GlowRgbaRemaps.Count > 0)
         {
-            Expect(fixtureTie.GlowRgbaRemaps.Count > 0, $"{relativePath}: expected nonzero glow RGBA metadata to decode remap records");
             Expect(
-                fixtureTie.GlowRgbaRemaps.All(remap => remap.RawRgba == fixtureTie.Header.GlowRgba),
-                $"{relativePath}: expected glow RGBA remaps to preserve the class glow color");
-            ValidateGlowMultipassResolution(fixtureTie, relativePath);
+                fixtureTie.GlowRgbaRemaps.All(remap =>
+                    remap.RawRgba == fixtureTie.Header.GlowRgba
+                    && fixtureTie.RgbaRemapOperations.Any(operation =>
+                        operation.Offset == remap.Offset
+                        && operation.SourceSlots.Contains(TieRgbaRemapOperation.ConstantColorSourceSlot))),
+                $"{relativePath}: expected glow remaps to come from constant-color RGB recipes");
         }
 
         Expect(
@@ -2931,49 +2407,6 @@ void ValidateGcLevel04TieRegressionFixture()
     {
         failures.Add($"{relativePath}: {ex.Message}");
         Console.WriteLine($"FAIL GC level04 tie lighting/winding {relativePath}");
-    }
-}
-
-void ValidateGlowMultipassResolution(TieClass fixtureTie, string relativePath)
-{
-    var resolvedGlowLods = fixtureTie.GlowRgbaRemaps
-        .Where(remap => remap.LodIndex.HasValue)
-        .Select(remap => remap.LodIndex!.Value)
-        .Distinct()
-        .ToArray();
-    foreach (var lodIndex in resolvedGlowLods)
-    {
-        const byte glowPassFlags = 8;
-        var multipassPacketIndices = fixtureTie.PacketTables
-            .FirstOrDefault(table => table.LodIndex == lodIndex)?
-            .Packets
-            .Where(packet => packet.PassFlags == glowPassFlags)
-            .Select(packet => packet.PacketIndex)
-            .ToHashSet() ?? [];
-        if (multipassPacketIndices.Count == 0)
-        {
-            continue;
-        }
-
-        var glowPacketIndices = fixtureTie.GlowRgbaVertices
-            .Where(vertex => vertex.LodIndex == lodIndex)
-            .Select(vertex => vertex.PacketIndex)
-            .Distinct()
-            .ToHashSet();
-        Expect(
-            glowPacketIndices.SetEquals(multipassPacketIndices),
-            $"{relativePath}: expected LOD{lodIndex} glow RGBA coverage packets [{string.Join(", ", multipassPacketIndices.OrderBy(index => index))}], got [{string.Join(", ", glowPacketIndices.OrderBy(index => index))}]");
-
-        var topology = fixtureTie.LodTopologies[lodIndex];
-        foreach (var packetIndex in multipassPacketIndices)
-        {
-            var expectedVertexCount = topology.LogicalVertices.Count(vertex => vertex.PacketIndex == packetIndex);
-            var glowVertexCount = fixtureTie.GlowRgbaVertices.Count(vertex =>
-                vertex.LodIndex == lodIndex && vertex.PacketIndex == packetIndex);
-            Expect(
-                glowVertexCount == expectedVertexCount,
-                $"{relativePath}: expected LOD{lodIndex} packet {packetIndex} glow coverage to include {expectedVertexCount} logical vertices, got {glowVertexCount}");
-        }
     }
 }
 

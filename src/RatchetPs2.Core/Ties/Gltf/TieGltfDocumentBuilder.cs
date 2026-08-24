@@ -475,7 +475,8 @@ internal static class TieGltfDocumentBuilder
                     vertex.LogicalVertexIndex,
                     vertex.VertexRowIndex,
                     VertexRowOffset = FormatOffset(vertex.VertexRowOffset),
-                    Rgba = BuildRgbaDiagnostic(vertex.Rgba)
+                    Rgba = BuildRgbaDiagnostic(vertex.Rgba),
+                    vertex.GlowWeight
                 })
                 .ToArray()
         }, jsonOptions)

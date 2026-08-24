@@ -53,9 +53,9 @@ internal static class TieRawSectionBuilder
             }
         }
 
-        for (var i = 0; i < header.GlowRemapOffsets.Length; i++)
+        for (var i = 0; i < header.UnknownOffsets78.Length; i++)
         {
-            MarkOffset(labelsByOffset, bytes, header.GlowRemapOffsets[i], $"glow-remap-{i}");
+            MarkOffset(labelsByOffset, bytes, header.UnknownOffsets78[i], $"unknown-header-78-{i}");
         }
 
         foreach (var table in tables)

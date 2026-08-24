@@ -58,7 +58,7 @@ public sealed class TieClassHeader
     public int GlowRgba { get; init; }
     public TieBoundingSphere BoundingSphere { get; init; }
     public required TieLod[] Lods { get; init; }
-    public required ushort[] GlowRemapOffsets { get; init; }
+    public required ushort[] UnknownOffsets78 { get; init; }
     public short Padding { get; init; }
 }
 
@@ -424,6 +424,9 @@ public enum TieRgbaRemapOperationKind
 
 public sealed class TieRgbaRemapOperation
 {
+    // LightTies writes the per-instance glow color at source byte offset 0x7fc.
+    public const int ConstantColorSourceSlot = 0x7FC / sizeof(int);
+
     public required int LodIndex { get; init; }
     public required int GroupIndex { get; init; }
     public required int OperationIndex { get; init; }
@@ -496,6 +499,7 @@ public sealed class TieGlowRgbaVertex
     public required int VertexRowOffset { get; init; }
     public required int RawRgba { get; init; }
     public required TieRgba32 Rgba { get; init; }
+    public required float GlowWeight { get; init; }
 }
 
 public sealed class TieRawSection

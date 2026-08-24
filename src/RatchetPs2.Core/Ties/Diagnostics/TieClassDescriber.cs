@@ -29,7 +29,7 @@ public static class TieClassDescriber
         builder.AppendLine($"  Decoded vertex normals/remaps: {tie.VertexNormals.Count} / {tie.VertexNormalRemaps.Count}");
         builder.AppendLine($"  Decoded glow RGBA remaps/vertices: {tie.GlowRgbaRemaps.Count} / {tie.GlowRgbaVertices.Count}");
         builder.AppendLine($"  RGBA remap offsets: {FormatOffsets(header.RgbaRemapOffsets)}");
-        builder.AppendLine($"  Glow remap offsets: {FormatOffsets(header.GlowRemapOffsets)}");
+        builder.AppendLine($"  Unknown header +0x78 offsets: {FormatOffsets(header.UnknownOffsets78)}");
         builder.AppendLine();
 
         builder.AppendLine("LODs");

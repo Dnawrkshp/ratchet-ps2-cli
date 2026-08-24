@@ -23,9 +23,16 @@ internal static class TieGltfNormalRemapTargetResolver
         TieClass tie,
         TieLodTopology topology)
     {
+        return BuildPacketUploadLayouts(tie.PacketDataBlocks, topology);
+    }
+
+    public static IReadOnlyDictionary<int, TieGltfPacketUploadLayout> BuildPacketUploadLayouts(
+        IReadOnlyList<TiePacketDataBlock> packetDataBlocks,
+        TieLodTopology topology)
+    {
         var layouts = new Dictionary<int, TieGltfPacketUploadLayout>();
         var nextBase = 0;
-        foreach (var block in tie.PacketDataBlocks
+        foreach (var block in packetDataBlocks
                      .Where(block => block.LodIndex == topology.LodIndex)
                      .OrderBy(block => block.PacketIndex))
         {

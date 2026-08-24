@@ -27,7 +27,7 @@ internal static class TieGltfGlowBuilder
         {
             if (vertex.LogicalVertexIndex >= 0 && vertex.LogicalVertexIndex < colors.Count)
             {
-                colors[vertex.LogicalVertexIndex] = ToGltfColor(vertex.Rgba);
+                colors[vertex.LogicalVertexIndex] = ToGltfColor(vertex.Rgba, vertex.GlowWeight);
             }
         }
 
@@ -92,13 +92,13 @@ internal static class TieGltfGlowBuilder
         return count;
     }
 
-    private static Vector4 ToGltfColor(TieRgba32 rgba)
+    private static Vector4 ToGltfColor(TieRgba32 rgba, float glowWeight)
     {
         return new Vector4(
             Ps2Color.NormalizeByteComponent(rgba.R),
             Ps2Color.NormalizeByteComponent(rgba.G),
             Ps2Color.NormalizeByteComponent(rgba.B),
-            Ps2Color.NormalizeOpacityAlpha(rgba.A));
+            Ps2Color.NormalizeOpacityAlpha(rgba.A) * glowWeight);
     }
 
     public static bool IsActiveColor(Vector4 color)

@@ -66,10 +66,10 @@ internal static class TieClassHeaderReader
                 reader.ReadInt16());
         }
 
-        var glowRemapOffsets = new ushort[3];
-        for (var i = 0; i < glowRemapOffsets.Length; i++)
+        var unknownOffsets78 = new ushort[3];
+        for (var i = 0; i < unknownOffsets78.Length; i++)
         {
-            glowRemapOffsets[i] = reader.ReadUInt16();
+            unknownOffsets78[i] = reader.ReadUInt16();
         }
 
         return new TieClassHeader
@@ -97,7 +97,7 @@ internal static class TieClassHeaderReader
             GlowRgba = glowRgba,
             BoundingSphere = boundingSphere,
             Lods = lods,
-            GlowRemapOffsets = glowRemapOffsets,
+            UnknownOffsets78 = unknownOffsets78,
             Padding = reader.ReadInt16()
         };
     }

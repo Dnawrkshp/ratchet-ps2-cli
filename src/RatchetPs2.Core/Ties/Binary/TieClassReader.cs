@@ -38,11 +38,10 @@ public static class TieClassReader
             vertexNormals.Count);
         var rgbaRemapOperations = TieRgbaRemapOperationReader.Read(bytes, header);
         var (glowRgbaRemaps, glowRgbaVertices) = TieGlowRgbaReader.Read(
-            bytes,
             header,
-            packetTables,
             packetDataBlocks,
-            lodTopologies);
+            lodTopologies,
+            rgbaRemapOperations);
         var shaders = TieShaderReader.Read(bytes, header);
         var fileSections = TieRawSectionBuilder.Build(bytes, header, packetTables, shaders);
 
