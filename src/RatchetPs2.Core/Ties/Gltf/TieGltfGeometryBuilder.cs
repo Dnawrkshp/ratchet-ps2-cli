@@ -7,6 +7,158 @@ namespace RatchetPs2.Core.Ties;
 internal static class TieGltfGeometryBuilder
 {
 
+    public static int OrientTrianglesConsistently(
+        IReadOnlyList<Vector3> positions,
+        IReadOnlyList<Vector3> indexNormals,
+        IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
+        IReadOnlyList<PacketIndexGroup> groups)
+    {
+        var triangles = new List<WindingTriangle>();
+        var sourceIndexOffset = 0;
+        foreach (var group in groups)
+        {
+            for (var groupIndexOffset = 0; groupIndexOffset + 2 < group.Indices.Count; groupIndexOffset += 3)
+            {
+                triangles.Add(new WindingTriangle(group.Indices, groupIndexOffset, sourceIndexOffset));
+                sourceIndexOffset += 3;
+            }
+        }
+
+        var edgeUses = new Dictionary<WindingEdge, List<WindingEdgeUse>>();
+        for (var triangleIndex = 0; triangleIndex < triangles.Count; triangleIndex++)
+        {
+            var triangle = triangles[triangleIndex];
+            AddEdge(triangleIndex, triangle.A, triangle.B);
+            AddEdge(triangleIndex, triangle.B, triangle.C);
+            AddEdge(triangleIndex, triangle.C, triangle.A);
+        }
+
+        var neighbors = Enumerable.Range(0, triangles.Count)
+            .Select(_ => new List<WindingNeighbor>())
+            .ToArray();
+        foreach (var uses in edgeUses.Values.Where(uses => uses.Count == 2))
+        {
+            var left = uses[0];
+            var right = uses[1];
+            var sameFlip = left.Forward != right.Forward;
+            neighbors[left.TriangleIndex].Add(new WindingNeighbor(right.TriangleIndex, sameFlip));
+            neighbors[right.TriangleIndex].Add(new WindingNeighbor(left.TriangleIndex, sameFlip));
+        }
+
+        var flips = new bool?[triangles.Count];
+        for (var start = 0; start < triangles.Count; start++)
+        {
+            if (flips[start].HasValue)
+            {
+                continue;
+            }
+
+            var component = new List<int>();
+            var pending = new Queue<int>();
+            flips[start] = false;
+            pending.Enqueue(start);
+            while (pending.TryDequeue(out var triangleIndex))
+            {
+                component.Add(triangleIndex);
+                foreach (var neighbor in neighbors[triangleIndex])
+                {
+                    var expectedFlip = neighbor.SameFlip
+                        ? flips[triangleIndex]!.Value
+                        : !flips[triangleIndex]!.Value;
+                    if (!flips[neighbor.TriangleIndex].HasValue)
+                    {
+                        flips[neighbor.TriangleIndex] = expectedFlip;
+                        pending.Enqueue(neighbor.TriangleIndex);
+                    }
+                }
+            }
+
+            var componentVertices = component
+                .SelectMany(triangleIndex => new[]
+                {
+                    triangles[triangleIndex].A,
+                    triangles[triangleIndex].B,
+                    triangles[triangleIndex].C
+                })
+                .ToHashSet();
+            var componentCenter = componentVertices.Aggregate(
+                Vector3.Zero,
+                (sum, vertexIndex) => sum + positions[vertexIndex]) / componentVertices.Count;
+            var sourceAlignment = 0f;
+            var outwardAlignment = 0f;
+            var hasSourceNormals = false;
+            foreach (var triangleIndex in component)
+            {
+                var triangle = triangles[triangleIndex];
+                var faceNormal = Vector3.Cross(
+                    positions[triangle.B] - positions[triangle.A],
+                    positions[triangle.C] - positions[triangle.A]);
+                if (flips[triangleIndex]!.Value)
+                {
+                    faceNormal = -faceNormal;
+                }
+
+                var faceCenter = (positions[triangle.A] + positions[triangle.B] + positions[triangle.C]) / 3f;
+                outwardAlignment += Vector3.Dot(faceNormal, faceCenter - componentCenter);
+                if (HasExactSourceNormals(triangle.SourceIndexOffset))
+                {
+                    var normal = indexNormals[triangle.SourceIndexOffset]
+                        + indexNormals[triangle.SourceIndexOffset + 1]
+                        + indexNormals[triangle.SourceIndexOffset + 2];
+                    sourceAlignment += Vector3.Dot(faceNormal, normal);
+                    hasSourceNormals = true;
+                }
+            }
+
+            if (hasSourceNormals ? sourceAlignment < 0f : outwardAlignment < 0f)
+            {
+                foreach (var member in component)
+                {
+                    flips[member] = !flips[member]!.Value;
+                }
+            }
+        }
+
+        var flipCount = 0;
+        for (var i = 0; i < triangles.Count; i++)
+        {
+            if (flips[i] != true)
+            {
+                continue;
+            }
+
+            var triangle = triangles[i];
+            (triangle.Indices[triangle.GroupIndexOffset + 1], triangle.Indices[triangle.GroupIndexOffset + 2]) =
+                (triangle.Indices[triangle.GroupIndexOffset + 2], triangle.Indices[triangle.GroupIndexOffset + 1]);
+            flipCount++;
+        }
+
+        return flipCount;
+
+        void AddEdge(int triangleIndex, int leftIndex, int rightIndex)
+        {
+            var left = positions[leftIndex];
+            var right = positions[rightIndex];
+            var forward = ComparePositions(left, right) <= 0;
+            var edge = forward ? new WindingEdge(left, right) : new WindingEdge(right, left);
+            if (!edgeUses.TryGetValue(edge, out var uses))
+            {
+                edgeUses.Add(edge, uses = []);
+            }
+
+            uses.Add(new WindingEdgeUse(triangleIndex, forward));
+        }
+
+        bool HasExactSourceNormals(int offset)
+        {
+            return offset >= 0
+                && offset + 2 < sourceNormalIndexStates.Count
+                && IsExactSourceNormal(sourceNormalIndexStates[offset])
+                && IsExactSourceNormal(sourceNormalIndexStates[offset + 1])
+                && IsExactSourceNormal(sourceNormalIndexStates[offset + 2]);
+        }
+    }
+
     public static GltfGeometry Build(
         IReadOnlyList<TieShader> shaders,
         IReadOnlyList<Vector3> positions,
@@ -18,7 +170,6 @@ internal static class TieGltfGeometryBuilder
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalVertexStates,
         IReadOnlyList<TieGltfSourceNormalState> sourceNormalIndexStates,
         bool suppressGeneratedNormalFallback,
-        bool orientTriangleWindingToNormals,
         IReadOnlyList<Vector2> texCoords,
         IReadOnlyList<Vector2> multipassTexCoords,
         IReadOnlyList<Vector4> glowColors,
@@ -177,11 +328,6 @@ internal static class TieGltfGeometryBuilder
                     suppressedGeneratedNormalFallbackVertexCount++;
                 }
             }
-        }
-
-        if (orientTriangleWindingToNormals)
-        {
-            OrientTrianglesToNormals(expandedPositions, expandedNormals, expandedGroups);
         }
 
         return new GltfGeometry(
@@ -366,33 +512,31 @@ internal static class TieGltfGeometryBuilder
         }
     }
 
-    private static void OrientTrianglesToNormals(
-        IReadOnlyList<Vector3> positions,
-        IReadOnlyList<Vector3> normals,
-        IReadOnlyList<PacketIndexGroup> groups)
-    {
-        foreach (var group in groups)
-        {
-            for (var i = 0; i + 2 < group.Indices.Count; i += 3)
-            {
-                var a = checked((int)group.Indices[i]);
-                var b = checked((int)group.Indices[i + 1]);
-                var c = checked((int)group.Indices[i + 2]);
-                var faceNormal = Vector3.Cross(positions[b] - positions[a], positions[c] - positions[a]);
-                var vertexNormal = normals[a] + normals[b] + normals[c];
-                if (Vector3.Dot(faceNormal, vertexNormal) < 0f)
-                {
-                    (group.Indices[i + 1], group.Indices[i + 2]) =
-                        (group.Indices[i + 2], group.Indices[i + 1]);
-                }
-            }
-        }
-    }
-
     private static bool NearlyEqual(Vector2 left, Vector2 right)
     {
         return MathF.Abs(left.X - right.X) < 0.000001f
             && MathF.Abs(left.Y - right.Y) < 0.000001f;
+    }
+
+    private static bool IsExactSourceNormal(TieGltfSourceNormalState state)
+    {
+        return state is TieGltfSourceNormalState.TableExact
+            or TieGltfSourceNormalState.PacketRowExact
+            or TieGltfSourceNormalState.CrossLodExact
+            or TieGltfSourceNormalState.DuplicatePositionExact
+            or TieGltfSourceNormalState.LightingRecipeExact;
+    }
+
+    private static int ComparePositions(Vector3 left, Vector3 right)
+    {
+        var x = left.X.CompareTo(right.X);
+        if (x != 0)
+        {
+            return x;
+        }
+
+        var y = left.Y.CompareTo(right.Y);
+        return y != 0 ? y : left.Z.CompareTo(right.Z);
     }
 
     private static Vector2[] AdjustMultipassTriangleTexCoords(Vector2 a, Vector2 b, Vector2 c)
@@ -518,6 +662,20 @@ internal static class TieGltfGeometryBuilder
                 (int)MathF.Round(ambientIndex));
         }
     }
+
+    private readonly record struct WindingTriangle(
+        List<uint> Indices,
+        int GroupIndexOffset,
+        int SourceIndexOffset)
+    {
+        public int A => checked((int)Indices[GroupIndexOffset]);
+        public int B => checked((int)Indices[GroupIndexOffset + 1]);
+        public int C => checked((int)Indices[GroupIndexOffset + 2]);
+    }
+
+    private readonly record struct WindingEdge(Vector3 A, Vector3 B);
+    private readonly record struct WindingEdgeUse(int TriangleIndex, bool Forward);
+    private readonly record struct WindingNeighbor(int TriangleIndex, bool SameFlip);
 }
 
 internal sealed record GltfGeometry(

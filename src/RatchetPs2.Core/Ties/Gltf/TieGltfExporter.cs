@@ -121,6 +121,22 @@ public static class TieGltfExporter
             flatIndices,
             sourceNormalPhaseAnalysis,
             profile);
+        if (profile.OrientTriangleWindingToNormals
+            && TieGltfGeometryBuilder.OrientTrianglesConsistently(
+                positions,
+                normalResult.IndexNormals,
+                normalResult.SourceNormalIndexStates,
+                packetGroupResult.PacketIndexGroups) > 0)
+        {
+            flatIndices = packetGroupResult.PacketIndexGroups.SelectMany(group => group.Indices).ToArray();
+            normalResult = TieGltfNormalBuilder.Build(
+                tie,
+                topology,
+                positions,
+                flatIndices,
+                sourceNormalPhaseAnalysis,
+                profile);
+        }
         AddTiming(options, "tie.normals", "Tie normals", normalStart, $"{normalResult.Normals.Count} normals");
 
         var ambientStart = Stopwatch.GetTimestamp();
@@ -153,7 +169,6 @@ public static class TieGltfExporter
             normalResult.SourceNormalVertexStates,
             normalResult.SourceNormalIndexStates,
             profile.SuppressGeneratedNormalFallback,
-            profile.OrientTriangleWindingToNormals,
             texCoords,
             multipassTexCoords,
             glowColorResult.Colors,

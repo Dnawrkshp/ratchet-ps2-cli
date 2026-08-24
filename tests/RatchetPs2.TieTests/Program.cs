@@ -565,6 +565,7 @@ ValidateLogicalNormalRemapMetadataFixture();
 ValidateInvertedComponentWindingFixture();
 ValidateGcFlatPlatformWindingFixture();
 ValidateGcLevel04TieRegressionFixture();
+ValidateGcLevel01WindingFixtures();
 
 if (failures.Count == 0)
 {
@@ -2410,6 +2411,47 @@ void ValidateGcLevel04TieRegressionFixture()
     }
 }
 
+void ValidateGcLevel01WindingFixtures()
+{
+    foreach (var id in new[] { "2593", "2673", "2674" })
+    {
+        var fixturePath = Path.Combine(repoRoot, "test-assets", "GC Ties", "unsorted", id, "core.bin");
+        if (!File.Exists(fixturePath))
+        {
+            continue;
+        }
+
+        var label = $"GC 0x{int.Parse(id):X4}";
+        try
+        {
+            using var input = File.OpenRead(fixturePath);
+            var fixtureTie = ReadGcTie(input);
+            var fixtureExport = TieGltfExporter.Export(
+                fixtureTie,
+                "tie.gltf",
+                new TieGltfExportOptions { BufferFileName = "tie.buffer.bin", GameLabel = "GC" });
+            Expect(
+                CountNormalOpposedTriangles(fixtureExport) == 0,
+                $"{label}: expected triangle winding to agree with exported normals");
+            Expect(
+                CountInconsistentlyOrientedManifoldEdges(fixtureExport) == 0,
+                $"{label}: expected adjacent manifold faces to traverse shared edges in opposite directions");
+            if (id == "2593")
+            {
+                Expect(
+                    ReadGlowPrimitiveOutwardAlignment(fixtureExport) > 0f,
+                    $"{label}: expected the unanchored glow shell to face outward");
+            }
+            Console.WriteLine($"PASS GC level01 tie winding {label}");
+        }
+        catch (Exception ex)
+        {
+            failures.Add($"{label}: {ex.Message}");
+            Console.WriteLine($"FAIL GC level01 tie winding {label}");
+        }
+    }
+}
+
 void ValidatePacketDataAccuracy(TieClass fixtureTie, string relativePath, int lodIndex)
 {
     var packetTable = fixtureTie.PacketTables.FirstOrDefault(table => table.LodIndex == lodIndex);
@@ -4028,6 +4070,91 @@ static int CountNormalOpposedTriangles(TieGltfExport fixtureExport)
     }
 
     return opposedCount;
+}
+
+static int CountInconsistentlyOrientedManifoldEdges(TieGltfExport fixtureExport)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
+    var attributes = firstPrimitive.GetProperty("attributes");
+    var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+    var edges = new Dictionary<(
+        (float X, float Y, float Z) A,
+        (float X, float Y, float Z) B), List<bool>>();
+
+    foreach (var primitive in root.GetProperty("meshes")[0].GetProperty("primitives").EnumerateArray())
+    {
+        var indices = ReadExportedPrimitiveIndices(fixtureExport, root, primitive);
+        for (var i = 0; i + 2 < indices.Count; i += 3)
+        {
+            AddEdge(indices[i], indices[i + 1]);
+            AddEdge(indices[i + 1], indices[i + 2]);
+            AddEdge(indices[i + 2], indices[i]);
+        }
+    }
+
+    return edges.Values.Count(uses => uses.Count == 2 && uses[0] == uses[1]);
+
+    void AddEdge(int leftIndex, int rightIndex)
+    {
+        var left = positions[leftIndex];
+        var right = positions[rightIndex];
+        var forward = Compare(left, right) <= 0;
+        var edge = forward ? (left, right) : (right, left);
+        if (!edges.TryGetValue(edge, out var uses))
+        {
+            edges.Add(edge, uses = []);
+        }
+
+        uses.Add(forward);
+    }
+
+    static int Compare((float X, float Y, float Z) left, (float X, float Y, float Z) right)
+    {
+        var x = left.X.CompareTo(right.X);
+        var y = left.Y.CompareTo(right.Y);
+        return x != 0 ? x : y != 0 ? y : left.Z.CompareTo(right.Z);
+    }
+}
+
+static float ReadGlowPrimitiveOutwardAlignment(TieGltfExport fixtureExport)
+{
+    using var gltfDocument = JsonDocument.Parse(fixtureExport.GltfBytes);
+    var root = gltfDocument.RootElement;
+    var firstPrimitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
+    var attributes = firstPrimitive.GetProperty("attributes");
+    var positions = ReadExportedVec3Accessor(fixtureExport, root, attributes.GetProperty("POSITION").GetInt32());
+    var indices = root.GetProperty("meshes")[0].GetProperty("primitives")
+        .EnumerateArray()
+        .Where(primitive => primitive.GetProperty("extras").GetProperty("GlowRgbaUsesEmission").GetBoolean())
+        .SelectMany(primitive => ReadExportedPrimitiveIndices(fixtureExport, root, primitive))
+        .ToArray();
+    var vertices = indices.Distinct().ToArray();
+    var center = (
+        X: vertices.Average(index => positions[index].X),
+        Y: vertices.Average(index => positions[index].Y),
+        Z: vertices.Average(index => positions[index].Z));
+    var alignment = 0f;
+    for (var i = 0; i + 2 < indices.Length; i += 3)
+    {
+        var a = positions[indices[i]];
+        var b = positions[indices[i + 1]];
+        var c = positions[indices[i + 2]];
+        var ab = (X: b.X - a.X, Y: b.Y - a.Y, Z: b.Z - a.Z);
+        var ac = (X: c.X - a.X, Y: c.Y - a.Y, Z: c.Z - a.Z);
+        var faceNormal = (
+            X: ab.Y * ac.Z - ab.Z * ac.Y,
+            Y: ab.Z * ac.X - ab.X * ac.Z,
+            Z: ab.X * ac.Y - ab.Y * ac.X);
+        var faceCenter = (X: (a.X + b.X + c.X) / 3f, Y: (a.Y + b.Y + c.Y) / 3f, Z: (a.Z + b.Z + c.Z) / 3f);
+        alignment += NormalDot(faceNormal, (
+            faceCenter.X - center.X,
+            faceCenter.Y - center.Y,
+            faceCenter.Z - center.Z));
+    }
+
+    return alignment;
 }
 
 static float? ReadMinimumDuplicatePositionNormalDot(TieGltfExport fixtureExport, int shaderIndex)
