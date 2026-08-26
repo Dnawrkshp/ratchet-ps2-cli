@@ -10,6 +10,8 @@
 
   <ItemGroup>
     <CliRuntime Include="linux-x64" />
+    <CliRuntime Include="osx-arm64" />
+    <CliRuntime Include="osx-x64" />
     <CliRuntime Include="win-x64" />
   </ItemGroup>
 

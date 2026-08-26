@@ -11,7 +11,15 @@ Build the CLI:
 dotnet build build.proj -t:Build
 ```
 
-Publish CLI builds for Linux and Windows:
+Run the CLI from the repository root:
+
+```bash
+dotnet run --project src/RatchetPs2.Cli/RatchetPs2.Cli.csproj -- --help
+```
+
+Arguments after `--` are passed to the CLI.
+
+Publish CLI builds for Linux, macOS, and Windows:
 
 ```bash
 dotnet build build.proj -t:PublishCliPlatforms
@@ -20,6 +28,8 @@ dotnet build build.proj -t:PublishCliPlatforms
 This writes framework-dependent artifacts to:
 
 - `artifacts/publish/ratchet-ps2-linux-x64/`
+- `artifacts/publish/ratchet-ps2-osx-arm64/`
+- `artifacts/publish/ratchet-ps2-osx-x64/`
 - `artifacts/publish/ratchet-ps2-win-x64/`
 
 To publish self-contained artifacts, pass:
