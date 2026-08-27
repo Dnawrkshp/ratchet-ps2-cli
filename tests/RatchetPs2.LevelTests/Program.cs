@@ -9,9 +9,11 @@ using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Tfrags;
 using RatchetPs2.Core.Wad;
 using RatchetPs2.Core.Wad.Models;
+using RatchetPs2.Games.DL.Armor;
 using RatchetPs2.Games.DL.Gameplay;
 using RatchetPs2.Games.DL.Level;
 using RatchetPs2.Games.DL.Moby;
+using RatchetPs2.Games.DL.Online;
 using RatchetPs2.Games.GC.Level;
 using RatchetPs2.Games.GC.Skyboxes;
 using RatchetPs2.Games.UYA.Gameplay;
@@ -19,6 +21,9 @@ using RatchetPs2.Games.UYA.Level;
 
 ValidateLevelInfoLookup();
 ValidateLevelWadParsing();
+ValidateArmorWadParsing();
+ValidateOnlineWadExtraction();
+ValidateOnlineArmorWadParsing();
 ValidateLooseLevelWadExtraction();
 ValidateLooseLevelWadUnpacking();
 ValidateGcLevelInfoLookup();
@@ -59,6 +64,137 @@ ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
 
 Console.WriteLine("Level extraction tests passed.");
+
+static void ValidateArmorWadParsing()
+{
+    const int payloadSector = 1100;
+    const int armorIndex = 3;
+    var header = new byte[DlArmorWadReader.StandardHeaderSize];
+    WriteInt32(header, 0x00, header.Length);
+    WriteInt32(header, 0x04, payloadSector);
+    var armorEntryOffset = 0x08 + (armorIndex * 0x10);
+    WriteInt32(header, armorEntryOffset + 0x00, 0);
+    WriteInt32(header, armorEntryOffset + 0x04, 1);
+    WriteInt32(header, armorEntryOffset + 0x08, 1);
+    WriteInt32(header, armorEntryOffset + 0x0c, 1);
+
+    var payload = new byte[2 * DlLevelConstants.SectorSize];
+    payload[0] = 0x42;
+    var texture = PifWriter.CreateIndexed8(8, 8, new byte[0x400], new byte[64]);
+    var pifBytes = PifWriter.Write(texture);
+    var textureListOffset = DlLevelConstants.SectorSize;
+    WriteInt32(payload, textureListOffset, 1);
+    WriteInt32(payload, textureListOffset + 4, 0x10);
+    pifBytes.CopyTo(payload.AsSpan(textureListOffset + 0x10));
+
+    var armorWad = DlArmorWadReader.ReadPayload(header, payload);
+    Expect(armorWad.HeaderSize == DlArmorWadReader.StandardHeaderSize, "expected standard DL armor header");
+    Expect(armorWad.Armors.Count == 1, "expected one populated DL armor slot");
+    Expect(armorWad.Armors[0].Index == armorIndex, "expected DL armor slot index to be retained");
+    Expect(armorWad.Armors[0].ModelBytes[0] == 0x42, "expected DL armor model sector bytes");
+    Expect(armorWad.Armors[0].PifTextures.Count == 1, "expected DL armor PIF material list");
+    Expect(!armorWad.Armors[0].PifTextures[0].Header.IsSwizzled, "expected unswizzled DL armor texture");
+
+    var iso = new byte[(payloadSector * DlLevelConstants.SectorSize) + payload.Length];
+    header.CopyTo(iso.AsSpan(1001 * DlLevelConstants.SectorSize));
+    payload.CopyTo(iso.AsSpan(payloadSector * DlLevelConstants.SectorSize));
+    using var isoStream = new MemoryStream(iso, writable: false);
+    var isoArmorWad = DlArmorWadReader.ReadFromIso(isoStream);
+    Expect(isoArmorWad.Armors.Count == 1, "expected DL armor WAD discovery in the ISO global table");
+    Expect(isoArmorWad.Armors[0].PifTextures.Count == 1, "expected DL armor texture extraction from ISO sectors");
+
+    isoStream.Position = 0;
+    using var extractedWadStream = new MemoryStream();
+    var extraction = DlArmorWadReader.ExtractWadFromIso(isoStream, extractedWadStream);
+    Expect(extraction.PayloadSectorCount == 2, "expected DL armor WAD payload extent from its sector ranges");
+    Expect(
+        extractedWadStream.Length == DlLevelConstants.SectorSize + payload.Length,
+        "expected sector-padded DL armor WAD header followed by its payload");
+    extractedWadStream.Position = 0;
+    var extractedArmorWad = DlArmorWadReader.ReadWad(extractedWadStream);
+    Expect(extractedArmorWad.Armors.Count == 1, "expected standalone DL armor WAD parsing");
+    Expect(extractedArmorWad.Armors[0].ModelBytes[0] == 0x42, "expected standalone DL armor model bytes");
+    Expect(extractedArmorWad.Armors[0].PifTextures.Count == 1, "expected standalone DL armor textures");
+
+    var invalidHeader = header.ToArray();
+    WriteInt32(invalidHeader, 0, 0x200);
+    ExpectThrows<InvalidDataException>(() => DlArmorWadReader.ReadPayload(invalidHeader, payload));
+}
+
+static void ValidateOnlineWadExtraction()
+{
+    const int payloadSector = 1100;
+    const int payloadSectorCount = 0x75e;
+    var tocOffset = 1001 * DlLevelConstants.SectorSize;
+    var spaceLikeHeader = new byte[DlOnlineWadExtractor.HeaderSize];
+    WriteInt32(spaceLikeHeader, 0x00, spaceLikeHeader.Length);
+    WriteInt32(spaceLikeHeader, 0x04, 1050);
+    WriteInt32(spaceLikeHeader, 0x0c, 1);
+
+    var onlineHeader = new byte[DlOnlineWadExtractor.HeaderSize];
+    WriteInt32(onlineHeader, 0x00, onlineHeader.Length);
+    WriteInt32(onlineHeader, 0x04, payloadSector);
+    WriteInt32(onlineHeader, 0x0c, payloadSectorCount);
+
+    var iso = new byte[(payloadSector + payloadSectorCount) * DlLevelConstants.SectorSize];
+    spaceLikeHeader.CopyTo(iso.AsSpan(tocOffset));
+    onlineHeader.CopyTo(iso.AsSpan(tocOffset + spaceLikeHeader.Length));
+    iso[payloadSector * DlLevelConstants.SectorSize] = 0x5a;
+
+    using var isoStream = new MemoryStream(iso, writable: false);
+    using var wadStream = new MemoryStream();
+    var extraction = DlOnlineWadExtractor.ExtractFromIso(isoStream, wadStream);
+    Expect(extraction.SourcePayloadSector == payloadSector, "expected the DL online WAD header to be distinguished from the space WAD header");
+    Expect(extraction.PayloadSectorCount == payloadSectorCount, "expected the complete DL online WAD payload extent");
+    Expect(
+        wadStream.Length == (payloadSectorCount + 1L) * DlLevelConstants.SectorSize,
+        "expected sector-padded DL online WAD header followed by its payload");
+    Expect(wadStream.GetBuffer()[DlLevelConstants.SectorSize] == 0x5a, "expected the DL online WAD payload bytes");
+}
+
+static void ValidateOnlineArmorWadParsing()
+{
+    const int armorIndex = 7;
+    const int classId = 1234;
+    const int modelOffset = 0x600;
+    const int textureOffset = 0x800;
+    var modelBytes = Enumerable.Range(0, 0x400).Select(value => (byte)(value & 0xff)).ToArray();
+    var compressedModel = WadCompression.Compress(modelBytes);
+
+    var texture = PifWriter.CreateIndexed8(8, 8, new byte[0x400], new byte[64]);
+    var pifBytes = PifWriter.Write(texture);
+    var textureList = new byte[0x10 + pifBytes.Length];
+    WriteInt32(textureList, 0x00, 1);
+    WriteInt32(textureList, 0x04, 0x10);
+    pifBytes.CopyTo(textureList.AsSpan(0x10));
+    var compressedTextures = WadCompression.Compress(textureList);
+
+    var onlineData = new byte[2 * DlLevelConstants.SectorSize];
+    var entryOffset = 0x250 + (armorIndex * 0x14);
+    WriteInt32(onlineData, entryOffset + 0x00, classId);
+    WriteInt32(onlineData, entryOffset + 0x04, modelOffset);
+    WriteInt32(onlineData, entryOffset + 0x08, compressedModel.Length);
+    WriteInt32(onlineData, entryOffset + 0x0c, textureOffset);
+    WriteInt32(onlineData, entryOffset + 0x10, compressedTextures.Length);
+    compressedModel.CopyTo(onlineData.AsSpan(modelOffset));
+    compressedTextures.CopyTo(onlineData.AsSpan(textureOffset));
+
+    var parsedData = DlOnlineArmorWadReader.ReadData(onlineData);
+    Expect(parsedData.Armors.Count == 1, "expected one populated DL online armor slot");
+    Expect(parsedData.Armors[0].Index == armorIndex, "expected the DL online armor slot index");
+    Expect(parsedData.Armors[0].ClassId == classId, "expected the DL online armor class ID");
+    Expect(parsedData.Armors[0].ModelBytes.SequenceEqual(modelBytes), "expected the DL online armor model to be decompressed");
+    Expect(parsedData.Armors[0].PifTextures.Count == 1, "expected the DL online armor textures to be decompressed and parsed");
+
+    var wad = new byte[DlLevelConstants.SectorSize + onlineData.Length];
+    WriteInt32(wad, 0x00, DlOnlineWadExtractor.HeaderSize);
+    WriteInt32(wad, 0x0c, onlineData.Length / DlLevelConstants.SectorSize);
+    onlineData.CopyTo(wad.AsSpan(DlLevelConstants.SectorSize));
+    using var wadStream = new MemoryStream(wad, writable: false);
+    var parsedWad = DlOnlineArmorWadReader.ReadWad(wadStream);
+    Expect(parsedWad.Armors.Count == 1, "expected standalone DL online WAD parsing");
+    Expect(parsedWad.Armors[0].ClassId == classId, "expected standalone DL online armor class ID");
+}
 
 static void ValidateGcSkyRotationParsing()
 {
