@@ -141,9 +141,7 @@ public static partial class MobyGltfExporter
             return DzoAlphaPass.Opaque;
         }
 
-        return intermediateSampleCount > 0
-            ? DzoAlphaPass.Blend
-            : DzoAlphaPass.Mask;
+        return DzoAlphaPass.Blend;
 
         void AddAlpha(byte alpha)
         {
@@ -161,6 +159,122 @@ public static partial class MobyGltfExporter
             TextureAlphaMode.Blend => DzoAlphaPass.Blend,
             _ => DzoAlphaPass.Opaque
         };
+    }
+
+    private static IEnumerable<IGrouping<DzoAlphaPass, DzoPrimitiveSource>> SplitDzoMaterialGroupByAlphaPass(
+        IEnumerable<DzoPrimitiveSource> materialSources,
+        IReadOnlyDictionary<int, MobyDzoGltfTextureAlphaMap>? alphaMaps,
+        IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha,
+        float nonOpaqueCoverageThreshold)
+    {
+        var classifiedSources = new List<DzoPrimitiveSource>();
+        foreach (var source in materialSources)
+        {
+            var indicesByPass = new Dictionary<DzoAlphaPass, List<uint>>();
+            foreach (var connectedIndices in BuildDzoConnectedIndexGroups(source.Indices))
+            {
+                var alphaPass = ClassifyDzoAlphaPass(
+                    source.TextureId,
+                    source.TexCoords,
+                    connectedIndices,
+                    alphaMaps,
+                    textureAlpha,
+                    nonOpaqueCoverageThreshold);
+                if (!indicesByPass.TryGetValue(alphaPass, out var passIndices))
+                {
+                    passIndices = [];
+                    indicesByPass.Add(alphaPass, passIndices);
+                }
+                passIndices.AddRange(connectedIndices);
+            }
+
+            foreach (var (alphaPass, indices) in indicesByPass)
+            {
+                var primitive = new Dictionary<string, object>(source.Primitive);
+                var extras = source.Primitive.TryGetValue("extras", out var extrasValue)
+                    && extrasValue is Dictionary<string, object?> sourceExtras
+                        ? new Dictionary<string, object?>(sourceExtras)
+                        : new Dictionary<string, object?>();
+                extras["MobyAlphaPass"] = alphaPass.ToString();
+                primitive["extras"] = extras;
+                classifiedSources.Add(source with
+                {
+                    Primitive = primitive,
+                    Indices = indices,
+                    AlphaPass = alphaPass
+                });
+            }
+        }
+
+        return classifiedSources.GroupBy(source => source.AlphaPass);
+    }
+
+    private static IReadOnlyList<IReadOnlyList<uint>> BuildDzoConnectedIndexGroups(IReadOnlyList<uint> indices)
+    {
+        var triangleCount = indices.Count / 3;
+        if (triangleCount <= 1)
+        {
+            return triangleCount == 0
+                ? []
+                : [indices.Take(3).ToArray()];
+        }
+
+        var trianglesByVertex = new Dictionary<uint, List<int>>();
+        for (var triangleIndex = 0; triangleIndex < triangleCount; triangleIndex++)
+        {
+            for (var corner = 0; corner < 3; corner++)
+            {
+                var vertexIndex = indices[triangleIndex * 3 + corner];
+                if (!trianglesByVertex.TryGetValue(vertexIndex, out var triangles))
+                {
+                    triangles = [];
+                    trianglesByVertex.Add(vertexIndex, triangles);
+                }
+                triangles.Add(triangleIndex);
+            }
+        }
+
+        var visited = new bool[triangleCount];
+        var groups = new List<IReadOnlyList<uint>>();
+        for (var startTriangle = 0; startTriangle < triangleCount; startTriangle++)
+        {
+            if (visited[startTriangle])
+            {
+                continue;
+            }
+
+            var connectedTriangles = new List<int>();
+            var pending = new Queue<int>();
+            visited[startTriangle] = true;
+            pending.Enqueue(startTriangle);
+            while (pending.TryDequeue(out var triangleIndex))
+            {
+                connectedTriangles.Add(triangleIndex);
+                for (var corner = 0; corner < 3; corner++)
+                {
+                    var vertexIndex = indices[triangleIndex * 3 + corner];
+                    foreach (var adjacentTriangle in trianglesByVertex[vertexIndex])
+                    {
+                        if (!visited[adjacentTriangle])
+                        {
+                            visited[adjacentTriangle] = true;
+                            pending.Enqueue(adjacentTriangle);
+                        }
+                    }
+                }
+            }
+
+            var connectedIndices = new List<uint>(connectedTriangles.Count * 3);
+            foreach (var triangleIndex in connectedTriangles.Order())
+            {
+                connectedIndices.Add(indices[triangleIndex * 3]);
+                connectedIndices.Add(indices[triangleIndex * 3 + 1]);
+                connectedIndices.Add(indices[triangleIndex * 3 + 2]);
+            }
+            groups.Add(connectedIndices);
+        }
+
+        return groups;
     }
 
     private static void ScanWrappedTriangleAlpha(
@@ -656,9 +770,7 @@ public static partial class MobyGltfExporter
         IReadOnlyList<float[]>? Weights,
         IReadOnlyList<uint> Indices,
         int? TextureId,
-        DzoAlphaPass AlphaPass);
-
-    private readonly record struct DzoMaterialGroupKey(int MaterialIndex, DzoAlphaPass AlphaPass);
+        DzoAlphaPass AlphaPass = DzoAlphaPass.Opaque);
 
     private enum DzoAlphaPass
     {

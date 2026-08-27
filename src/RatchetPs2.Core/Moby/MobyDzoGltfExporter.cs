@@ -10,7 +10,7 @@ namespace RatchetPs2.Core.Moby;
 
 public sealed record MobyDzoGltfExportOptions
 {
-    public const float DefaultNonOpaqueAlphaCoverageThreshold = 0.1f;
+    public const float DefaultNonOpaqueAlphaCoverageThreshold = 0.5f;
 
     public bool IncludeDebugUvColors { get; init; }
     public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
@@ -541,14 +541,6 @@ public static partial class MobyGltfExporter
             var primitives = new List<Dictionary<string, object>>();
             foreach (var group in primitiveIndexGroups)
             {
-                var dzoAlphaPass = ClassifyDzoAlphaPass(
-                    group.TextureId,
-                    texCoordsForMaterialMapping,
-                    group.Indices,
-                    options.ExternalTextureAlphaMaps,
-                    options.ExternalTextureAlpha,
-                    options.NonOpaqueAlphaCoverageThreshold);
-
                 var indexAccessor = WriteIndexAccessor(writer, bufferViews, accessors, group.Indices);
                 var primitive = new Dictionary<string, object>
                 {
@@ -586,7 +578,6 @@ public static partial class MobyGltfExporter
                     ["MobyMeshType"] = entry.MeshType.ToString(),
                     ["MobyGlowVertexCount"] = glowVertexCount,
                     ["MobyGlowRgba"] = $"0x{unchecked((uint)model.GlowRgba):X8}",
-                    ["MobyAlphaPass"] = dzoAlphaPass.ToString(),
                     ["MobyBangleId"] = entry.MeshType == MobyMeshType.Bangle && bangleGroup.HasValue
                         ? bangleGroup.Value.Index
                         : 15
@@ -607,14 +598,7 @@ public static partial class MobyGltfExporter
                     jointsAccessor.HasValue ? joints : null,
                     weightsAccessor.HasValue ? weights : null,
                     primitiveIndexGroups[primitiveIndex].Indices,
-                    primitiveIndexGroups[primitiveIndex].TextureId,
-                    ClassifyDzoAlphaPass(
-                        primitiveIndexGroups[primitiveIndex].TextureId,
-                        texCoordsForMaterialMapping,
-                        primitiveIndexGroups[primitiveIndex].Indices,
-                        options.ExternalTextureAlphaMaps,
-                        options.ExternalTextureAlpha,
-                        options.NonOpaqueAlphaCoverageThreshold)));
+                    primitiveIndexGroups[primitiveIndex].TextureId));
             }
 
             diagnostics.Add(new
@@ -639,54 +623,59 @@ public static partial class MobyGltfExporter
         var textureIdByMaterialIndex = materialIndexByTextureId
             .ToDictionary(pair => pair.Value, pair => pair.Key);
         foreach (var materialGroup in dzoPrimitiveSources
-                     .GroupBy(source => new DzoMaterialGroupKey(
-                         source.Primitive.TryGetValue("material", out var materialValue)
-                             ? (int)materialValue
-                             : -1,
-                         source.AlphaPass))
-                     .OrderBy(group => group.Key.MaterialIndex)
-                     .ThenBy(group => group.Key.AlphaPass))
+                     .GroupBy(source => source.Primitive.TryGetValue("material", out var materialValue)
+                         ? (int)materialValue
+                         : -1)
+                     .OrderBy(group => group.Key))
         {
             var textureId = textureIdByMaterialIndex.TryGetValue(
-                materialGroup.Key.MaterialIndex,
+                materialGroup.Key,
                 out var mappedTextureId)
                 ? mappedTextureId
                 : (int?)null;
-            var materialIndex = ResolveDzoAlphaPassMaterialIndex(
-                materialGroup.Key.MaterialIndex,
-                textureId,
-                materialGroup.Key.AlphaPass,
-                materials,
-                passMaterialIndices,
-                claimedBaseMaterialIndices);
-            var mergedPrimitive = WriteMergedDzoPrimitive(
-                writer,
-                bufferViews,
-                accessors,
-                materialGroup.ToList(),
-                materialIndex);
-            var meshIndex = meshes.Count;
-            var passName = materialGroup.Key.AlphaPass.ToString().ToLowerInvariant();
-            var suffix = textureId.HasValue
-                ? $"{passName}_{textureId.Value:0000}"
-                : $"{passName}_none";
-            meshes.Add(new Dictionary<string, object?>
+            var classifiedGroups = SplitDzoMaterialGroupByAlphaPass(
+                materialGroup,
+                options.ExternalTextureAlphaMaps,
+                options.ExternalTextureAlpha,
+                options.NonOpaqueAlphaCoverageThreshold);
+            foreach (var passGroup in classifiedGroups.OrderBy(group => group.Key))
             {
-                ["name"] = $"material_{suffix}",
-                ["primitives"] = new[] { mergedPrimitive }
-            });
-            var nodeIndex = nodes.Count;
-            var node = new Dictionary<string, object>
-            {
-                ["name"] = $"material_{suffix}",
-                ["mesh"] = meshIndex
-            };
-            if (skinContext is not null)
-            {
-                node["skin"] = skinContext.SkinIndex;
+                var materialIndex = ResolveDzoAlphaPassMaterialIndex(
+                    materialGroup.Key,
+                    textureId,
+                    passGroup.Key,
+                    materials,
+                    passMaterialIndices,
+                    claimedBaseMaterialIndices);
+                var mergedPrimitive = WriteMergedDzoPrimitive(
+                    writer,
+                    bufferViews,
+                    accessors,
+                    passGroup.ToList(),
+                    materialIndex);
+                var meshIndex = meshes.Count;
+                var passName = passGroup.Key.ToString().ToLowerInvariant();
+                var suffix = textureId.HasValue
+                    ? $"{passName}_{textureId.Value:0000}"
+                    : $"{passName}_none";
+                meshes.Add(new Dictionary<string, object?>
+                {
+                    ["name"] = $"material_{suffix}",
+                    ["primitives"] = new[] { mergedPrimitive }
+                });
+                var nodeIndex = nodes.Count;
+                var node = new Dictionary<string, object>
+                {
+                    ["name"] = $"material_{suffix}",
+                    ["mesh"] = meshIndex
+                };
+                if (skinContext is not null)
+                {
+                    node["skin"] = skinContext.SkinIndex;
+                }
+                nodes.Add(node);
+                sceneNodes.Add(nodeIndex);
             }
-            nodes.Add(node);
-            sceneNodes.Add(nodeIndex);
         }
 
         ConfigureDzoEmission(materials);

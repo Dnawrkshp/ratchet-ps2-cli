@@ -4,6 +4,7 @@ using System.Globalization;
 using System.Text.Json;
 using RatchetPs2.Cli.Abstractions;
 using RatchetPs2.Core.Gltf;
+using RatchetPs2.Core.Moby;
 using RatchetPs2.Games.DL.Moby;
 
 namespace RatchetPs2.Cli.Commands.Moby;
@@ -27,23 +28,39 @@ internal static class MobyExportDzoCommand
             Description = "Choose the exported joint hierarchy: flat or tree.",
             DefaultValueFactory = _ => "flat"
         };
+        var nonOpaqueAlphaCoverageThresholdOption = new Option<float>(
+            "--non-opaque-alpha-coverage-threshold")
+        {
+            Description = "Minimum share of non-opaque texels needed to classify a mesh as transparent (0 to 1).",
+            DefaultValueFactory = _ => MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold
+        };
         var command = CliCommandBuilder.Create(
             "export-dzo",
             "Export every main-level and mission moby from DL level WADs as GLB files for DZO.",
             inputRootOption,
             outputRootOption,
-            jointHierarchyOption);
+            jointHierarchyOption,
+            nonOpaqueAlphaCoverageThresholdOption);
 
         command.SetAction(parseResult =>
         {
             var inputRoot = parseResult.GetValue(inputRootOption);
             var outputRoot = parseResult.GetValue(outputRootOption);
             var jointHierarchy = parseResult.GetValue(jointHierarchyOption);
+            var nonOpaqueAlphaCoverageThreshold = parseResult.GetValue(
+                nonOpaqueAlphaCoverageThresholdOption);
             if (!string.Equals(jointHierarchy, "flat", StringComparison.OrdinalIgnoreCase)
                 && !string.Equals(jointHierarchy, "tree", StringComparison.OrdinalIgnoreCase))
             {
                 Console.Error.WriteLine(
                     $"Unsupported --joint-hierarchy value '{jointHierarchy}'. Expected flat or tree.");
+                return 1;
+            }
+            if (!float.IsFinite(nonOpaqueAlphaCoverageThreshold)
+                || nonOpaqueAlphaCoverageThreshold is < 0f or > 1f)
+            {
+                Console.Error.WriteLine(
+                    "--non-opaque-alpha-coverage-threshold must be between 0 and 1.");
                 return 1;
             }
             var flattenJointHierarchy = string.Equals(
@@ -85,7 +102,8 @@ internal static class MobyExportDzoCommand
                     var manifestEntries = new List<DzoViewerManifestEntry>();
                     foreach (var result in DlDzoMobyExporter.ExportLevel(
                                  File.ReadAllBytes(levelWad.FullName),
-                                 flattenJointHierarchy))
+                                 flattenJointHierarchy,
+                                 nonOpaqueAlphaCoverageThreshold))
                     {
                         var source = result.MissionIndex is { } missionIndex
                             ? Path.Combine("missions", missionIndex.ToString("0000", CultureInfo.InvariantCulture))

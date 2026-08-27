@@ -183,6 +183,27 @@ Commands for moby model files.
 ratchet-ps2 moby [command] [options]
 ```
 
+### `moby export-dzo`
+
+Export every main-level and mission moby from DL level WADs as DZO-compatible GLB files.
+
+```bash
+ratchet-ps2 moby export-dzo --input-root <directory> --output-root <directory> [--joint-hierarchy <flat|tree>] [--non-opaque-alpha-coverage-threshold <value>]
+```
+
+Options:
+
+- `--input-root <directory>`: Required directory containing DL `level*.wad` files.
+- `--output-root <directory>`: Required directory for exported GLB files and manifests.
+- `--joint-hierarchy <flat|tree>`: Choose the exported joint hierarchy. Defaults to `flat`.
+- `--non-opaque-alpha-coverage-threshold <value>`: Minimum share of texels in a mesh's UV footprint that must be non-opaque before the mesh is classified as transparent. Accepts values from `0` to `1` and defaults to `0.5`.
+
+Example:
+
+```bash
+ratchet-ps2 moby export-dzo --input-root extracted-levels --output-root dzo-mobys --non-opaque-alpha-coverage-threshold 0.25
+```
+
 ### `moby export-gltf`
 
 Export a UYA or DL `moby.bin` model to glTF.
