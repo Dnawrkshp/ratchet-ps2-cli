@@ -1910,12 +1910,14 @@ static void ValidateDzoTextureAlphaModes()
     var blendPalette = CreatePaletteWithAlpha(128);
     blendPalette[3] = 0;
     blendPalette[7] = 64;
-    using var opaqueJson = ExportTextureMaterial(PifWriter.CreateIndexed8(8, 8, opaquePalette, new byte[64]));
-    using var maskJson = ExportTextureMaterial(PifWriter.CreateIndexed8(
+    var maskTexture = PifWriter.CreateIndexed8(
         8,
         8,
         maskPalette,
-        Enumerable.Range(0, 64).Select(index => (byte)(index % 2)).ToArray()));
+        Enumerable.Range(0, 64).Select(index => (byte)(index % 2)).ToArray());
+    using var opaqueJson = ExportTextureMaterial(PifWriter.CreateIndexed8(8, 8, opaquePalette, new byte[64]));
+    using var maskJson = ExportTextureMaterial(maskTexture);
+    using var strictMaskJson = ExportTextureMaterial(maskTexture, nonOpaqueAlphaCoverageThreshold: 0.5f);
     using var blendJson = ExportTextureMaterial(PifWriter.CreateIndexed8(
         8,
         8,
@@ -1930,10 +1932,14 @@ static void ValidateDzoTextureAlphaModes()
         "DZO opaque PS2 alpha should normalize from 128 to 255");
     Expect(maskMaterial.GetProperty("alphaMode").GetString() == "MASK",
         "DZO textures containing only PS2 alpha 0 and 128 should export as masked");
+    Expect(!strictMaskJson.RootElement.GetProperty("materials")[0].TryGetProperty("alphaMode", out _),
+        "DZO texture alpha coverage threshold should remain configurable");
     Expect(blendMaterial.GetProperty("alphaMode").GetString() == "BLEND",
         "DZO textures containing intermediate PS2 alpha should export as blended");
 
-    static JsonDocument ExportTextureMaterial(PifTextureData texture)
+    static JsonDocument ExportTextureMaterial(
+        PifTextureData texture,
+        float nonOpaqueAlphaCoverageThreshold = MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold)
     {
         var textureIds = Enumerable.Repeat((byte)0xff, 12).ToArray();
         textureIds[0] = 0;
@@ -1946,7 +1952,10 @@ static void ValidateDzoTextureAlphaModes()
             MeshTable = new MobyMeshTable()
         };
         model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.HighLod, includeTexCoords: true, textureIds));
-        var glb = DlDzoMobyExporter.ExportMoby(model, new[] { texture });
+        var glb = DlDzoMobyExporter.ExportMoby(
+            model,
+            new[] { texture },
+            nonOpaqueAlphaCoverageThreshold: nonOpaqueAlphaCoverageThreshold);
         var jsonLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(12)));
         return JsonDocument.Parse(glb.AsMemory(20, jsonLength));
     }

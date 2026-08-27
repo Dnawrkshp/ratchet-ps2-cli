@@ -10,6 +10,8 @@ namespace RatchetPs2.Core.Moby;
 
 public sealed record MobyDzoGltfExportOptions
 {
+    public const float DefaultNonOpaqueAlphaCoverageThreshold = 0.1f;
+
     public bool IncludeDebugUvColors { get; init; }
     public MobyAnimationFormat AnimationFormat { get; init; } = MobyAnimationFormat.Standard;
     public MobyGltfSkeletonParentMode SkeletonParentMode { get; init; } = MobyGltfSkeletonParentMode.Auto;
@@ -17,6 +19,7 @@ public sealed record MobyDzoGltfExportOptions
     public IReadOnlyDictionary<int, TextureSize>? ExternalTextureSizes { get; init; }
     public IReadOnlyDictionary<int, TextureAlphaInfo>? ExternalTextureAlpha { get; init; }
     public IReadOnlyDictionary<int, MobyDzoGltfTextureAlphaMap>? ExternalTextureAlphaMaps { get; init; }
+    public float NonOpaqueAlphaCoverageThreshold { get; init; } = DefaultNonOpaqueAlphaCoverageThreshold;
     public MobyGltfLowLodTextureMode LowLodTextureMode { get; init; } = MobyGltfLowLodTextureMode.Rolling;
     public IReadOnlyDictionary<int, int>? MeshTextureOverrides { get; init; }
     public bool InferTextureIdsFromUvTiles { get; init; } = true;
@@ -76,6 +79,14 @@ public static partial class MobyGltfExporter
         MobyDzoGltfExportOptions options)
     {
         ArgumentNullException.ThrowIfNull(model);
+        if (!float.IsFinite(options.NonOpaqueAlphaCoverageThreshold)
+            || options.NonOpaqueAlphaCoverageThreshold is < 0f or > 1f)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options),
+                options.NonOpaqueAlphaCoverageThreshold,
+                "The non-opaque alpha coverage threshold must be between 0 and 1.");
+        }
 
         var binFileName = string.IsNullOrWhiteSpace(options.BufferFileName)
             ? $"{Path.GetFileNameWithoutExtension(gltfFileName)}.buffer.bin"
@@ -535,7 +546,8 @@ public static partial class MobyGltfExporter
                     texCoordsForMaterialMapping,
                     group.Indices,
                     options.ExternalTextureAlphaMaps,
-                    options.ExternalTextureAlpha);
+                    options.ExternalTextureAlpha,
+                    options.NonOpaqueAlphaCoverageThreshold);
 
                 var indexAccessor = WriteIndexAccessor(writer, bufferViews, accessors, group.Indices);
                 var primitive = new Dictionary<string, object>
@@ -601,7 +613,8 @@ public static partial class MobyGltfExporter
                         texCoordsForMaterialMapping,
                         primitiveIndexGroups[primitiveIndex].Indices,
                         options.ExternalTextureAlphaMaps,
-                        options.ExternalTextureAlpha)));
+                        options.ExternalTextureAlpha,
+                        options.NonOpaqueAlphaCoverageThreshold)));
             }
 
             diagnostics.Add(new

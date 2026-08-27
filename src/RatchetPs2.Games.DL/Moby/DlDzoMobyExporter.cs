@@ -67,7 +67,8 @@ public static class DlDzoMobyExporter
 
     public static IEnumerable<DlDzoMobyExportResult> ExportLevel(
         byte[] levelWadBytes,
-        bool flattenJointHierarchy = true)
+        bool flattenJointHierarchy = true,
+        float nonOpaqueAlphaCoverageThreshold = MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold)
     {
         ArgumentNullException.ThrowIfNull(levelWadBytes);
 
@@ -157,7 +158,7 @@ public static class DlDzoMobyExporter
                 result = new DlDzoMobyExportResult(
                     null,
                     definition.ModelId,
-                    ExportMoby(modelBytes, textures, flattenJointHierarchy),
+                    ExportMoby(modelBytes, textures, flattenJointHierarchy, nonOpaqueAlphaCoverageThreshold),
                     null);
             }
             catch (Exception ex) when (IsMobyExportFailure(ex))
@@ -199,7 +200,7 @@ public static class DlDzoMobyExporter
                     result = new DlDzoMobyExportResult(
                         missionIndex,
                         moby.Definition.ClassId,
-                        ExportMoby(moby.ModelBytes, textures, flattenJointHierarchy),
+                        ExportMoby(moby.ModelBytes, textures, flattenJointHierarchy, nonOpaqueAlphaCoverageThreshold),
                         null);
                 }
                 catch (Exception ex) when (IsMobyExportFailure(ex))
@@ -219,19 +220,22 @@ public static class DlDzoMobyExporter
     public static byte[] ExportMoby(
         ReadOnlySpan<byte> modelBytes,
         IReadOnlyList<byte[]> pngTextures,
-        bool flattenJointHierarchy = true)
+        bool flattenJointHierarchy = true,
+        float nonOpaqueAlphaCoverageThreshold = MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold)
     {
         ArgumentNullException.ThrowIfNull(pngTextures);
         return ExportMobyCore(
             ReadModel(modelBytes),
             pngTextures.Select(png => CreateDzoTexture(png, null)).ToArray(),
-            flattenJointHierarchy);
+            flattenJointHierarchy,
+            nonOpaqueAlphaCoverageThreshold);
     }
 
     public static byte[] ExportMoby(
         ReadOnlySpan<byte> modelBytes,
         IReadOnlyList<PifTextureData> textures,
-        bool flattenJointHierarchy = true)
+        bool flattenJointHierarchy = true,
+        float nonOpaqueAlphaCoverageThreshold = MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold)
     {
         ArgumentNullException.ThrowIfNull(textures);
         return ExportMobyCore(
@@ -239,13 +243,15 @@ public static class DlDzoMobyExporter
             textures.Select(texture => CreateDzoTexture(
                 ConvertPs2TextureToPng(texture),
                 texture)).ToArray(),
-            flattenJointHierarchy);
+            flattenJointHierarchy,
+            nonOpaqueAlphaCoverageThreshold);
     }
 
     public static byte[] ExportMoby(
         MobyModel model,
         IReadOnlyList<PifTextureData> textures,
-        bool flattenJointHierarchy = true)
+        bool flattenJointHierarchy = true,
+        float nonOpaqueAlphaCoverageThreshold = MobyDzoGltfExportOptions.DefaultNonOpaqueAlphaCoverageThreshold)
     {
         ArgumentNullException.ThrowIfNull(model);
         ArgumentNullException.ThrowIfNull(textures);
@@ -254,13 +260,15 @@ public static class DlDzoMobyExporter
             textures.Select(texture => CreateDzoTexture(
                 ConvertPs2TextureToPng(texture),
                 texture)).ToArray(),
-            flattenJointHierarchy);
+            flattenJointHierarchy,
+            nonOpaqueAlphaCoverageThreshold);
     }
 
     private static byte[] ExportMobyCore(
         MobyModel model,
         IReadOnlyList<DzoTexture> sourceTextures,
-        bool flattenJointHierarchy)
+        bool flattenJointHierarchy,
+        float nonOpaqueAlphaCoverageThreshold)
     {
         var textureUris = new Dictionary<int, string>(sourceTextures.Count);
         var textureSizes = new Dictionary<int, TextureSize>(sourceTextures.Count);
@@ -290,6 +298,7 @@ public static class DlDzoMobyExporter
             ExternalTextureSizes = textureSizes,
             ExternalTextureAlpha = textureAlpha,
             ExternalTextureAlphaMaps = textureAlphaMaps,
+            NonOpaqueAlphaCoverageThreshold = nonOpaqueAlphaCoverageThreshold,
             BufferFileName = "moby.bin"
         };
         var export = ExportGltf(model, "moby.gltf", options);

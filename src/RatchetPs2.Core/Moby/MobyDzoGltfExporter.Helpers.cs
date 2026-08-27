@@ -76,7 +76,8 @@ public static partial class MobyGltfExporter
         IReadOnlyList<Vector2>? texCoords,
         IReadOnlyList<uint> indices,
         IReadOnlyDictionary<int, MobyDzoGltfTextureAlphaMap>? alphaMaps,
-        IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha)
+        IReadOnlyDictionary<int, TextureAlphaInfo>? textureAlpha,
+        float nonOpaqueCoverageThreshold)
     {
         if (!textureId.HasValue
             || texCoords is null
@@ -131,10 +132,11 @@ public static partial class MobyGltfExporter
         // A shared atlas can contain a few translucent texels used by another
         // packet. Do not move the whole packet to the transparent pass merely
         // because its UV footprint touches one of those texels. The original
-        // moby packet is non-opaque only when non-opaque alpha dominates the
-        // texels covered by that packet.
+        // moby packet is non-opaque only when non-opaque alpha reaches the
+        // configured share of texels covered by that packet.
         var nonOpaqueSampleCount = transparentSampleCount + intermediateSampleCount;
-        if ((long)nonOpaqueSampleCount * 2 < sampleCount)
+        if (nonOpaqueSampleCount == 0
+            || nonOpaqueSampleCount / (double)sampleCount < nonOpaqueCoverageThreshold)
         {
             return DzoAlphaPass.Opaque;
         }
