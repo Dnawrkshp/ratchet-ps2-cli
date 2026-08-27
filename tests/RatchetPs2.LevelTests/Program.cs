@@ -1,7 +1,9 @@
 using System.Buffers.Binary;
 using System.IO.Compression;
+using System.Numerics;
 using System.Text.Json;
 using RatchetPs2.Core.Games;
+using RatchetPs2.Core.Moby;
 using RatchetPs2.Core.Textures.Pif;
 using RatchetPs2.Core.Textures.Png;
 using RatchetPs2.Core.Tfrags;
@@ -48,6 +50,10 @@ ValidateWorldInstanceParsing();
 ValidateAssetSlicing();
 ValidateEnvironmentTextureRenderPackage();
 ValidateMobyGsStashTextures();
+ValidateDzoMobyExportConventions();
+ValidateDzoMetalAndGlowExport();
+ValidateDzoTeamTextureVariants();
+ValidateDzoTextureAlphaModes();
 ValidateDzoGlbExportWhenAvailable();
 ValidatePifMipRoundtrip();
 ValidateNormalizedTextureArtifacts();
@@ -1438,6 +1444,7 @@ static void ValidateDzoGlbExportWhenAvailable()
     using var json = JsonDocument.Parse(glb.AsMemory(20, jsonLength));
     var root = json.RootElement;
     Expect(!root.GetProperty("buffers")[0].TryGetProperty("uri", out _), "DZO GLB buffer should be embedded");
+    Expect(!root.TryGetProperty("animations", out _), "DZO GLB should not contain baked animations");
     var image = root.GetProperty("images")[0];
     Expect(!image.TryGetProperty("uri", out _), "DZO GLB image should be embedded");
     Expect(image.GetProperty("mimeType").GetString() == "image/png", "DZO GLB image should retain its PNG media type");
@@ -1449,6 +1456,421 @@ static void ValidateDzoGlbExportWhenAvailable()
     Expect(
         glb.AsSpan(imageOffset, 8).SequenceEqual(textureBytes.AsSpan(0, 8)),
         "DZO GLB should contain the source PNG bytes in its BIN chunk");
+
+    var meshMaterialKeys = new HashSet<int>();
+    foreach (var mesh in root.GetProperty("meshes").EnumerateArray())
+    {
+        Expect(mesh.GetProperty("primitives").GetArrayLength() == 1,
+            "DZO should fully combine each material into one mesh primitive");
+        int? meshMaterial = null;
+        foreach (var primitive in mesh.GetProperty("primitives").EnumerateArray())
+        {
+            var material = primitive.TryGetProperty("material", out var materialElement)
+                ? materialElement.GetInt32()
+                : -1;
+            meshMaterial ??= material;
+            Expect(meshMaterial == material, "DZO should merge mesh primitives by material");
+            var attributes = primitive.GetProperty("attributes");
+            Expect(!attributes.TryGetProperty("COLOR_0", out _),
+                "DZO bangle IDs should not use COLOR_0 because glTF multiplies it into base color");
+            Expect(attributes.TryGetProperty("TEXCOORD_1", out var bangleUvAccessorElement),
+                "DZO mesh primitives should include bangle IDs in the second UV map");
+            var bangleUvAccessor = root.GetProperty("accessors")[bangleUvAccessorElement.GetInt32()];
+            Expect(bangleUvAccessor.GetProperty("type").GetString() == "VEC2",
+                "DZO bangle UV accessor should be VEC2 for glTF and Unity compatibility");
+            var minEmissionWeight = bangleUvAccessor.GetProperty("min")[1].GetSingle();
+            var maxEmissionWeight = bangleUvAccessor.GetProperty("max")[1].GetSingle();
+            Expect(minEmissionWeight is 0f or 1f && maxEmissionWeight is 0f or 1f,
+                "DZO UV2.y should contain binary inverse-emission weights");
+            var decodedBangleIndex = bangleUvAccessor.GetProperty("min")[0].GetSingle() * 255f;
+            Expect(
+                decodedBangleIndex >= 0f
+                && decodedBangleIndex <= 15f
+                && MathF.Abs(decodedBangleIndex - MathF.Round(decodedBangleIndex)) < 0.0001f,
+                "DZO bangle ID attributes should normalize byte-sized indices by 255");
+        }
+        Expect(meshMaterial.HasValue && meshMaterialKeys.Add(meshMaterial.Value),
+            "DZO should emit only one mesh for each material");
+    }
+}
+
+static void ValidateDzoMobyExportConventions()
+{
+    var commonTransforms = new byte[0x20];
+    WriteSingle(commonTransforms, 0x00, 5120f);
+    commonTransforms[0x0c] = 0x7f;
+    WriteSingle(commonTransforms, 0x10, 2048f);
+    commonTransforms[0x1c] = 0;
+
+    var model = new MobyModel
+    {
+        AnimationFormat = MobyAnimationFormat.Compact,
+        SkeletonFormat = MobyAnimationFormat.Compact,
+        JointCount = 2,
+        Scale = 2048f,
+        CommonTransforms = commonTransforms,
+        Skeleton = new MobySkeleton(),
+        MeshTable = new MobyMeshTable()
+    };
+    model.Skeleton.Bones.Add(CreateIdentityMobyBone(5120f));
+    model.Skeleton.Bones.Add(CreateIdentityMobyBone(7168f));
+
+    var export = DlDzoMobyExporter.ExportGltf(
+        model,
+        options: new MobyDzoGltfExportOptions
+        {
+            FlattenJointHierarchy = true
+        });
+
+    using var json = JsonDocument.Parse(export.GltfBytes);
+    var root = json.RootElement;
+    Expect(!root.TryGetProperty("animations", out _), "DZO moby export should omit baked animations");
+    var skinJoints = root.GetProperty("skins")[0].GetProperty("joints").EnumerateArray().Select(value => value.GetInt32()).ToArray();
+    var nodes = root.GetProperty("nodes");
+    Expect(nodes[skinJoints[0]].GetProperty("name").GetString() == "joint_0", "DZO root joint should use joint_0 naming");
+    Expect(nodes[skinJoints[1]].GetProperty("name").GetString() == "joint_1", "DZO child joint should use joint_1 naming");
+    Expect(MathF.Abs(nodes[skinJoints[0]].GetProperty("translation")[0].GetSingle() - 5f) < 0.0001f,
+        "DZO root joint should not bake the moby header scale into its translation");
+    Expect(!nodes[skinJoints[0]].TryGetProperty("children", out _), "DZO joints should have a flattened hierarchy");
+    Expect(!nodes[skinJoints[1]].TryGetProperty("children", out _), "DZO joints should not parent other joints");
+    Expect(MathF.Abs(nodes[skinJoints[1]].GetProperty("translation")[0].GetSingle() - 7f) < 0.0001f,
+        "DZO flattened child joint should retain its world-space translation");
+
+    var armature = nodes.EnumerateArray().Single(node => node.GetProperty("name").GetString() == "Armature");
+    Expect(
+        armature.GetProperty("children").EnumerateArray().Select(value => value.GetInt32()).SequenceEqual(skinJoints),
+        "DZO armature should directly contain every joint");
+
+    var treeExport = DlDzoMobyExporter.ExportGltf(
+        model,
+        options: new MobyDzoGltfExportOptions
+        {
+            FlattenJointHierarchy = false
+        });
+    using var treeJson = JsonDocument.Parse(treeExport.GltfBytes);
+    var treeNodes = treeJson.RootElement.GetProperty("nodes");
+    var treeSkinJoints = treeJson.RootElement.GetProperty("skins")[0].GetProperty("joints")
+        .EnumerateArray()
+        .Select(value => value.GetInt32())
+        .ToArray();
+    Expect(
+        treeNodes[treeSkinJoints[0]].GetProperty("children").EnumerateArray()
+            .Select(value => value.GetInt32())
+            .SequenceEqual([treeSkinJoints[1]]),
+        "DZO tree hierarchy should parent child joints under their decoded parents");
+    Expect(MathF.Abs(treeNodes[treeSkinJoints[1]].GetProperty("translation")[0].GetSingle() - 2f) < 0.0001f,
+        "DZO tree hierarchy should use parent-relative joint translations");
+    var treeArmature = treeNodes.EnumerateArray().Single(node => node.GetProperty("name").GetString() == "Armature");
+    Expect(
+        treeArmature.GetProperty("children").EnumerateArray().Select(value => value.GetInt32()).SequenceEqual([treeSkinJoints[0]]),
+        "DZO tree hierarchy should attach only root joints directly to the armature");
+}
+
+static MobyMatrix4 CreateIdentityMobyBone(float x)
+{
+    return new MobyMatrix4
+    {
+        Row1 = new MobyMatrixRow { X = 1f, W = x },
+        Row2 = new MobyMatrixRow { Y = 1f },
+        Row3 = new MobyMatrixRow { Z = 1f },
+        Row4 = new MobyMatrixRow { W = 1f }
+    };
+}
+
+static void ValidateDzoMetalAndGlowExport()
+{
+    var textureIds = Enumerable.Repeat((byte)0xff, 12).ToArray();
+    textureIds[0] = 0;
+    var model = new MobyModel
+    {
+        AnimationFormat = MobyAnimationFormat.Compact,
+        SkeletonFormat = MobyAnimationFormat.Compact,
+        HighLodMeshCount = 2,
+        MetalCount = 1,
+        MetalOffsets = 2,
+        Scale = 1024f,
+        GlowRgba = unchecked((int)0x80402010),
+        MeshTable = new MobyMeshTable()
+    };
+    model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.HighLod, includeTexCoords: true, textureIds));
+    model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.HighLod, includeTexCoords: true, textureIds));
+    model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.Metal, includeTexCoords: false, textureIds));
+
+    var options = new MobyDzoGltfExportOptions
+    {
+        ExternalTextureUris = new Dictionary<int, string> { [0] = "tex.0000.png" },
+        ExternalTextureSizes = new Dictionary<int, TextureSize> { [0] = new TextureSize(8, 8) },
+        ExternalTextureAlpha = new Dictionary<int, TextureAlphaInfo> { [0] = TextureAlphaInfo.Opaque }
+    };
+    var export = DlDzoMobyExporter.ExportGltf(model, options: options);
+    using var json = JsonDocument.Parse(export.GltfBytes);
+    var root = json.RootElement;
+    Expect(root.GetProperty("meshes").EnumerateArray()
+            .All(mesh => mesh.GetProperty("primitives").GetArrayLength() == 1),
+        "DZO moby export should emit exactly one primitive per material");
+    Expect(root.GetProperty("meshes").EnumerateArray()
+            .SelectMany(mesh => mesh.GetProperty("primitives").EnumerateArray())
+            .Any(primitive => primitive.GetProperty("attributes").TryGetProperty("_MOBY_METAL_REFLECTION_SCALE", out _)),
+        "DZO moby export should include metal mesh primitives");
+    var metalPrimitive = root.GetProperty("meshes").EnumerateArray()
+        .SelectMany(mesh => mesh.GetProperty("primitives").EnumerateArray())
+        .Single(primitive => primitive.GetProperty("attributes").TryGetProperty("_MOBY_METAL_REFLECTION_SCALE", out _));
+    Expect(metalPrimitive.TryGetProperty("material", out var metalMaterialIndex),
+        "DZO metal overlays should reference an explicit material");
+    var metalMaterial = root.GetProperty("materials")[metalMaterialIndex.GetInt32()];
+    Expect(metalMaterial.GetProperty("name").GetString() == "metal",
+        "DZO metal overlays should retain the metal material identity");
+    Expect(metalMaterial.GetProperty("extras").GetProperty("MobyMaterialKind").GetString() == "Metal",
+        "DZO metal overlays should identify their material kind");
+    var metalPbr = metalMaterial.GetProperty("pbrMetallicRoughness");
+    Expect(metalPbr.GetProperty("metallicFactor").GetSingle() == 1f
+        && metalPbr.GetProperty("roughnessFactor").GetSingle() == 0f,
+        "DZO metal overlays should export a valid reflective PBR material");
+    var metalEmissiveFactor = metalMaterial.GetProperty("emissiveFactor");
+    Expect(metalEmissiveFactor.EnumerateArray().All(component => component.GetSingle() == 0f)
+        && !metalMaterial.TryGetProperty("emissiveTexture", out _),
+        "DZO metal overlays should not inherit moby glow emission");
+    var nonMetalMaterialIndices = root.GetProperty("meshes").EnumerateArray()
+        .SelectMany(mesh => mesh.GetProperty("primitives").EnumerateArray())
+        .Where(primitive => !primitive.GetProperty("attributes").TryGetProperty("_MOBY_METAL_REFLECTION_SCALE", out _))
+        .Select(primitive => primitive.GetProperty("material").GetInt32())
+        .ToArray();
+    Expect(nonMetalMaterialIndices.All(index => index != metalMaterialIndex.GetInt32()),
+        "DZO metal overlays should not be merged with ordinary geometry");
+    var glowPrimitive = root.GetProperty("meshes").EnumerateArray()
+        .SelectMany(mesh => mesh.GetProperty("primitives").EnumerateArray())
+        .Single(primitive => primitive.GetProperty("extras").GetProperty("MobyGlowVertexCount").GetInt32() > 0);
+    var glowUvAccessorIndex = glowPrimitive.GetProperty("attributes").GetProperty("TEXCOORD_1").GetInt32();
+    var glowUvAccessor = root.GetProperty("accessors")[glowUvAccessorIndex];
+    Expect(glowUvAccessor.GetProperty("min")[1].GetSingle() == 0f
+        && glowUvAccessor.GetProperty("max")[1].GetSingle() == 0f,
+        "DZO glow packets should store zero in inverse-emission UV2.y");
+    var glowMaterial = root.GetProperty("materials")[glowPrimitive.GetProperty("material").GetInt32()];
+    var emissiveFactor = glowMaterial.GetProperty("emissiveFactor");
+    Expect(emissiveFactor.EnumerateArray().All(component => component.GetSingle() == 0f),
+        "DZO materials should default their emissive factor to zero");
+    Expect(glowMaterial.GetProperty("emissiveTexture").GetProperty("index").GetInt32()
+        == glowMaterial.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture").GetProperty("index").GetInt32(),
+        "DZO textured materials should reuse their base texture for emission");
+    var metalUvAccessorIndex = metalPrimitive.GetProperty("attributes").GetProperty("TEXCOORD_1").GetInt32();
+    var metalUvAccessor = root.GetProperty("accessors")[metalUvAccessorIndex];
+    Expect(metalUvAccessor.GetProperty("min")[1].GetSingle() == 0.5f
+        && metalUvAccessor.GetProperty("max")[1].GetSingle() == 0.5f,
+        "DZO metal packets should store one minus reflection strength in UV2.y for Unity's Y flip");
+    var metalTextureUvAccessorIndex = metalPrimitive.GetProperty("attributes").GetProperty("TEXCOORD_0").GetInt32();
+    var metalTextureUvAccessor = root.GetProperty("accessors")[metalTextureUvAccessorIndex];
+    Expect(metalTextureUvAccessor.GetProperty("min")[0].GetSingle() == 0f
+        && metalTextureUvAccessor.GetProperty("min")[1].GetSingle() == 0f
+        && metalTextureUvAccessor.GetProperty("max")[0].GetSingle() == 0f
+        && metalTextureUvAccessor.GetProperty("max")[1].GetSingle() == 0f,
+        "DZO metal meshes should include a dummy UV1 so importers retain bangle metadata in UV2");
+    Expect(root.GetProperty("materials").EnumerateArray()
+            .Where(material => material.GetProperty("name").GetString() != "metal")
+            .All(material => material.TryGetProperty("emissiveTexture", out _)),
+        "DZO textured materials should expose their base textures as emission textures");
+
+    model.GlowRgba = 0;
+    var noGlowExport = DlDzoMobyExporter.ExportGltf(model, options: options);
+    using var noGlowJson = JsonDocument.Parse(noGlowExport.GltfBytes);
+    var noGlowMaterial = noGlowJson.RootElement.GetProperty("materials")[0];
+    Expect(noGlowMaterial.TryGetProperty("emissiveTexture", out _)
+        && noGlowMaterial.GetProperty("emissiveFactor").EnumerateArray()
+            .All(component => component.GetSingle() == 0f),
+        "DZO textured materials should retain their emission texture with emission disabled by default");
+}
+
+static void ValidateDzoTeamTextureVariants()
+{
+    var textureIds = Enumerable.Repeat((byte)0xff, 12).ToArray();
+    textureIds[0] = 0;
+    var model = new MobyModel
+    {
+        AnimationFormat = MobyAnimationFormat.Compact,
+        SkeletonFormat = MobyAnimationFormat.Compact,
+        HighLodMeshCount = 1,
+        Scale = 1024f,
+        TeamPalettes = 0x1b,
+        MeshTable = new MobyMeshTable()
+    };
+    model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.HighLod, includeTexCoords: true, textureIds));
+
+    var teamPalettes = new List<byte[]>();
+    for (var teamId = 0; teamId < 11; teamId++)
+    {
+        var palette = CreatePalette();
+        palette[0] = (byte)(teamId + 1);
+        teamPalettes.Add(palette);
+    }
+    model.TeamPaletteData.Add(0, teamPalettes);
+
+    var sourceTexture = PifWriter.CreateIndexed8(
+        8,
+        8,
+        CreatePalette(),
+        new byte[64]);
+    var glb = DlDzoMobyExporter.ExportMoby(
+        model,
+        new[] { sourceTexture });
+
+    var jsonLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(12)));
+    using var json = JsonDocument.Parse(glb.AsMemory(20, jsonLength));
+    var root = json.RootElement;
+    Expect(root.GetProperty("extensionsUsed").EnumerateArray()
+            .Any(extension => extension.GetString() == "KHR_materials_variants"),
+        "DZO team textures should declare KHR_materials_variants");
+    var expectedTeamNames = new[]
+    {
+        "Blue", "Red", "Green", "Orange", "Yellow", "Purple",
+        "Aqua", "Pink", "Olive", "Maroon", "White"
+    };
+    var variants = root.GetProperty("extensions")
+        .GetProperty("KHR_materials_variants")
+        .GetProperty("variants");
+    Expect(
+        variants.EnumerateArray().Select(variant => variant.GetProperty("name").GetString())
+            .SequenceEqual(expectedTeamNames),
+        "DZO team material presets should use the requested team names");
+    Expect(root.GetProperty("images").GetArrayLength() == 12,
+        "DZO team material presets should embed the base texture and all 11 team textures");
+    Expect(root.GetProperty("materials").GetArrayLength() == 12,
+        "DZO team material presets should retain the base material and add 11 team materials");
+
+    var primitive = root.GetProperty("meshes")[0].GetProperty("primitives")[0];
+    var mappings = primitive.GetProperty("extensions")
+        .GetProperty("KHR_materials_variants")
+        .GetProperty("mappings");
+    Expect(mappings.GetArrayLength() == 11,
+        "DZO textured primitives should map every team preset to a team material");
+    var baseMaterial = root.GetProperty("materials")[primitive.GetProperty("material").GetInt32()];
+    var baseTextureIndex = baseMaterial.GetProperty("pbrMetallicRoughness")
+        .GetProperty("baseColorTexture")
+        .GetProperty("index")
+        .GetInt32();
+    foreach (var (mapping, teamIndex) in mappings.EnumerateArray().Select((mapping, index) => (mapping, index)))
+    {
+        Expect(mapping.GetProperty("variants")[0].GetInt32() == teamIndex,
+            "DZO team mappings should retain their numeric team order");
+        var material = root.GetProperty("materials")[mapping.GetProperty("material").GetInt32()];
+        Expect(material.GetProperty("name").GetString() == expectedTeamNames[teamIndex],
+            "DZO team materials should use their team names");
+        Expect(material.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture")
+                .GetProperty("index").GetInt32() != baseTextureIndex,
+            "DZO team material presets should replace the base color texture");
+        Expect(material.GetProperty("emissiveTexture").GetProperty("index").GetInt32()
+                == material.GetProperty("pbrMetallicRoughness").GetProperty("baseColorTexture")
+                    .GetProperty("index").GetInt32(),
+            "DZO team material presets should reuse their selected base texture for emission");
+        Expect(material.GetProperty("pbrMetallicRoughness").GetProperty("metallicFactor").GetSingle()
+                == baseMaterial.GetProperty("pbrMetallicRoughness").GetProperty("metallicFactor").GetSingle(),
+            "DZO team material presets should preserve non-base-texture material settings");
+    }
+}
+
+static void ValidateDzoTextureAlphaModes()
+{
+    var opaquePalette = CreatePaletteWithAlpha(128);
+    var maskPalette = CreatePaletteWithAlpha(128);
+    maskPalette[3] = 0;
+    var blendPalette = CreatePaletteWithAlpha(128);
+    blendPalette[3] = 0;
+    blendPalette[7] = 64;
+    using var opaqueJson = ExportTextureMaterial(PifWriter.CreateIndexed8(8, 8, opaquePalette, new byte[64]));
+    using var maskJson = ExportTextureMaterial(PifWriter.CreateIndexed8(
+        8,
+        8,
+        maskPalette,
+        Enumerable.Range(0, 64).Select(index => (byte)(index % 2)).ToArray()));
+    using var blendJson = ExportTextureMaterial(PifWriter.CreateIndexed8(
+        8,
+        8,
+        blendPalette,
+        Enumerable.Range(0, 64).Select(index => (byte)(index % 3)).ToArray()));
+    var opaqueMaterial = opaqueJson.RootElement.GetProperty("materials")[0];
+    var maskMaterial = maskJson.RootElement.GetProperty("materials")[0];
+    var blendMaterial = blendJson.RootElement.GetProperty("materials")[0];
+    Expect(!opaqueMaterial.TryGetProperty("alphaMode", out _),
+        "DZO textures containing only PS2 alpha 128 should export as opaque");
+    Expect(opaqueMaterial.GetProperty("extras").GetProperty("MinAlpha").GetInt32() == 255,
+        "DZO opaque PS2 alpha should normalize from 128 to 255");
+    Expect(maskMaterial.GetProperty("alphaMode").GetString() == "MASK",
+        "DZO textures containing only PS2 alpha 0 and 128 should export as masked");
+    Expect(blendMaterial.GetProperty("alphaMode").GetString() == "BLEND",
+        "DZO textures containing intermediate PS2 alpha should export as blended");
+
+    static JsonDocument ExportTextureMaterial(PifTextureData texture)
+    {
+        var textureIds = Enumerable.Repeat((byte)0xff, 12).ToArray();
+        textureIds[0] = 0;
+        var model = new MobyModel
+        {
+            AnimationFormat = MobyAnimationFormat.Compact,
+            SkeletonFormat = MobyAnimationFormat.Compact,
+            HighLodMeshCount = 1,
+            Scale = 1024f,
+            MeshTable = new MobyMeshTable()
+        };
+        model.MeshTable.Entries.Add(CreateDzoTestMesh(MobyMeshType.HighLod, includeTexCoords: true, textureIds));
+        var glb = DlDzoMobyExporter.ExportMoby(model, new[] { texture });
+        var jsonLength = checked((int)BinaryPrimitives.ReadUInt32LittleEndian(glb.AsSpan(12)));
+        return JsonDocument.Parse(glb.AsMemory(20, jsonLength));
+    }
+}
+
+static byte[] CreatePaletteWithAlpha(byte alpha)
+{
+    var palette = CreatePalette();
+    for (var offset = 3; offset < palette.Length; offset += 4)
+    {
+        palette[offset] = alpha;
+    }
+
+    return palette;
+}
+
+static MobyMeshTableEntry CreateDzoTestMesh(MobyMeshType meshType, bool includeTexCoords, byte[] textureIds)
+{
+    var vertexData = meshType == MobyMeshType.Metal ? new byte[0x40] : new byte[0x40];
+    BinaryPrimitives.WriteUInt16LittleEndian(vertexData, 3);
+    if (meshType != MobyMeshType.Metal)
+    {
+        BinaryPrimitives.WriteUInt16LittleEndian(vertexData.AsSpan(0x06), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(vertexData.AsSpan(0x0a), 3);
+        BinaryPrimitives.WriteUInt16LittleEndian(vertexData.AsSpan(0x0c), 0x10);
+        BinaryPrimitives.WriteUInt16LittleEndian(vertexData.AsSpan(0x0e), 3);
+    }
+    var vertexBase = 0x10;
+    WriteMobyTestPosition(vertexData, vertexBase, 0, 0, 0, meshType);
+    WriteMobyTestPosition(vertexData, vertexBase + 0x10, 1, 0, 0, meshType);
+    WriteMobyTestPosition(vertexData, vertexBase + 0x20, 0, 1, 0, meshType);
+
+    var vifData = new List<byte>();
+    if (includeTexCoords)
+    {
+        vifData.AddRange([0, 0, 3, 0x65]);
+        foreach (var (s, t) in new[] { (512, 512), (2048, 512), (512, 2048) })
+        {
+            vifData.AddRange(BitConverter.GetBytes((short)s));
+            vifData.AddRange(BitConverter.GetBytes((short)t));
+        }
+    }
+    vifData.AddRange([0, 0, 2, 0x6e, 0, 0, 0, 0, 1, 2, 3, 3]);
+
+    return new MobyMeshTableEntry
+    {
+        MeshType = meshType,
+        VertexCount = 3,
+        VertexData = vertexData,
+        VifData = vifData.ToArray(),
+        GifTag = new MobyGifTag { TextureIds = (byte[])textureIds.Clone() }
+    };
+}
+
+static void WriteMobyTestPosition(byte[] data, int offset, short x, short y, short z, MobyMeshType meshType)
+{
+    var positionOffset = meshType == MobyMeshType.Metal ? offset : offset + 0x0a;
+    BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(positionOffset), x);
+    BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(positionOffset + 2), y);
+    BinaryPrimitives.WriteInt16LittleEndian(data.AsSpan(positionOffset + 4), z);
 }
 
 static void ValidatePifMipRoundtrip()

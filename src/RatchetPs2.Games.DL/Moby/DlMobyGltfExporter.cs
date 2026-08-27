@@ -82,7 +82,7 @@ public static class DlMobyGltfExporter
         return MobyGltfExporter.Export(model, gltfFileName, dlOptions);
     }
 
-    private static Matrix4x4 DecodeInverseBindMatrix(MobyMatrix4 bone, float scale)
+    public static Matrix4x4 DecodeInverseBindMatrix(MobyMatrix4 bone, float scale)
     {
         var basis = new Matrix4x4(
             1f, 0f, 0f, 0f,

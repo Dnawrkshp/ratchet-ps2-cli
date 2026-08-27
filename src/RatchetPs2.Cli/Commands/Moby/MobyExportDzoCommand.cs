@@ -22,16 +22,34 @@ internal static class MobyExportDzoCommand
             Description = "Directory to write DZO moby GLB files.",
             Required = true
         };
+        var jointHierarchyOption = new Option<string>("--joint-hierarchy")
+        {
+            Description = "Choose the exported joint hierarchy: flat or tree.",
+            DefaultValueFactory = _ => "flat"
+        };
         var command = CliCommandBuilder.Create(
             "export-dzo",
             "Export every main-level and mission moby from DL level WADs as GLB files for DZO.",
             inputRootOption,
-            outputRootOption);
+            outputRootOption,
+            jointHierarchyOption);
 
         command.SetAction(parseResult =>
         {
             var inputRoot = parseResult.GetValue(inputRootOption);
             var outputRoot = parseResult.GetValue(outputRootOption);
+            var jointHierarchy = parseResult.GetValue(jointHierarchyOption);
+            if (!string.Equals(jointHierarchy, "flat", StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(jointHierarchy, "tree", StringComparison.OrdinalIgnoreCase))
+            {
+                Console.Error.WriteLine(
+                    $"Unsupported --joint-hierarchy value '{jointHierarchy}'. Expected flat or tree.");
+                return 1;
+            }
+            var flattenJointHierarchy = string.Equals(
+                jointHierarchy,
+                "flat",
+                StringComparison.OrdinalIgnoreCase);
             if (inputRoot is null || !inputRoot.Exists)
             {
                 Console.Error.WriteLine($"Input root '{inputRoot?.FullName}' does not exist.");
@@ -65,7 +83,9 @@ internal static class MobyExportDzoCommand
                         outputRoot.FullName,
                         Path.GetFileNameWithoutExtension(levelWad.Name));
                     var manifestEntries = new List<DzoViewerManifestEntry>();
-                    foreach (var result in DlDzoMobyExporter.ExportLevel(File.ReadAllBytes(levelWad.FullName)))
+                    foreach (var result in DlDzoMobyExporter.ExportLevel(
+                                 File.ReadAllBytes(levelWad.FullName),
+                                 flattenJointHierarchy))
                     {
                         var source = result.MissionIndex is { } missionIndex
                             ? Path.Combine("missions", missionIndex.ToString("0000", CultureInfo.InvariantCulture))

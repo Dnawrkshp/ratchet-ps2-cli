@@ -58,7 +58,7 @@ public enum MobyGltfSkeletonParentMode
     SevenBitLow
 }
 
-public static class MobyGltfExporter
+public static partial class MobyGltfExporter
 {
     public static MobyGltfExport Export(Stream input, string gltfFileName = "moby.gltf", MobyGltfExportOptions? options = null)
     {
